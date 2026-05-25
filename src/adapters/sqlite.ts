@@ -77,21 +77,12 @@ function toRow(c: Claim): ClaimRow {
 
 function fromRow(row: ClaimRow): Claim {
   const distribution = row.conf_distribution;
-  const parameters = deserializeParams(distribution, row.conf_params);
-  const confidence: Confidence =
-    distribution === "beta"
-      ? {
-          distribution: "beta",
-          parameters: parameters as { alpha: number; beta: number },
-          raw: row.conf_raw,
-          effective: row.conf_effective ?? undefined,
-        }
-      : {
-          distribution: "scalar",
-          parameters: parameters as { p: number },
-          raw: row.conf_raw,
-          effective: row.conf_effective ?? undefined,
-        };
+  const confidence = {
+    distribution: distribution as Confidence["distribution"],
+    parameters: deserializeParams(distribution, row.conf_params) as Confidence["parameters"],
+    raw: row.conf_raw,
+    ...(row.conf_effective != null ? { effective: row.conf_effective } : {}),
+  } as Confidence;
 
   return {
     id: row.id as ClaimId,
@@ -135,7 +126,7 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       conf_raw REAL,
       conf_effective REAL,
       valid_from REAL,
-      valid_to REAL,
+      valid_to REAL,  -- JS Infinity round-trips correctly: IEEE-754 REAL stores +Inf, so open intervals survive a db reload
       recorded REAL,
       recorded_seq INTEGER,
       status TEXT,

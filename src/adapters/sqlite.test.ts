@@ -295,6 +295,22 @@ it("getClaim returns undefined for non-existent id", () => {
   expect(a.getClaim("non-existent-id" as ClaimId)).toBeUndefined();
 });
 
+it("fromRow omits effective key entirely when conf_effective is null (no stray undefined properties)", () => {
+  const a = createSqliteAdapter();
+  // scalar distribution with no effective set — effective should be absent, not present-as-undefined
+  const claim = makeValidatedClaim({
+    confidence: {
+      distribution: "scalar",
+      parameters: { p: 0.9 },
+      raw: 0.9,
+      // effective intentionally omitted
+    },
+  });
+  a.insertClaim(claim);
+  const fetched = a.getClaim(claim.id)!;
+  expect("effective" in fetched.confidence).toBe(false);
+});
+
 it("insertClaim uses INSERT OR REPLACE semantics on id (upsert)", () => {
   const a = createSqliteAdapter();
   const claim = makeValidatedClaim({ value: "original" });
