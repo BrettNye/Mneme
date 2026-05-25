@@ -1,5 +1,6 @@
 import type { Corpus, RankedCorpus } from "./types.js";
 import type { Value } from "../core/value.js";
+import { canonicalizeValue } from "../core/value.js";
 
 export interface SimilarityFn {
   scoreOne(value: Value, query: Value): number;
@@ -7,7 +8,9 @@ export interface SimilarityFn {
 }
 
 const tokens = (v: Value): Set<string> =>
-  new Set(String(v).toLowerCase().split(/\W+/).filter(Boolean));
+  new Set(
+    (typeof v === "string" ? v : canonicalizeValue(v)).toLowerCase().split(/\W+/).filter(Boolean)
+  );
 
 export const simJaccard: SimilarityFn = {
   isPure: true,
@@ -22,7 +25,7 @@ export const simJaccard: SimilarityFn = {
 
 export const simExact: SimilarityFn = {
   isPure: true,
-  scoreOne: (v, q) => (JSON.stringify(v) === JSON.stringify(q) ? 1 : 0),
+  scoreOne: (v, q) => (canonicalizeValue(v) === canonicalizeValue(q) ? 1 : 0),
 };
 
 const registry: Record<string, SimilarityFn> = {

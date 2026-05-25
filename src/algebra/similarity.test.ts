@@ -47,6 +47,24 @@ it("simExact returns 0 for different values", () => {
   expect(simExact.scoreOne(1, 2)).toBe(0);
 });
 
+// object Value tokenization (regression: no "[object Object]" collapse)
+it("jaccard scores objects with different content less than 1", () => {
+  expect(simJaccard.scoreOne({ a: 1 }, { b: 2 })).toBeLessThan(1);
+});
+
+it("jaccard returns 1 for identical objects", () => {
+  expect(simJaccard.scoreOne({ a: 1 }, { a: 1 })).toBe(1);
+});
+
+// simExact key-order insensitivity
+it("simExact returns 1 for objects differing only in key order", () => {
+  expect(simExact.scoreOne({ a: 1, b: 2 }, { b: 2, a: 1 })).toBe(1);
+});
+
+it("simExact returns 0 for genuinely different objects", () => {
+  expect(simExact.scoreOne({ a: 1 }, { a: 2 })).toBe(0);
+});
+
 // isPure
 it("both similarity fns declare isPure: true", () => {
   expect(simJaccard.isPure).toBe(true);
