@@ -135,6 +135,9 @@ flowchart TD
     classDef running fill:#87ceeb,stroke:#333
     classDef failed fill:#ffb6c1,stroke:#333
     classDef skipped fill:#d3d3d3,stroke:#333,stroke-dasharray: 5 5
+
+    class task-scaffold,task-core-ids,task-core-key,task-core-confidence,task-tiers,task-core-value,task-core-time,task-core-scope,task-sl-bridge,task-core-evidence,task-dist-protocol,task-core-claim,task-dist-beta,task-dist-scalar,task-dist-registry,task-schema,task-adapter-interface,task-algebra-types,task-corpus,task-projection,task-provenance-traversal,task-source-weight,task-sqlite,task-selection,task-temporal,task-similarity,task-idempotency,task-catalog,task-contradiction done
+    class task-decay,task-composition,task-value-predicate,task-write-pipeline,task-expression,task-facade,task-acceptance done
 ```
 
 ## Context
@@ -173,7 +176,7 @@ files:
   - package.json
   - tsconfig.json
   - vitest.config.ts
-status: pending
+status: done
 ```
 
 Root-level project configuration: declare dependencies, strict ESM/NodeNext TypeScript, and the
@@ -218,7 +221,7 @@ depends_on: [task-scaffold]
 files:
   - src/core/ids.ts
   - src/core/ids.test.ts
-status: pending
+status: done
 ```
 
 Branded nominal ID types and the UUID generator used on claim promotion (§2.1). Branding
@@ -261,7 +264,7 @@ depends_on: [task-scaffold]
 files:
   - src/core/value.ts
   - src/core/value.test.ts
-status: pending
+status: done
 ```
 
 The JSON-shaped `Value` type plus a deterministic, key-order-insensitive `valueHash` used for
@@ -305,7 +308,7 @@ depends_on: [task-scaffold]
 files:
   - src/core/time.ts
   - src/core/time.test.ts
-status: pending
+status: done
 ```
 
 Bitemporal primitives (§2.6): `Instant` (ms since epoch), a half-open valid-time `Interval`
@@ -347,7 +350,7 @@ depends_on: [task-scaffold]
 files:
   - src/core/key.ts
   - src/core/key.test.ts
-status: pending
+status: done
 ```
 
 `Subject`/`Key` types and validation (§2.2): keys are kebab-case dotted `{subject}.{domain}[.{property}]`;
@@ -393,7 +396,7 @@ depends_on: [task-scaffold]
 files:
   - src/core/scope.ts
   - src/core/scope.test.ts
-status: pending
+status: done
 ```
 
 The `Scope` record, canonicalization (sorted keys, dropped undefined, normalized strings), and
@@ -443,7 +446,7 @@ depends_on: [task-scaffold]
 files:
   - src/core/confidence.ts
   - src/core/confidence.test.ts
-status: pending
+status: done
 ```
 
 The `Confidence` type (beta|scalar) with constructors, the pinned α,β prior convention (§0.3),
@@ -495,7 +498,7 @@ depends_on: [task-scaffold]
 files:
   - src/distribution/subjective-logic.ts
   - src/distribution/subjective-logic.test.ts
-status: pending
+status: done
 ```
 
 The binomial subjective-logic bridge (§2.5) under the pinned convention (§0.3): map Beta(α,β) ↔
@@ -544,7 +547,7 @@ depends_on: [task-scaffold]
 files:
   - src/catalog/tiers.ts
   - src/catalog/tiers.test.ts
-status: pending
+status: done
 ```
 
 `TierRequirement` discriminated union and startup validation (§0.2, §3.1): a corpus requiring a
@@ -592,7 +595,7 @@ depends_on: [task-core-ids]
 files:
   - src/core/evidence.ts
   - src/core/evidence.test.ts
-status: pending
+status: done
 ```
 
 The `EvidenceRef` union (§2.8) and write-time acyclicity enforcement: evidence forms a DAG;
@@ -650,7 +653,7 @@ files:
   - src/core/claim.test.ts
   - src/core/provenance.ts
   - src/core/provenance.test.ts
-status: pending
+status: done
 ```
 
 The `Claim` record (§2.1) composing every core type, plus its `Provenance`/`DerivationProvenance`
@@ -716,7 +719,7 @@ depends_on: [task-core-confidence, task-sl-bridge]
 files:
   - src/distribution/protocol.ts
   - src/distribution/protocol.test.ts
-status: pending
+status: done
 ```
 
 The `DistributionProtocol<T>` interface (§5.1) — the single seam between the algebra and
@@ -769,7 +772,7 @@ depends_on: [task-dist-protocol, task-sl-bridge, task-core-confidence]
 files:
   - src/distribution/beta.ts
   - src/distribution/beta.test.ts
-status: pending
+status: done
 ```
 
 The core `[C]` Beta binding (§5.2): mean, variance, serialize/canonicalize, and the SL bridge
@@ -823,7 +826,7 @@ depends_on: [task-dist-protocol, task-core-confidence]
 files:
   - src/distribution/scalar.ts
   - src/distribution/scalar.test.ts
-status: pending
+status: done
 ```
 
 The core `[C]` scalar binding (§5.2): a bare point value with variance 0, no opinion (without an
@@ -872,7 +875,7 @@ depends_on: [task-dist-beta, task-dist-scalar, task-dist-protocol]
 files:
   - src/distribution/registry.ts
   - src/distribution/registry.test.ts
-status: pending
+status: done
 ```
 
 The `DistributionType → binding` registry (§5.1) and `Confidence` (de)serialization routed through
@@ -920,7 +923,7 @@ depends_on: [task-core-claim, task-scaffold]
 files:
   - src/catalog/schema.ts
   - src/catalog/schema.test.ts
-status: pending
+status: done
 ```
 
 `ClaimSchema` (§3.2) and write-time conformance: required fields, key-pattern, **strict scope**
@@ -982,7 +985,7 @@ depends_on: [task-tiers, task-schema]
 files:
   - src/catalog/corpus.ts
   - src/catalog/corpus.test.ts
-status: pending
+status: done
 ```
 
 The `Corpus` and `CorpusDefaults` types (§3.1, §3.3) and the policy *descriptor* unions
@@ -1036,7 +1039,7 @@ depends_on: [task-corpus, task-tiers]
 files:
   - src/catalog/catalog.ts
   - src/catalog/catalog.test.ts
-status: pending
+status: done
 ```
 
 The in-memory single-corpus catalog (§6.1–6.2): `createCorpus` validates `requiredTiers` against
@@ -1091,7 +1094,7 @@ depends_on: [task-core-claim]
 files:
   - src/adapters/adapter.ts
   - src/adapters/adapter.test.ts
-status: pending
+status: done
 ```
 
 The `StorageAdapter` protocol (§10), `AdapterCapabilities` with the per-`PredicateKind`
@@ -1146,7 +1149,7 @@ depends_on: [task-adapter-interface, task-core-claim, task-dist-registry, task-s
 files:
   - src/adapters/sqlite.ts
   - src/adapters/sqlite.test.ts
-status: pending
+status: done
 ```
 
 The `better-sqlite3` adapter (§10.1): one `claims` table (scalar columns + JSON1) with a
@@ -1220,7 +1223,7 @@ depends_on: [task-core-claim]
 files:
   - src/algebra/types.ts
   - src/algebra/types.test.ts
-status: pending
+status: done
 ```
 
 The in-memory algebra value types (§4.1): `Corpus` (immutable claim array), `RankedCorpus`
@@ -1268,7 +1271,7 @@ files:
   - src/algebra/predicate.test.ts
   - src/algebra/selection.ts
   - src/algebra/selection.test.ts
-status: pending
+status: done
 ```
 
 The predicate language (§4.2) — relational, probabilistic (confidence via `pointEstimate`/`effective`),
@@ -1337,7 +1340,7 @@ depends_on: [task-selection, task-schema, task-core-value]
 files:
   - src/algebra/value-predicate.ts
   - src/algebra/value-predicate.test.ts
-status: pending
+status: done
 ```
 
 Value path/whole-value predicates (§4.2.1) with **parse-time type-checking** against a declared
@@ -1389,7 +1392,7 @@ depends_on: [task-algebra-types]
 files:
   - src/algebra/projection.ts
   - src/algebra/projection.test.ts
-status: pending
+status: done
 ```
 
 The π operator (§4.3): restrict each claim to a subset of fields, with the idempotence and
@@ -1437,7 +1440,7 @@ depends_on: [task-algebra-types, task-core-time]
 files:
   - src/algebra/temporal.ts
   - src/algebra/temporal.test.ts
-status: pending
+status: done
 ```
 
 The τ operator (§4.4): `τ_valid(T)`, `τ_recorded(T)`, `τ_known(T)` = `τ_valid ∘ τ_recorded`, and the
@@ -1482,7 +1485,7 @@ depends_on: [task-algebra-types, task-core-confidence, task-corpus]
 files:
   - src/algebra/decay.ts
   - src/algebra/decay.test.ts
-status: pending
+status: done
 ```
 
 The δ operator (§4.5): apply a time-based multiplier to each claim's *effective* confidence without
@@ -1538,7 +1541,7 @@ depends_on: [task-algebra-types, task-core-value]
 files:
   - src/algebra/similarity.ts
   - src/algebra/similarity.test.ts
-status: pending
+status: done
 ```
 
 The `SimilarityFn` protocol (§4.6) with two pure deterministic bindings — `sim_jaccard` (token-set
@@ -1593,7 +1596,7 @@ depends_on: [task-algebra-types, task-core-evidence, task-adapter-interface]
 files:
   - src/algebra/provenance-traversal.ts
   - src/algebra/provenance-traversal.test.ts
-status: pending
+status: done
 ```
 
 The γ operator (§4.7): for each claim, follow `claim`-kind evidence edges to depth `d`, fetching
@@ -1650,7 +1653,7 @@ depends_on: [task-algebra-types, task-similarity]
 files:
   - src/algebra/composition.ts
   - src/algebra/composition.test.ts
-status: pending
+status: done
 ```
 
 The terminal κ family (§4.12): `δ_dedup_content` (Jaccard-threshold near-duplicate removal),
@@ -1714,7 +1717,7 @@ depends_on: [task-algebra-types, task-selection, task-value-predicate, task-proj
 files:
   - src/algebra/expression.ts
   - src/algebra/expression.test.ts
-status: pending
+status: done
 ```
 
 The query-expression representation and evaluator (§4): a `pipe` builder over a leaf `corpus(id)` that
@@ -1768,7 +1771,7 @@ depends_on: [task-core-confidence, task-schema]
 files:
   - src/write/source-weight.ts
   - src/write/source-weight.test.ts
-status: pending
+status: done
 ```
 
 Appendix A source weights and decay half-lives, plus `betaFromRaw` — the promotion-time confidence
@@ -1820,7 +1823,7 @@ depends_on: [task-core-claim, task-corpus, task-adapter-interface]
 files:
   - src/write/contradiction.ts
   - src/write/contradiction.test.ts
-status: pending
+status: done
 ```
 
 The cheap contradiction check (§7.3) and the four policies. The check matches `(subject, key, scopeHash)`
@@ -1877,7 +1880,7 @@ depends_on: [task-adapter-interface]
 files:
   - src/write/idempotency.ts
   - src/write/idempotency.test.ts
-status: pending
+status: done
 ```
 
 Idempotency-key computation and the 24h window (§7.7), backed by the adapter's idempotency-record
@@ -1926,7 +1929,7 @@ depends_on: [task-source-weight, task-contradiction, task-idempotency, task-sche
 files:
   - src/write/pipeline.ts
   - src/write/pipeline.test.ts
-status: pending
+status: done
 ```
 
 The immediate-promote orchestrator (§7.1): hash scope+value → `betaFromRaw` → schema/scope validation
@@ -1998,7 +2001,7 @@ files:
   - src/index.ts
   - src/mneme.test.ts
 is_wiring_task: true
-status: pending
+status: done
 ```
 
 Wires the subsystems into the public library surface: `createMneme({ adapter, availableTiers })` returns
@@ -2020,7 +2023,7 @@ id: task-acceptance
 depends_on: [task-facade]
 files:
   - test/acceptance/worked-query-1.test.ts
-status: pending
+status: done
 ```
 
 The end-to-end MVP gate: seed a corpus with lineage-block claims (varying subject/status/confidence/recency,
