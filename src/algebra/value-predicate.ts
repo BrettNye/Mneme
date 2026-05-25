@@ -83,9 +83,15 @@ function resolveZodFieldType(
   return current;
 }
 
-/** Unwrap ZodOptional / ZodNullable to get the inner type */
+/** Unwrap ZodOptional / ZodNullable / ZodDefault / ZodBranded to get the inner type */
 function unwrapZod(schema: z.ZodTypeAny): z.ZodTypeAny {
   if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) {
+    return unwrapZod(schema.unwrap());
+  }
+  if (schema instanceof z.ZodDefault) {
+    return unwrapZod(schema.removeDefault());
+  }
+  if (schema instanceof z.ZodBranded) {
     return unwrapZod(schema.unwrap());
   }
   return schema;

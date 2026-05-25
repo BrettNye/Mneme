@@ -350,8 +350,32 @@ it("matchesValue valueExists returns false when path is absent", () => {
   expect(matchesValue({}, { op: "valueExists", path: "a" })).toBe(false);
 });
 
-it("matchesValue valueGt returns false when path is absent", () => {
+it("matchesValue valueGt throws when path is absent", () => {
   expect(() =>
     matchesValue({}, { op: "valueGt", path: "score", value: 10 })
   ).toThrow();
+});
+
+// ---------------------------------------------------------------------------
+// ZodDefault / ZodBranded unwrapping in typecheckValuePredicate
+// ---------------------------------------------------------------------------
+
+it("accepts a valueGt predicate on a defaulted numeric field (ZodDefault unwrapping)", () => {
+  const schema: ClaimSchema = {
+    version: "1",
+    subjects: [],
+    scopeFields: {},
+    required: [],
+    scalarPseudocount: {},
+    valueSchemas: {
+      "game.score": z.object({ score: z.number().default(0) }),
+    },
+  };
+  expect(() =>
+    typecheckValuePredicate(
+      { op: "valueGt", path: "score", value: 5 },
+      "game.score",
+      schema
+    )
+  ).not.toThrow();
 });
