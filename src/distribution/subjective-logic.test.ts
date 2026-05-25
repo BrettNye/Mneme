@@ -41,3 +41,12 @@ it("round-trip with non-default base rate and different alpha/beta", () => {
   expect(alphaBack).toBeCloseTo(alpha);
   expect(betaBack).toBeCloseTo(beta);
 });
+
+it("opinionToBeta throws RangeError for dogmatic opinion with uncertainty === 0", () => {
+  expect(() =>
+    opinionToBeta({ belief: 1, disbelief: 0, uncertainty: 0, baseRate: 0.5 })
+  ).toThrow(RangeError);
+  expect(() =>
+    opinionToBeta({ belief: 1, disbelief: 0, uncertainty: 0, baseRate: 0.5 })
+  ).toThrow("opinionToBeta: uncertainty must be > 0 (a dogmatic opinion has no finite Beta equivalent)");
+});

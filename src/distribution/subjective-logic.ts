@@ -16,6 +16,9 @@ export function betaToOpinion(alpha: number, beta: number, W = 2, a = 0.5): SLOp
 }
 
 export function opinionToBeta(o: SLOpinion, W = 2): { alpha: number; beta: number } {
+  if (o.uncertainty === 0) {
+    throw new RangeError("opinionToBeta: uncertainty must be > 0 (a dogmatic opinion has no finite Beta equivalent)");
+  }
   const total = W / o.uncertainty;
   return {
     alpha: o.belief * total + o.baseRate * W,
