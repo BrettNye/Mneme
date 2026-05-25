@@ -2103,3 +2103,49 @@ let win_betas = α_groupBy<scope.actionId,
 This excludes pending outcomes from both numerator and denominator — they do not count as losses, but they also do not dilute the rate.
 
 Demonstrates: Beta-typed rate aggregation via `α_groupBy` with `binary_rate` (§4.13, §5.6), the aggregation-to-ranking bridge via `α_join_aggregate` with `reweight_wilson_floor` (§4.13), and the composition of the aggregation family with the distribution family — confidence-aware ranking that the retrieval-only algebra could not express.
+
+---
+
+## 12. Glossary
+
+**Aggregate result** — a typed terminal value (`AggregateResult`) produced by the aggregation operators (§4.13); a map from group key to aggregate value, where the `rate` variant emits a `Beta` rather than a raw ratio so sample-size uncertainty is preserved.
+
+**Algebra** — the set of typed operators and equational laws that define legal query expressions.
+
+**Bitemporal** — having two distinct time dimensions: valid-time (when the claim's content was true) and transaction-time (when the claim entered the corpus).
+
+**Candidate claim** — a claim that has been emitted but not yet promoted to the corpus.
+
+**Claim** — the basic unit of typed data in a corpus; an assertion with confidence, scope, provenance, and evidence.
+
+**Composition** — the terminal operator family that produces an LLM-ready context document from a ranked corpus.
+
+**Contradiction cluster** — the n-way representation of a disagreement (`ContradictionCluster`) produced by `⊥_clusters` (§4.8): for a single `(subject, key, scope)` triple it groups the conflicting claims by value, preserving disagreement structure that the pairwise form loses.
+
+**Corpus** — a named, schema-bound, access-controlled collection of claims.
+
+**Decay** — confidence adjustment as a function of time, applied at query time rather than write time.
+
+**Derived claim** — a claim produced by a query expression, with the query and corpus state recorded as provenance.
+
+**Distribution protocol** — the `DistributionProtocol<T>` interface (§5.1) that binds a `DistributionType` to its serialization, statistics, conversion, and combination operations; the protocol-tier contract through which Beta, scalar, Dirichlet, Gaussian, and Kalman distributions are supported.
+
+**Effective confidence** — the post-decay, post-weighting confidence used in queries; distinct from raw stored confidence.
+
+**Evidence reference** — a pointer from a claim to a supporting source (another claim, a document, an external resource).
+
+**Provenance** — the structured record of where a claim came from (workflow, run, persona, derivation query).
+
+**Scope** — dynamic context qualifying a claim's static key (workflow ID, entity ID, persona ID, etc.).
+
+**Streamable operator** — an operator that can be evaluated incrementally on each new write in O(1) or O(log n) time.
+
+**Subject** — the top-level namespace component of a claim's key (e.g., `user`, `repo`, `workflow`).
+
+**Subjective-logic opinion** — the `(belief, disbelief, uncertainty, base_rate)` representation a Beta(α, β) confidence maps to via the bridge of §2.5, under the §0.3 convention; its projected probability `α/(α+β)` agrees with the Beta effective mean by construction.
+
+**Subscription** — a long-running query registered against the corpus, with trigger semantics that determine when to deliver notifications.
+
+**Tier** — the three-level classification (§0.2) that every operator, type, and capability carries: **Core `[C]`** (MUST be supported by all implementations), **Protocol extension `[P]`** (exposed through a declared protocol with a reference implementation, opt-in), and **Customer-gated profile `[Prof]`** (specified architecturally but shipped only when a customer requirement justifies it).
+
+**Transaction** — an atomic batch of writes that become visible together or not at all.
