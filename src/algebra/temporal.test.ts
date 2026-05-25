@@ -40,12 +40,27 @@ it("tauRecorded keeps claims where recorded <= T", () => {
   expect(result.claims).toContain(claimC);
 });
 
-it("tauKnown equals tauValid composed with tauRecorded", () => {
-  const c = corpusOf([
-    { valid: { from: 0, to: 100 }, recorded: 50 } as unknown as Claim,
-    { valid: { from: 0, to: 100 }, recorded: 150 } as unknown as Claim,
-  ]);
-  expect(tauKnown(100)(c)).toEqual(tauValid(100)(tauRecorded(100)(c)));
+it("tauKnown equals tauValid composed with tauRecorded (non-vacuous law test)", () => {
+  // At T=50:
+  // claimLaw1: valid {from:100,to:200} → tauValid(50) FAILS; recorded=10 → tauRecorded(50) passes
+  //   → survives tauRecorded but then filtered out by tauValid → NOT in result
+  // claimLaw2: valid {from:0,to:100} → tauValid(50) passes; recorded=10 → tauRecorded(50) passes
+  //   → survives both → IN result
+  // claimLaw3: valid {from:0,to:100} → tauValid(50) passes; recorded=80 → tauRecorded(50) FAILS
+  //   → filtered by tauRecorded → NOT in result
+  const claimLaw1 = makeClaim({ from: 100, to: 200 }, 10);
+  const claimLaw2 = makeClaim({ from: 0, to: 100 }, 10);
+  const claimLaw3 = makeClaim({ from: 0, to: 100 }, 80);
+  const c = corpusOf([claimLaw1, claimLaw2, claimLaw3]);
+
+  const knownResult = tauKnown(50)(c);
+  const composedResult = tauValid(50)(tauRecorded(50)(c));
+
+  // Law: tauKnown == tauValid ∘ tauRecorded
+  expect(knownResult).toEqual(composedResult);
+  // Non-trivial: exactly 1 claim survives (claimLaw2)
+  expect(knownResult.claims).toHaveLength(1);
+  expect(knownResult.claims).toContain(claimLaw2);
 });
 
 it("tauKnown keeps only claims that are both valid at T and recorded at or before T", () => {
@@ -59,19 +74,20 @@ it("tauKnown keeps only claims that are both valid at T and recorded at or befor
   expect(result.claims).not.toContain(claimC);
 });
 
-it("tauNow excludes future-recorded claims", () => {
-  const futureRecorded = makeClaim({ from: 0, to: Number.POSITIVE_INFINITY }, Date.now() + 999_999_999);
+it("tauNow excludes future-recorded claims (fixed clock)", () => {
+  const fixedClock = () => 1000;
+  // recorded=2000 > clock()=1000, so tauRecorded filters it out
+  const futureRecorded = makeClaim({ from: 0, to: Number.POSITIVE_INFINITY }, 2000);
   const c = corpusOf([futureRecorded]);
-  const result = tauNow()(c);
+  const result = tauNow(fixedClock)(c);
   expect(result.claims).not.toContain(futureRecorded);
 });
 
-it("tauNow includes a currently-valid and already-recorded claim", () => {
-  const currentlyValid = makeClaim(
-    { from: Date.now() - 10_000, to: Date.now() + 10_000 },
-    Date.now() - 5_000,
-  );
+it("tauNow includes a currently-valid and already-recorded claim (fixed clock)", () => {
+  const fixedClock = () => 1000;
+  // valid [0, 2000) covers 1000; recorded=500 <= 1000
+  const currentlyValid = makeClaim({ from: 0, to: 2000 }, 500);
   const c = corpusOf([currentlyValid]);
-  const result = tauNow()(c);
+  const result = tauNow(fixedClock)(c);
   expect(result.claims).toContain(currentlyValid);
 });

@@ -18,6 +18,6 @@ export const tauKnown =
     tauValid(t)(tauRecorded(t)(c));
 
 export const tauNow =
-  () =>
+  (clock: () => Instant = now) =>
   (c: Corpus): Corpus =>
-    tauKnown(now())(c);
+    tauKnown(clock())(c);
