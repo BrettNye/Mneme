@@ -46,6 +46,11 @@ it("idempotencyScope separates different corpus/writer/key tuples (no collision)
   expect(unique.size).toBe(4);
 });
 
+it("idempotencyScope is unambiguous when components contain spaces (no collision on space-boundary)", () => {
+  // ("a b", "c", "d") vs ("a", "b c", "d") — plain-space join would make both "a b c d"
+  expect(idempotencyScope("a b", "c", "d")).not.toBe(idempotencyScope("a", "b c", "d"));
+});
+
 it("does not collide across different scopes in the store", () => {
   const store = new Map<string, any>();
   const adapter = {

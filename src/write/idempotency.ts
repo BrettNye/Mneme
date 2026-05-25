@@ -3,7 +3,7 @@ import type { StorageAdapter } from "../adapters/adapter.js";
 export const WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export const idempotencyScope = (corpus: string, writer: string, key: string): string =>
-  `${corpus} ${writer} ${key}`;
+  JSON.stringify([corpus, writer, key]);
 
 export function checkIdempotent(
   adapter: StorageAdapter,
