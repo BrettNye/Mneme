@@ -780,3 +780,102 @@ This core/protocol split keeps the core-tier promise honest: cluster *detection*
 
 The pairwise form is maintained the same way: a new claim may introduce contradictions only with existing claims sharing its `(subject, key, scope)`, so the search is scoped to that triple. The library maintains per-triple cluster state in subscription state (§8), updated incrementally on each write.
 
+### 4.9 Belief combination — ⊕ `[C]`
+
+Two distinct operators that the v0 algebra previously conflated into one.
+
+```
+⊕_dedupe                  : Corpus → Corpus            `[C]`
+⊕_synthesize_as<S, K>     : Corpus → Claim             `[C]`
+```
+
+**`⊕_dedupe`** — combine claims sharing `(subject, key, scope)` into a single claim using the configured combination rule. The result is a corpus with no within-key duplicates.
+
+**`⊕_synthesize_as<S, K>`** — combine ALL claims in the input corpus into a single new synthesized claim with subject `S` and key `K`. The synthesized claim's evidence is the union of input evidence; its confidence is computed by the combination rule; its scope is derived from the inputs' shared scope fields.
+
+Both operators are parameterized by a *combination rule*. The post-split rule set is:
+
+- `rule_weighted_avg` — trust-weighted averaging of opinions
+- `rule_evidence_pooled` — accumulation of the underlying evidence parameters
+- `rule_max_mean` — selection by highest point estimate (mean)
+- `rule_max_concentration` — selection by highest evidence weight (concentration)
+- `rule_dempster` — Dempster's combination rule (orthogonal evidence)
+
+The rule names are referenced here only; their per-distribution math (Beta, Dirichlet, Gaussian, scalar) and convention-correctness derivations are specified in §5.6. The selection rule is split into two: `rule_max_mean` selects by point estimate and `rule_max_concentration` selects by evidence weight. These answer different questions, so consumers MUST choose explicitly; the library MUST NOT default between them.
+
+**Equational laws.**
+
+- `⊕_dedupe` is associative for symmetric rules (`rule_weighted_avg`, `rule_evidence_pooled`).
+- `⊕_dedupe` is NOT generally idempotent — repeated application may change confidence depending on the rule's semantics. The averaging and max-selection rules (`rule_weighted_avg`, `rule_max_mean`, `rule_max_concentration`) are idempotent; the evidence-combining rules (`rule_evidence_pooled`, `rule_dempster`) are not. See §5.6 for the idempotence contract.
+- `⊕_synthesize_as` has no idempotence — it is a single-shot synthesis.
+
+**Incremental evaluation.** `⊕_dedupe` is streamable (a new claim either merges with an existing key or stands alone). `⊕_synthesize_as` is streamable for monotonic combination rules and non-streamable for others (`rule_dempster`, in particular, can have order-dependent results in edge cases).
+
+### 4.10 Layered override — ⊳ `[C]`
+
+```
+⊳ : Corpus × Corpus → Corpus                          `[C]`
+```
+
+`C₁ ⊳ C₂` produces a corpus where C₁'s claims take precedence over C₂'s on matching `(subject, key, scope)` triples, but C₂ contributes claims about triples C₁ doesn't address.
+
+This is the layered-merge semantic. Think of it as typed object-spread: `{...defaults, ...specifics}` where keys from `specifics` win.
+
+For the operator to be well-defined, both inputs must be coherent (no within-input contradictions on the same triple). Callers SHOULD apply `⊕_dedupe` to each input before composing with ⊳.
+
+**Equational laws.**
+
+- Associativity: `(C₁ ⊳ C₂) ⊳ C₃ = C₁ ⊳ (C₂ ⊳ C₃)`.
+- Identity: `C ⊳ ∅ = C` and `∅ ⊳ C = C`.
+- NOT commutative: `C₁ ⊳ C₂ ≠ C₂ ⊳ C₁` in general.
+
+**Incremental evaluation.** Streamable when inputs are stable: the dominator's writes immediately override; the dominated's writes are admitted only when no matching triple exists in the dominator.
+
+### 4.11 Join — ⋈ `[C]`
+
+```
+⋈_r : Corpus × Corpus → Corpus                        `[C]`
+```
+
+Combine claims from two corpora via relation `r`. Specialized variants:
+
+- `⋈_scope` — claims about the same scope-entity (join on `scope.entityId`)
+- `⋈_evidence` — claims linked through evidence references
+- `⋈_subject` — claims about the same subject
+
+General relational joins are supported but rarely used in practice — most queries use the specialized variants.
+
+**Equational laws.**
+
+- Commutativity: `C₁ ⋈_r C₂ = C₂ ⋈_r C₁` for symmetric `r`.
+- Associativity: `(C₁ ⋈_r C₂) ⋈_r C₃ = C₁ ⋈_r (C₂ ⋈_r C₃)` for symmetric `r`.
+- Selection push-down: `σ_p(C₁ ⋈_r C₂) = σ_p(C₁) ⋈_r C₂` when `p` only references C₁'s fields.
+
+**Incremental evaluation.** Streamable for indexed joins; expensive for arbitrary relations.
+
+### 4.12 Composition — κ (and its component operators) `[C]`
+
+The composition operator is split into three component operators that compose, plus a convenience operator for the common case.
+
+```
+δ_dedup_content : RankedCorpus → RankedCorpus                         `[C]`
+φ_format        : RankedCorpus → ComposedContext                     `[C]`  (parameterized by format)
+β_budget        : ComposedContext × TokenBudget → ComposedContext    `[C]`
+κ               : RankedCorpus × Format × TokenBudget → ComposedContext  `[C]`  (convenience)
+```
+
+**`δ_dedup_content`** — remove near-duplicate content from a ranked corpus using a content-similarity threshold (Jaccard, cosine, etc.).
+
+**`φ_format`** — produce a formatted document from a ranked corpus. Supported formats: XML, Markdown, JSON, plain text.
+
+**`β_budget`** — truncate a composed document to a token budget, keeping highest-ranked content.
+
+**`κ`** — convenience composition that applies dedup, format, and budget in sequence.
+
+`ComposedContext` is *not* a corpus. It is a terminal type — the algebra ends when composition produces it. Composition is a lossy, ordered, formatted output ready for an LLM context window.
+
+**Equational laws.**
+
+- Composition: `κ ≡ β_budget ∘ φ_format ∘ δ_dedup_content` (up to parameterization).
+- NOT streamable — composition is order-sensitive and budget-sensitive in ways that fight incremental evaluation. Re-evaluation on each write is the safe semantics.
+
