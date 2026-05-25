@@ -1197,3 +1197,71 @@ When the between-means term `w₁w₂(μ₁−μ₂)²` dominates the within-var
 **Connection to errata §6.2.** The de-aliasing keeps the rule-level idempotence claims valid across all distribution types. `rule_weighted_avg` is idempotent for Beta, Dirichlet, scalar, AND Gaussian inputs. The earlier "Gaussian weighted_avg is non-idempotent because it is a kalman alias" claim was a regression that contradicted the errata table; this de-aliasing removes the contradiction. The reference implementation flags the non-idempotence of `rule_kalman` loudly: **consumers using `rule_kalman` MUST implement observation-level deduplication** — re-ingesting the same measurement with the same `observation_id` must be filtered before fusion (§5.1). The protocol's `is_idempotent(rule_id)` returns false for `rule_kalman` so callers know to deduplicate.
 
 References: Welch & Bishop, "An Introduction to the Kalman Filter" (UNC, 1995, periodically updated). For the moment-matching of mixtures, any standard text on mixture distributions or Bayesian model averaging.
+
+### 5.5 Mixed-distribution combination `[P]`
+
+When a combination operation receives inputs of different distribution types, the library checks whether either type has a registered conversion to the other (via the DistributionProtocol's `to_subjective_logic_opinion` bridge or an explicit consumer-registered converter), applies the conversion if available, performs the combination in the unified type, and returns the result in that unified type. Combination across types with no registered conversion returns NotSupported.
+
+**Standard conversions.** The reference implementations register the following:
+
+- **scalar → Beta**: a scalar carries no evidence weight on its own, so coercion to Beta requires an explicit, declared pseudocount. The conversion is
+
+  ```
+  scalar_to_beta(s, pseudocount, a):
+    α = s · pseudocount + a · W
+    β = (1 − s) · pseudocount + (1 − a) · W
+  ```
+
+  where `s` is the scalar, `pseudocount` is the strength-of-evidence the scalar represents (expressed as an effective observation count), and `W`, `a` are the corpus's prior weight and base rate from §1.2. The `s · pseudocount` term is the raw-evidence contribution (treating the scalar as the expectation over `pseudocount` observations); the `a · W` term adds the prior. The result has `α + β = pseudocount + W` — the correct prior-inclusive structure. The `pseudocount` parameter is **required, not defaulted**: it is declared either by the corpus schema (`scalarPseudocount: Map<Source, Number>`) or as an explicit argument to the conversion operator. Implementations MUST NOT default the pseudocount silently. **A combination operation that requires scalar-to-Beta coercion without a declared pseudocount MUST fail at parse time.** (A scalar of 0.8 maps to `Beta(8, 2)` and to `Beta(80, 20)` with the same mean but ten times the evidence weight; the choice silently determines how much a scalar-source claim dominates in subsequent pooling, so it cannot be left implicit.) As consumer guidance only — calibrate to the domain — high-trust sources (manual, verification) warrant pseudocount ≥ 10, medium-trust (workflow, heuristic) ≈ 5, low-trust (llm, imported) ≈ 2.
+- **Beta → Dirichlet (same frame)**: a `Beta(α, β)` over {True, False} maps directly to a 2-category `Dirichlet(α, β)`. Same frame, no semantic shift — trivial.
+- **Beta → SL opinion**: via the corrected Beta-to-opinion bridge of §5.2.
+- **Dirichlet → SL opinion**: via the generalized Dirichlet-to-opinion bridge of §5.3.
+
+No standard conversion exists for Gaussian ↔ Beta or Gaussian ↔ Dirichlet; combination across these types returns NotSupported, and consumers needing it register custom converters via the DistributionProtocol.
+
+**Frame extension is NOT a standard conversion.** A Beta-typed claim about "is at Port A" has frame {True, False}; a Dirichlet-typed claim about "vessel location" has frame {Port A, Port B, Port C}. These are *different propositions*: a Beta about a singleton is not equivalent to a Dirichlet over the full frame, and the library cannot silently convert between them. When combining claims that nominally describe the same fact but use different frames, the consumer must perform explicit frame extension before combination. The library provides:
+
+```
+extend_to_frame(beta: Beta, target_frame: Frame, mapping: BetaToFrameMapping) → Dirichlet
+
+BetaToFrameMapping {
+  trueMapsTo  : SingletonId          -- which singleton in the target frame corresponds to "True"
+  -- "False" mass is split among remaining singletons proportionally
+  -- to the target frame's declared base rates
+}
+```
+
+**Semantic: strip the Beta's prior, then redistribute the raw evidence under the target frame's prior structure.** This ensures the resulting Dirichlet has internally consistent priors regardless of whether the Beta's base rate matched the target's. For input `Beta(α, β)` with binary prior `(W_b, a_b)` and target frame {A, B, C} with base rates `(a_A, a_B, a_C)` and prior weight `W_t`, with `trueMapsTo = A`:
+
+```
+-- Step 1: Strip the Beta's prior to recover raw evidence counts
+r = α − a_b · W_b               -- raw positive evidence
+s = β − (1 − a_b) · W_b         -- raw negative evidence
+
+-- Step 2: Distribute raw counts under the target frame's prior structure
+α_A = r + a_A · W_t                       -- True evidence goes to A, with A's prior
+α_B = s·(a_B/(1−a_A)) + a_B · W_t         -- False evidence ∝ base rate, with B's prior
+α_C = s·(a_C/(1−a_A)) + a_C · W_t         -- False evidence ∝ base rate, with C's prior
+```
+
+The output is `Dirichlet(α_A, α_B, α_C)`, with uniform prior weight `W_t` across all categories and prior structure matching the target frame's declared base rates.
+
+**Worked example.** `Beta(3, 2)` with `W_b = 2`, `a_b = 0.5` (so `r = 2`, `s = 1`). Target frame {A, B, C} with `a_A = 0.5`, `a_B = 0.3`, `a_C = 0.2`, `W_t = 2`. `trueMapsTo = A`.
+
+- α_A = 2 + 0.5·2 = 3
+- α_B = 1 · (0.3 / 0.5) + 0.3·2 = 0.6 + 0.6 = 1.2
+- α_C = 1 · (0.2 / 0.5) + 0.2·2 = 0.4 + 0.4 = 0.8
+
+Result: `Dirichlet(3, 1.2, 0.8)`. Total concentration = 5. In this example the input Beta has `α + β = 5` and `W_b = 2 = W_t`, so the concentrations match — but this equality is a property of the example's matched W's, not a general guarantee (see Properties below). Sum of priors = `a_A·W_t + a_B·W_t + a_C·W_t = 2` (matches `W_t`). ✓ Prior structure is internally consistent.
+
+**Properties of this construction:**
+
+- *Raw-evidence preserving*: `r + s` is preserved exactly across the operation. The evidence count from the input survives intact in the output's category totals (after subtracting the target priors).
+- *Total concentration*: `Σαᵢ = r + s + W_t`. This equals the input's `α + β` **only when `W_t = W_b`**. The worked example happens to satisfy this (both W's are 2), which makes the totals match; in the general case the totals differ by `(W_t − W_b)`.
+- *Prior-consistent*: the resulting Dirichlet's prior structure has uniform weight `W_t` across all categories, matching the target frame's declared base rates.
+- *Convention-clean*: in the raw-count view `(r, s) → (r_A, r_B, r_C)`, the operation is just "True-evidence goes to A; False-evidence splits between B and C proportionally to base rates."
+- *Round-trip*: marginalizing the result back to a 2-category {A, ¬A} Dirichlet recovers `Beta(α_A, α_B + α_C) = Beta(r + a_A·W_t, s + (1−a_A)·W_t)`. This equals the input Beta when `(a_b, W_b) = (a_A, W_t)`; otherwise it recovers the input's raw evidence `(r, s)` paired with the target frame's prior structure — which is the operation's intended renormalization, not a defect.
+
+**Caveat: this is a maximum-entropy approximation, not a lossless conversion.** The original Beta knew "False" was about a singleton outside {A}; the extended Dirichlet now treats the False evidence as informative about B vs. C in proportion to base rates. This introduces information that was not in the original Beta. The base-rate split is the maximum-entropy choice given no further information, but it remains an approximation.
+
+Consumers who need to preserve "the original source had no opinion about B vs. C" must register a custom converter using a Jøsang hyper-opinion representation — placing mass on the composite focal element {B, C} rather than splitting it between the singletons. Hyper-opinions require extending the DistributionProtocol to support powerset-indexed mass functions, which is outside v0.2 scope. The base-rate split is the v0.2 default; finer control is via custom converter (the hyper-opinion escape hatch).
