@@ -1867,3 +1867,239 @@ The fallback-mode classification means backend choice matters. Guidance for cons
 | Embedded, single-process | SQLite |
 
 Choosing a similarity-optimized adapter for a structured-query workload, or vice versa, produces queries that work correctly but perform pathologically. The optimizer cannot fix a backend-choice mismatch.
+
+---
+
+## 11. Worked queries
+
+This section presents six worked queries that constrain the spec. Each is expressed in the algebra of §4 and the write/subscription model of §7–§8, and demonstrates specific operators or interactions. All queries use the corrected operator and rule names of this consolidated spec: string literals are quoted, combination rules use their post-split names (`rule_weighted_avg`, `rule_evidence_pooled`, `rule_max_mean`, `rule_max_concentration`; the ambiguous v0.1 `rule_max_confidence` is deprecated and removed, §5.6), and the aggregation/distribution families compose as specified in §4.13.
+
+### 11.1 Query 1 — context assembly for architecture review
+
+**Scenario.** A workflow's compile step needs to assemble context for an architecture-review subtask on the Canopy lineage-block work. Find claims about the lineage-block design that are currently believed, semantically similar to the query, not contradicted by higher-confidence claims, with full evidence chains, formatted as a 12k-token XML context.
+
+```
+let corpus_now     = τ_now(corpus("workspace:canopy"))
+let scoped         = σ_subject="lineage-block" (corpus_now)
+let decayed        = δ_exponential(half_life=30d) (scoped)
+let validated      = σ_status="validated" ∧ confidence>0.7 (decayed)
+let contradictions = ⊥(validated)
+let resolved       = resolve_deprecate_lower(contradictions, validated)
+let ranked         = ρ_cosine, "lineage block schema considerations" (resolved)
+let with_evidence  = γ_2(ranked)
+let composed       = κ_xml, 12000_tokens (with_evidence)
+return composed
+```
+
+Demonstrates: temporal slicing (§4.4), decay (§4.5), confidence filtering (§4.2), contradiction detection and resolution (§4.8, §7.3), similarity ranking (§4.6), provenance traversal (§4.7), composition (§4.12).
+
+### 11.2 Query 2 — multi-corpus layered retrieval
+
+**Scenario.** A backend subagent is invoked for a NestJS task in CrewTracks. Assemble context from general NestJS knowledge, CrewTracks-specific NestJS knowledge, and the backend-role tag-scoped claims, with layered-override semantics so the more-specific corpus wins on key collisions.
+
+```
+let nestjs_base   = δ_default(τ_now(σ_status="validated" ∧ confidence>0.6 (corpus("wiki:nestjs-general"))))
+let crewtracks    = δ_default(τ_now(σ_status="validated" ∧ confidence>0.6 (corpus("wiki:crewtracks-modules"))))
+let backend_role  = δ_persona(τ_now(σ_status="validated" ∧ confidence>0.5 (σ_tag="role:backend" (corpus("default")))))
+
+let layered_kb    = crewtracks ⊳ nestjs_base
+let with_role     = backend_role ⊳ layered_kb
+
+let ranked        = ρ_cosine, task_query (with_role)
+let with_evidence = γ_2(ranked)
+let composed      = κ_xml, 12000_tokens (with_evidence)
+return composed
+```
+
+Demonstrates: multi-corpus queries, the layered-override operator ⊳ (§4.10), per-corpus decay and confidence settings, role-as-tag (not role-as-entity). Under ⊳ the rightmost-applied operand (`backend_role`) overrides on matching `(subject, key, scope)`, with `crewtracks` overriding `nestjs_base`.
+
+### 11.3 Query 3 — time-traveling synthesis with derived write
+
+**Scenario.** A weekly project-margin check. For project Lincoln Street, determine whether risk has elevated meaningfully between four weeks ago and one week ago. If so, write a derived `at-risk` claim with full provenance.
+
+```
+let project       = "lincoln-street"
+let week_ago      = now() - 7d
+let month_ago     = now() - 28d
+let recent_cutoff = now() - 72h
+
+let signals_week  = σ_subject∈{"cost-variance", "schedule-slip", "quality-issue"} ∧ status="validated" (
+                      τ_known(week_ago) (σ_scope.entityId=project (corpus("workspace:acme")))
+                    )
+
+let signals_month = σ_subject∈{"cost-variance", "schedule-slip", "quality-issue"} ∧ status="validated" (
+                      τ_known(month_ago) (σ_scope.entityId=project (corpus("workspace:acme")))
+                    )
+
+let risk_week     = ⊕_synthesize_as<"at-risk", "project.risk-elevation">_rule_evidence_pooled (signals_week)
+let risk_month    = ⊕_synthesize_as<"at-risk", "project.risk-elevation">_rule_evidence_pooled (signals_month)
+
+let risk_delta    = effective_confidence(risk_week) - effective_confidence(risk_month)
+
+let recent_alerts = σ_subject="at-risk" ∧ scope.entityId=project ∧ recorded>recent_cutoff (corpus("workspace:acme"))
+
+if risk_delta > 0.15 and recent_alerts is empty:
+  let derived = derive_claim_from(
+    query          = (the synthesis query above),
+    target_subject = "at-risk",
+    target_key     = "project.risk-elevation",
+    scope          = { entityId: project, workspace: "acme" },
+    combination    = rule_evidence_pooled
+  )
+  commit_derived(
+    candidate        = derived,
+    provenance_query = serialize(synthesis_query),
+    corpus_state     = current_state(),
+    policy           = reject_on_contradiction
+  )
+```
+
+Demonstrates: bitemporal time-travel via `τ_known` (§4.4), belief synthesis via `⊕_synthesize_as` with the post-split `rule_evidence_pooled` rule (§4.9, §5.6), the algebra-to-computation boundary (arithmetic over derived effective-confidence values), and derived writes with full provenance via `derive_claim_from` / `commit_derived` (§7.6).
+
+### 11.4 Query 4 — streaming subscriptions
+
+**Scenario.** An architecture-review-panel run `R` is active. Three subscriptions need to fire reactively as the corpus evolves during the run, each with a distinct trigger and delivery target.
+
+```
+-- Subscription 1: push panel insights to Brett's Pilot session
+subscribe(
+  query     = σ_subject="panel-insight" ∧ scope.runId=R ∧ confidence>0.7 (corpus("workspace:canopy")),
+  trigger   = on_every_match,
+  target    = mcp_channel(serverId="pilot", channelId="lineage-block-discussion"),
+  lifecycle = until_event(workflow_completed(R))
+)
+
+-- Subscription 2: alert orchestrator on contradictions appearing in the run
+subscribe(
+  query     = ⊥(σ_status="validated" ∧ scope.runId=R (corpus("workspace:canopy"))),
+  trigger   = on_transition(direction=to_nonempty),
+  target    = webhook("https://orchestrator/run-contradiction"),
+  lifecycle = until_event(workflow_completed(R))
+)
+
+-- Subscription 3: audit-log every claim written during the run
+subscribe(
+  query     = σ_scope.runId=R (corpus("workspace:canopy")),
+  trigger   = on_every_match,
+  target    = log_sink(corpusId="audit:run-events"),
+  lifecycle = until_event(workflow_completed(R))
+)
+```
+
+Demonstrates: three trigger semantics (`on_every_match`, `on_transition(direction=to_nonempty)`; §8.2), three delivery target types (`mcp_channel`, `webhook`, `log_sink`; §8.4), and lifecycle policies tied to corpus events via `until_event` (§8.7). All three queries are over streamable operators (σ, ⊥; §8.3), so the subscriptions evaluate incrementally.
+
+### 11.5 Query 5 — atomic workflow-completion writes
+
+**Scenario.** An architecture-review-panel run completes. Multiple claims must be written atomically — per-agent panel insights, a synthesized decision derived from those insights, a run summary, and an audit event.
+
+```
+transaction {
+  -- Per-agent panel insights
+  for agent_output in run_outputs:
+    for insight in extract_insights(agent_output):
+      commit_candidate(
+        Claim {
+          subject    = "panel-insight",
+          key        = "review.lineage-block.insight",
+          scope      = { runId: R, persona: agent_output.persona },
+          value      = insight.content,
+          confidence = beta_from_raw(insight.raw_confidence, source="llm"),
+          valid      = [now, ∞),
+          source     = "llm",
+          provenance = { workflow: "architecture-review-panel", run: R, persona: agent_output.persona },
+          evidence   = insight.evidence_refs
+        },
+        policy = accept_but_mark
+      )
+
+  -- Synthesized decision (derived from the insights just written, in this same transaction)
+  let decision_query     = ⊕_synthesize_as<"decision", "review.lineage-block.verdict">_rule_weighted_avg (
+                             σ_subject="panel-insight" ∧ scope.runId=R (corpus("workspace:canopy"))
+                           )
+  let decision_candidate = derive_claim_from(
+    query          = decision_query,
+    target_subject = "decision",
+    target_key     = "review.lineage-block.verdict",
+    scope          = { runId: R },
+    combination    = rule_weighted_avg
+  )
+
+  commit_derived(
+    candidate        = decision_candidate,
+    provenance_query = serialize(decision_query),
+    corpus_state     = current_state(),
+    policy           = reject_on_contradiction
+  )
+
+  -- Run summary
+  commit_candidate(
+    Claim {
+      subject    = "run-summary",
+      key        = "workflow.architecture-review-panel.summary",
+      scope      = { runId: R },
+      value      = { participants: [...], duration: ..., consensus_level: ... },
+      confidence = beta_from_raw(1.0, source="workflow"),
+      valid      = [now, ∞),
+      source     = "workflow",
+      provenance = { workflow: "architecture-review-panel", run: R }
+    },
+    policy = always_accept
+  )
+
+  -- Audit event
+  commit_candidate(
+    Claim {
+      subject    = "audit-event",
+      key        = "workflow.run.completed",
+      scope      = { runId: R, workspace: "canopy" },
+      value      = { final_state: "consensus_reached", claim_count: counts },
+      confidence = beta_from_raw(1.0, source="workflow"),
+      valid      = [now, now],
+      source     = "workflow",
+      provenance = { workflow: "architecture-review-panel", run: R }
+    },
+    policy = always_accept
+  )
+}
+```
+
+Demonstrates: transactional batch writes (§7.4), per-claim contradiction policies (`accept_but_mark`, `reject_on_contradiction`, `always_accept`; §7.3), derived writes within transactions (§7.6), and intra-transaction references — the decision synthesis reads the panel insights committed earlier in the same transaction, while its derivation provenance records the pre-transaction corpus state (§7.4). The decision is synthesized with `⊕_synthesize_as` under `rule_weighted_avg` (the corrected post-split name; §4.9, §5.6).
+
+### 11.6 Query 6 — win-rate reweighting
+
+**Scenario.** A sales-app context assembly that must rank recommended actions not by raw win rate but by a confidence-aware Wilson lower bound, so that a well-evidenced action is not unseated by a lucky one-off. This is the pressure-test query that the retrieval-only algebra could not express; the aggregation family (§4.13) and the bridge operator make it expressible.
+
+```
+let actions  = σ_subject="action" ∧ key="action.recommended" (corpus("sales-app"))
+let outcomes = σ_subject="action" ∧ key="action.outcome"     (corpus("sales-app"))
+
+-- Compute a Beta-typed win-rate per action, excluding pending/null outcomes
+let win_betas = α_groupBy<scope.actionId,
+                          binary_rate<value.won>>(outcomes)
+
+-- Rank candidate actions by base similarity
+let ranked = ρ_cosine, current_context (actions)
+
+-- Reweight by the Wilson lower bound, which penalizes small samples
+let reranked = α_join_aggregate<scope.actionId,
+                                groupKey,
+                                reweight_wilson_floor>(ranked, win_betas)
+
+-- Compose the final context
+let composed = κ_xml, 12000_tokens (reranked)
+return composed
+```
+
+`binary_rate<value.won>` emits a `Beta(α=r+a·W, β=s+(1−a)·W)` aggregate per group (§5.6), so `reweight_wilson_floor` has a distribution to compute a lower bound over — it is not reweighting a bare ratio. The action with **22/30 wins (Wilson lower bound ≈ 0.55)** correctly outranks the action with **1/1 win (Wilson lower bound ≈ 0.21 at 95% confidence)**. Sample size is respected: even though 1/1 has a higher point estimate (1.0 > 0.73), the Wilson lower bound penalizes the small sample, and the well-evidenced 22/30 action wins. The aggregation family composes with the distribution family.
+
+If the outcome domain had three values (`won`, `lost`, `pending`) and the denominator needed to be controlled explicitly:
+
+```
+let win_betas = α_groupBy<scope.actionId,
+                          rate<num: value.won = true,
+                               denom: value.won = true ∨ value.won = false>>(outcomes)
+```
+
+This excludes pending outcomes from both numerator and denominator — they do not count as losses, but they also do not dilute the rate.
+
+Demonstrates: Beta-typed rate aggregation via `α_groupBy` with `binary_rate` (§4.13, §5.6), the aggregation-to-ranking bridge via `α_join_aggregate` with `reweight_wilson_floor` (§4.13), and the composition of the aggregation family with the distribution family — confidence-aware ranking that the retrieval-only algebra could not express.
