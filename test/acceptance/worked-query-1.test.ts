@@ -212,11 +212,15 @@ it("reduced Worked Query 1: end-to-end pipeline filters and ranks correctly", ()
   expect(ctx.content).toContain("schema design considerations");
   expect(ctx.content).toContain("provenance record");
 
-  // Filtered claims are absent
+  // Filtered claims are absent. Each guard uses a multi-word fragment unique to
+  // that claim's value so it cannot collide with XML structural tokens/metadata.
   expect(ctx.content).not.toContain("off-subject");
   expect(ctx.content).not.toContain("low confidence");
   expect(ctx.content).not.toContain("deprecated note");
-  expect(ctx.content).not.toContain("stale");
+  // The stale claim is removed specifically by decay (high raw 0.9, but δ_exponential
+  // over its ~90-day age drops effective <0.7); "stale schema considerations" is unique
+  // to its value — a bare "stale" could false-match future decay-policy metadata.
+  expect(ctx.content).not.toContain("stale schema considerations");
 
   // Believed claim ranks before the score-0 evidence claim
   const believedPos = ctx.content.indexOf("schema design considerations");
