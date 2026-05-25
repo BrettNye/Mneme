@@ -1,7 +1,27 @@
 import type { Claim, CandidateClaim, Status, Source } from "./claim.js";
 
 it("a fully-populated claim satisfies the Claim shape", () => {
-  const c = { id: "x", status: "validated" } as unknown as Claim;
+  const c: Claim = {
+    id: "id-1" as import("./ids.js").ClaimId,
+    profile: "p" as import("./ids.js").ProfileId,
+    workspace: "w" as import("./ids.js").WorkspaceId,
+    subject: "person",
+    key: "person.name",
+    scope: {},
+    scopeHash: "abc123",
+    value: "Alice",
+    valueHash: "def456",
+    confidence: { distribution: "scalar", parameters: { p: 0.9 }, raw: 0.9 },
+    valid: { from: 0, to: Number.POSITIVE_INFINITY },
+    recorded: Date.now(),
+    recordedSeq: 1,
+    status: "validated",
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "text",
+  };
   expect(c.status).toBe("validated");
 });
 
