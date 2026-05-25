@@ -1,0 +1,50 @@
+import type { Claim } from "../core/claim.js";
+import type { ClaimId } from "../core/ids.js";
+
+export type PredicateKind =
+  | "equality"
+  | "range"
+  | "set_membership"
+  | "regex"
+  | "structural_pattern"
+  | "null_check";
+
+export type ValuePredicateLevel =
+  | "native_indexed"
+  | "native_unindexed"
+  | "fallback_in_memory"
+  | "unsupported";
+
+export interface AdapterCapabilities {
+  valuePredicateSupport: Record<PredicateKind, ValuePredicateLevel>;
+}
+
+export interface ExecutionPlan {
+  corpusId: string;
+  subject?: string;
+  key?: string;
+  status?: string[];
+  scopeHash?: string;
+  recordedAtMost?: number;
+}
+
+export interface IdempotencyRecord {
+  result: string;
+  createdAt: number;
+}
+
+export interface StorageAdapter {
+  insertClaim(claim: Claim): void;
+  getClaim(id: ClaimId): Claim | undefined;
+  deleteClaim(id: ClaimId): void;
+  insertBatch(claims: Claim[]): void;
+  query(plan: ExecutionPlan): Claim[];
+  getIdempotencyRecord(scope: string, key: string): IdempotencyRecord | undefined;
+  putIdempotencyRecord(scope: string, key: string, rec: IdempotencyRecord): void;
+  capabilities(): AdapterCapabilities;
+}
+
+export const valuePredicateLevel = (
+  c: AdapterCapabilities,
+  k: PredicateKind
+): ValuePredicateLevel => c.valuePredicateSupport[k];
