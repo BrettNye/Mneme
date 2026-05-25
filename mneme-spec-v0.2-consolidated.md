@@ -344,7 +344,7 @@ Provenance {
   nodeId?       : string                           -- node within the workflow
   persona?      : string                           -- persona that produced this
   artifactId?   : string                           -- specific artifact reference
-  derivedFrom?  : DerivationProvenance             -- if this is a derived claim (see §6)
+  derivedFrom?  : DerivationProvenance             -- if this is a derived claim (see §7)
 }
 
 DerivationProvenance {
@@ -358,11 +358,11 @@ DerivationProvenance {
 }
 ```
 
-Derivation provenance makes derived claims *reproducible*: a consumer can re-run the serialized query against the recorded corpus state and verify they get the same derived claim. This is the audit-grade-provenance guarantee. The reproducibility guarantee is conditional on version availability — replay verifies the result *iff* all input claims are present, all referenced similarity-function and embedding-model versions remain available in the catalog, and the pinned `evaluationClock` is used for time-dependent operators. The full replay-status stratification is specified in §6.
+Derivation provenance makes derived claims *reproducible*: a consumer can re-run the serialized query against the recorded corpus state and verify they get the same derived claim. This is the audit-grade-provenance guarantee. The reproducibility guarantee is conditional on version availability — replay verifies the result *iff* all input claims are present, all referenced similarity-function and embedding-model versions remain available in the catalog, and the pinned `evaluationClock` is used for time-dependent operators. The full replay-status stratification is specified in §7.
 
 `similarityVersions` records the version of every similarity function used in the query; `embeddingModelVersions` records the version of every embedding model used (e.g., when `ρ_cosine` is invoked, the embedding model's version identifier is captured). `evaluationClock` pins the time at which time-dependent operators (decay, `τ_now`) are evaluated, eliminating "decay drift" during replay — re-evaluation uses the pinned clock, not the current clock.
 
-These three fields are mandatory for any derived write whose query references similarity-based operators, and recording them is *irreversible at write time*: a derivation committed without them cannot retroactively gain them. Implementations MUST begin recording version information immediately, even before the broader replay-verification machinery is built (see §6).
+These three fields are mandatory for any derived write whose query references similarity-based operators, and recording them is *irreversible at write time*: a derivation committed without them cannot retroactively gain them. Implementations MUST begin recording version information immediately, even before the broader replay-verification machinery is built (see §7).
 
 ### 2.8 EvidenceRef
 
@@ -511,7 +511,7 @@ Each operator is presented with a type signature, an intuition, and an equationa
 - `RankedCorpus` is a corpus where each claim carries an associated score (typically a similarity score).
 - `ComposedContext` is a token-budgeted, formatted document ready for LLM input; it is a *terminal* type — the algebra ends when composition produces it.
 
-The retrieval operators in §4.2–§4.7 all have signature `Corpus → Corpus` except similarity ranking, which has signature `Corpus → RankedCorpus`. Because most retrieval operators preserve the `Corpus` type, they compose freely; the equational laws below state when that composition commutes or simplifies, which is what an optimizer (§4.13) exploits.
+The retrieval operators in §4.2–§4.7 all have signature `Corpus → Corpus` except similarity ranking, which has signature `Corpus → RankedCorpus`. Because most retrieval operators preserve the `Corpus` type, they compose freely; the equational laws below state when that composition commutes or simplifies, which is what an optimizer (§4.14) exploits.
 
 Every operator carries an **incremental-evaluation note** classifying its cost under a streaming workload — whether the operator can be maintained in `O(1)` or `O(log n)` per write (*streamable*) or requires re-evaluation (*non-streamable*). The subscription model (§8) consumes this classification directly.
 
@@ -565,7 +565,7 @@ When no schema is declared for the key, value predicates are *dynamically typed*
 
 - Commutativity: `σ_{p₁}(σ_{p₂}(C)) = σ_{p₂}(σ_{p₁}(C))`.
 - Conjunction split: `σ_{p₁ ∧ p₂}(C) = σ_{p₁}(σ_{p₂}(C))`.
-- Value predicates compose with the rest of the predicate language and respect these laws: commutativity with other selections holds when the addressed paths are unambiguous, and push-down through joins, temporal slicing, and decay holds for value predicates that do not reference those operators' fields (see §4.13).
+- Value predicates compose with the rest of the predicate language and respect these laws: commutativity with other selections holds when the addressed paths are unambiguous, and push-down through joins, temporal slicing, and decay holds for value predicates that do not reference those operators' fields (see §4.14).
 
 **Incremental evaluation.** Streamable. For a new write, check whether the new claim matches `p`; if so, add it to the result. On a deletion (deprecation), remove the claim if it had previously matched. Value-predicate matching is per-claim and so does not change this classification; only its *cost* per write varies by adapter capability (§10).
 
@@ -580,7 +580,7 @@ Restrict each claim to the subset of fields specified by `f`. The result is stil
 **Equational laws.**
 
 - Idempotence: `π_f(π_f(C)) = π_f(C)`.
-- Composition: `π_f(π_g(C)) = π_{f ∩ g}(C)` when `f ⊆ g`. Adjacent projections combine into a single projection over the intersection of their field sets (see §4.13).
+- Composition: `π_f(π_g(C)) = π_{f ∩ g}(C)` when `f ⊆ g`. Adjacent projections combine into a single projection over the intersection of their field sets (see §4.14).
 
 **Incremental evaluation.** Streamable. Each new write is projected independently.
 
@@ -665,7 +665,7 @@ Because `ρ_cosine` (and any embedding-based function) depends on the embedding 
 
 **Equational laws.**
 
-- Monotonicity under selection: `ρ_{sim,q}(σ_p(C))` produces a subset of the rankings of `ρ_{sim,q}(C)` — filtering before ranking yields a subset of the ranking obtained after filtering. (This is the basis for hoisting similarity to after selection in §4.13.)
+- Monotonicity under selection: `ρ_{sim,q}(σ_p(C))` produces a subset of the rankings of `ρ_{sim,q}(C)` — filtering before ranking yields a subset of the ranking obtained after filtering. (This is the basis for hoisting similarity to after selection in §4.14.)
 - Idempotence: `ρ_{sim,q}(ρ_{sim,q}(C))` is well-defined but typically redundant; the second application is a no-op when scores are stored.
 
 **Incremental evaluation.** **Not streamable** in the general case: a new claim may score higher than the current top-K and shift the ranking. For small `K` the library can maintain a sorted structure efficiently; for large `K`, full re-ranking is expensive. Subscriptions over ρ should be used with caution (see §8).
@@ -1188,13 +1188,13 @@ where:
 
 The variance formula is the law of total variance: weighted within-component variance plus between-component variance. The cross-term `w₁w₂(μ₁−μ₂)²` captures the uncertainty about which source is correct, which is exactly what opinion-averaging is supposed to represent. The variance never shrinks below the smaller input; it can be larger than both when the means disagree, which is the right behavior.
 
-**Idempotence verification.** With `G₁ = G₂ = G(μ, σ²)` and any weights `w₁ + w₂ = 1`: `μ_avg = w₁μ + w₂μ = μ`; `σ²_avg = (w₁+w₂)σ² + w₁w₂·0² = σ²`. So `combine_weighted_avg` returns `G(μ, σ²)` exactly. ✓ Idempotent, consistent with the errata §6.2 idempotence table. (`rule_kalman` makes no such guarantee: with `G₁ = G₂ = G(μ, σ²)` it returns `G(μ, σ²/2)` — the variance halves, which is the non-idempotence flagged above.)
+**Idempotence verification.** With `G₁ = G₂ = G(μ, σ²)` and any weights `w₁ + w₂ = 1`: `μ_avg = w₁μ + w₂μ = μ`; `σ²_avg = (w₁+w₂)σ² + w₁w₂·0² = σ²`. So `combine_weighted_avg` returns `G(μ, σ²)` exactly. ✓ Idempotent, consistent with the §5.6 idempotence table. (`rule_kalman` makes no such guarantee: with `G₁ = G₂ = G(μ, σ²)` it returns `G(μ, σ²/2)` — the variance halves, which is the non-idempotence flagged above.)
 
 **Caveat: moment-matched approximation can misrepresent bimodal shape.** The moment-matched Gaussian is a *unimodal approximation* of what is potentially a bimodal mixture. When two trusted sources strongly disagree (`(μ₁−μ₂)² > σ₁² + σ₂²`, a rough threshold for visible bimodality), `rule_weighted_avg` returns a single Gaussian centered in the empty space between the modes with inflated variance — "probably around the midpoint, uncertain" when the truth is "A or B, not between." This is at odds with §1's rationale for preserving disagreement structure via clusters.
 
 When the between-means term `w₁w₂(μ₁−μ₂)²` dominates the within-variance terms `w₁σ₁² + w₂σ₂²`, the moment-matched Gaussian misrepresents the shape of the underlying mixture. Consumers should consider cluster-style representation (per §1, §4.8) instead of averaging, or fuse via `rule_kalman` if the sources are genuinely independent measurements of the same quantity. The library can detect this condition at runtime and warn: the v0.2 reference implementation emits a `bimodal_approximation_warning` when the between-means term exceeds the within-variance terms by 2× or more — i.e. when `w₁w₂(μ₁−μ₂)² ≥ 2·(w₁σ₁² + w₂σ₂²)`.
 
-**Connection to errata §6.2.** The de-aliasing keeps the rule-level idempotence claims valid across all distribution types. `rule_weighted_avg` is idempotent for Beta, Dirichlet, scalar, AND Gaussian inputs. The earlier "Gaussian weighted_avg is non-idempotent because it is a kalman alias" claim was a regression that contradicted the errata table; this de-aliasing removes the contradiction. The reference implementation flags the non-idempotence of `rule_kalman` loudly: **consumers using `rule_kalman` MUST implement observation-level deduplication** — re-ingesting the same measurement with the same `observation_id` must be filtered before fusion (§5.1). The protocol's `is_idempotent(rule_id)` returns false for `rule_kalman` so callers know to deduplicate.
+**Connection to the §5.6 idempotence table.** The de-aliasing keeps the rule-level idempotence claims valid across all distribution types. `rule_weighted_avg` is idempotent for Beta, Dirichlet, scalar, AND Gaussian inputs. The earlier "Gaussian weighted_avg is non-idempotent because it is a kalman alias" claim was a regression that contradicted the errata table; this de-aliasing removes the contradiction. The reference implementation flags the non-idempotence of `rule_kalman` loudly: **consumers using `rule_kalman` MUST implement observation-level deduplication** — re-ingesting the same measurement with the same `observation_id` must be filtered before fusion (§5.1). The protocol's `is_idempotent(rule_id)` returns false for `rule_kalman` so callers know to deduplicate.
 
 References: Welch & Bishop, "An Introduction to the Kalman Filter" (UNC, 1995, periodically updated). For the moment-matching of mixtures, any standard text on mixture distributions or Bayesian model averaging.
 
