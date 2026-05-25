@@ -2262,3 +2262,170 @@ Future revisions that pin or correct a foundational convention MUST include a §
 **Additionally, each entry in the propagation table MUST show its derivation — not a hand-waved assertion.** A prior review caught a false justification ("prior cancels in the ratio") sitting in the very table built to enforce rigor; the prior does not cancel, because it is additive, not multiplicative (see the mean row in §D.2). The lesson: the table's own entries are themselves claims that need verification. A justification that asserts neutrality MUST show *why* the operation is neutral, not merely declare it — and an operation whose value is convention-dependent (the mean, `rule_max_mean`) MUST say so rather than borrow the neutrality of operations that genuinely are convention-invariant (`rule_max_concentration`, the Gaussian rules).
 
 This discipline is heavier than reconciling individual review findings, but it catches the class of error that audit-by-name misses. A convention-pinning that had run this check at the time would have caught, proactively, both the carried-prior inconsistency in `extend_to_frame` and the false "prior cancels" justification — each surfaced later as a separate finding precisely because the table entry recorded a conclusion without its derivation.
+
+---
+
+## Appendix E — Design decisions and rationale
+
+This appendix records the reasoning behind the major design decisions in this specification. It exists so that future revisions understand *why* a choice was made, not merely *what* the choice was. Each decision below was reached deliberately; the rationale is recorded to prevent a future revision from re-litigating a settled question without the context that settled it.
+
+### E.1 Tiering: capabilities at appropriate commitment levels
+
+Capabilities are tagged by commitment tier — `[C]` core, `[P]` protocol implementation, `[Prof]` customer-gated profile — rather than presented as a flat feature list. The motivation is to keep the riskiest math out of the correctness surface of every implementation that does not need it.
+
+The Beta + scalar machinery is pinned correctly in core. Dirichlet generalizes the Beta math cleanly via the same subjective-logic bridge, so it is a natural protocol extension. Gaussian + Kalman is *categorically different* math — measurement-uncertainty fusion, not subjective-logic belief combination — serving a specific vertical (sensor / measurement domains). Putting all of this in core would force every implementation to carry the correctness burden of math it never invokes. Moving Dirichlet / Gaussian / Kalman to protocol implementations narrows core, lets vertical-specific implementations come from consumers or community, and preserves correctness boundaries.
+
+The tiering also answers the "strategic scope creep" concern raised in early review: the spec does not claim to be a universal AI memory library. It is the typed algebra for enterprise AI orchestration memory with audit-grade provenance. Vertical-specific needs (consumer-scale, regulatory erasure, sensor measurement) are served by appropriate adapter choices, protocol extensions, and customer-gated profiles — each at its appropriate commitment level — rather than by widening core.
+
+A secondary benefit: provenance fields that are dead weight outside orchestration become opt-out rather than mandatory. The tiering structure lets consumers ignore fields they do not use without the spec pretending those fields do not exist.
+
+### E.2 The `rule_max` split: why split rather than pin
+
+The ambiguous `rule_max_confidence` is deprecated and split into two explicitly-named rules — `rule_max_mean` (argmax over the distribution mean) and `rule_max_concentration` (argmax over total concentration). The natural question is: why not just pin `rule_max_confidence` to one semantic and rename later?
+
+Because either pinning silently surprises the consumers who relied on the other interpretation. There is no consumer-friendly default — the two semantics are genuinely different. "Select the highest-position opinion" and "select the most-precise opinion" answer different questions, and neither is the obvious meaning of "max confidence." Splitting now and forcing an explicit choice is the principled fix; the breaking change is the cost of restoring the protocol contract.
+
+This is the same logic that drives the Gaussian de-aliasing in §5.4 (see E.3): when two operations have different semantics, they need different names. Aliasing or silent defaulting collapses real semantic distinctions and creates the conditions for future audit findings. Ambiguous names invite the same audit finding in every future review, so the contract is best served by unambiguous naming both *across* distribution types and *within* a single type.
+
+### E.3 Trust versus precision: why `rule_kalman` ≠ `rule_weighted_avg`
+
+For Gaussian inputs there are two non-trivial combination rules, and the load-bearing design decision is that they are **not** aliases. They answer different questions:
+
+- `rule_kalman` answers: "given two independent measurements of the same fixed quantity, what is the Bayesian posterior?" It weights by precision (1/σ²), reduces variance, and is **non-idempotent** — fusing a measurement with itself fabricates independence that does not exist and halves the variance.
+- `rule_weighted_avg` answers: "given two opinions about the same proposition with different source-trust levels, what is the trust-weighted average opinion?" It weights by source trust (the §4.9 source-trust table, not precision), preserves or increases variance, and is **idempotent** — averaging an opinion with itself preserves the opinion.
+
+Combining a high-trust imprecise sensor with a low-trust precise one illustrates the difference: `rule_kalman` weights by precision (the low-trust precise source wins), `rule_weighted_avg` weights by trust (the high-trust imprecise source wins). These produce different means. The choice between them is a domain-modeling decision, not a math choice.
+
+The de-aliasing matters for the protocol contract. The DistributionProtocol exists to provide a uniform rule-name interface across distribution types. If `rule_weighted_avg` collapsed into `rule_kalman` for Gaussians only, a consumer registering a custom distribution type would not know which semantic to implement — trust-weighted averaging (the Beta/Dirichlet contract) or precision-weighted fusion (the Gaussian-aliased version). Keeping them distinct keeps the contract uniform: `rule_weighted_avg` is always trust-weighted opinion averaging; `rule_kalman` is always precision-weighted Bayesian fusion. Each distribution type implements the semantics correctly for its own math, never by aliasing. An earlier draft that aliased the two for Gaussians was a regression — it broke the trust-vs-precision contract *and* contradicted the rule-idempotence table — and the de-aliasing removes that contradiction.
+
+### E.4 The bimodal moment-match caveat
+
+`rule_weighted_avg` for Gaussians returns the moment-matched Gaussian of the trust-weighted mixture: a *unimodal* approximation of what is potentially a *bimodal* mixture. When two trusted sources strongly disagree — roughly when `(μ₁−μ₂)² > σ₁² + σ₂²` — the moment-matched result is a single Gaussian centered in the empty space between the modes with inflated variance. It says "probably around the midpoint, uncertain" when the truth is "A or B, not between."
+
+This is a deliberately documented limitation rather than a hidden one, because it is at odds with the §1 rationale for preserving disagreement structure via contradiction clusters. When the between-means term `w₁w₂(μ₁−μ₂)²` dominates the within-variance terms `w₁σ₁² + w₂σ₂²`, the moment-matched Gaussian misrepresents the shape of the underlying mixture. The decision is to (a) keep the moment-matched rule, because a single summary distribution is what most consumers want, but (b) detect the failure condition at runtime — the reference implementation emits a `bimodal_approximation_warning` when the between-means term exceeds the within-variance terms by 2× or more — and (c) direct consumers toward cluster-style representation (per §1), or toward `rule_kalman` when the sources are genuinely independent measurements of the same quantity.
+
+### E.5 Erasure deferral
+
+Physical erasure was the centerpiece of an earlier v0.2 draft, sequenced first as a regulatory unblocker. On reconsideration it is deferred to a customer-gated profile rather than shipped as a core addition. The review surfaced three serious issues:
+
+1. **Crypto error.** Per-corpus salt is insufficient for low-entropy content domains; HMAC with KMS-held secret keys is required. The earlier crypto-primitive cost estimate (~1 week) was off by 3–4×.
+2. **Legal hole.** Under GDPR, a hash of personal data may itself be personal data when re-identification is feasible. For the low-entropy data that typically triggers erasure requests, preserving content hashes may not satisfy Article 17 — the integrity-verifiable reproducibility tier may collapse to unverifiable for exactly the data that needs erasure. Legal counsel is required to determine the right policy per jurisdiction.
+3. **Cost underestimate.** Authenticated data structures (Merkle accumulators over a bitemporal multi-backend corpus) are weeks of work, not "1 week of crypto primitives." Realistic total erasure cost is 22–25 person-weeks, not 13.
+
+Combined with the absence of a signed regulated customer in the immediate pipeline, the appropriate response is to defer the implementation while preserving the architectural sketch. This is not capability rejection; it is appropriate sequencing. Building a 22-week regulatory feature carrying significant crypto and legal risk for hypothetical customers is the wrong investment. When a real regulated customer is in the pipeline, erasure should be designed *with their specific regulatory context and legal counsel*, with the proper cost accepted, and shipped then.
+
+The prerequisites that cannot be added retroactively are banked now regardless: mandatory input hashing in derivation provenance, embedding-model and similarity-function version pinning, and evaluation-clock pinning. These let a future erasure feature preserve audit chains and replay determinism for claims committed today, even though current consumers do not need the broader machinery.
+
+### E.6 The α, β migration shift and its three options
+
+The corrected subjective-logic bridge requires the convention that α and β *include* the prior (`α = r + a·W`, `β = s + (1−a)·W`). Implementations of v0.1 that interpreted α, β as raw evidence counts (without prior) are incompatible with the corrected bridge and must migrate: add prior weights to stored α, β values, and update the schema-version tag on affected claims. Implementations that already included the prior are correct and need no claim-data migration.
+
+**Migration is not semantically neutral, and this must be flagged to downstream consumers.** Adding prior weights is a one-time Bayesian shrinkage: every migrated claim's effective confidence shifts toward the base rate, with the magnitude inversely proportional to evidence weight.
+
+Worked example: a claim stored as raw `(8.2, 1.4)` had mean `8.2/9.6 = 0.854`. After adding the symmetric prior (`W=2`, `a=0.5`), it becomes `(9.2, 2.4)` with mean `9.2/11.6 = 0.793`. The shift is about 6 percentage points. A claim with only a few observations shifts much more — raw `(2, 1)` had mean `0.667`; post-migration `(3, 2)` has mean `0.600`.
+
+The consequences propagate: threshold queries (e.g. `σ_{confidence > 0.7}`) reclassify claims, so some that passed pre-migration now fail; confidence-ordering between claims can change, because low-evidence claims shift more than high-evidence ones, so relative ranking is not preserved; and any downstream system that cached or branched on point-estimate confidence values is affected.
+
+Three migration options are available:
+
+1. **Accept the shift** (recommended). The corrected math is more correct; recalibrate downstream thresholds if needed. Implementations choosing this option should communicate the threshold shift to consumers before the migration runs.
+2. **Preserve effective confidence at migration.** Choose post-migration (α, β) to preserve each claim's pre-migration mean. This drops uniform prior weight but preserves threshold semantics. Implementations choosing this option should document the per-claim effective `W` explicitly.
+3. **Tag and defer.** Mark v0.1 claims with `schema_version=v0.1` and apply the corrected math only to v0.1.1+ claims. This is hard to maintain long-term — the wrong-math interpretation persists — and is discouraged.
+
+---
+
+## Appendix F — Audit reconciliation history
+
+This appendix records the reconciliation of findings from prior specification reviews — the v0.1 pressure-test audit and the six v0.2 audit rounds — together with the process notes accumulated across those rounds. Every material finding is either fixed, addressed, or explicitly deferred with rationale; no finding has been carried forward without reconciliation. The history is preserved because the *pattern* of how findings were resolved (and, in two cases, mis-resolved before being corrected) is itself a source of process discipline.
+
+### F.1 From the v0.1 audit (six pressure-test scenarios)
+
+| Finding | Status |
+|---|---|
+| Aggregation missing entirely | Addressed — aggregation operators added |
+| Value predicates missing | Addressed — value-predicate support added |
+| Distribution model rigidity | Addressed — via the DistributionProtocol extension mechanism |
+| Physical erasure unsupported | Deferred to a customer-gated profile, with explicit rationale (see Appendix E.5) |
+| Pair-only contradictions | Addressed — n-way contradiction clusters added |
+| Provenance fields dead weight outside orchestration | Acknowledged; not made worse; addressed via the tiering structure that lets consumers ignore unused fields |
+
+### F.2 From the v0.2 first audit
+
+| Finding | Status |
+|---|---|
+| A — SL bridge math wrong | Fixed — corrected bridge subtracts the prior |
+| B — Dempster associativity claim wrong | Fixed — claim corrected |
+| C — α_rate ignores sample size | Fixed — α_rate emits a Beta, not a raw ratio |
+| D — GroupBy associativity contradicts type signatures | Removed — claim deleted, not defended |
+| E — Kalman non-idempotence unflagged | Fixed — non-idempotence flagged |
+| F — scalar→Beta upcasting underspecified | Fixed — pseudocount construction specified |
+| G — Salt vs. HMAC error | Acknowledged; full crypto redesign deferred with erasure |
+| H — Legal hole on hash preservation | Acknowledged; legal review required before erasure ships |
+| I — Authenticated data structure under-costed | Acknowledged; cost re-estimated |
+| J — Decay drift contradicts determinism | Fixed — evaluation clock pinned |
+| K — Strategic scope creep | Addressed — tiering places capabilities at appropriate commitment levels |
+| L — Sequencing optimizes for hypothetical customer | Addressed — erasure deferral waits for a real customer |
+| M — Cost estimates omit expensive bits | Re-estimated with realistic numbers |
+| N — Value predicates degrade on critical backends | Acknowledged — per-(adapter, predicate-kind) capability matrix added |
+
+### F.3 From the v0.2 second audit
+
+| Finding | Status |
+|---|---|
+| 1 — `rule_weighted_avg` mismarked non-idempotent | Fixed — properties table corrected; idempotence restored to averaging and max-selection rules |
+| 2 — ReplayStatus enum drift | Fixed — `integrity_unknown` added as a distinct state; references made consistent |
+| 3 — α, β migration semantic shift unflagged | Fixed — behavioral consequences and three migration options documented (see Appendix E.6) |
+| 4 — Wilson lower bound arithmetic wrong (0.025 → 0.21) | Fixed — number corrected |
+| 5 — α_rate signature/usage mismatch | Fixed — `α_binary_rate` convenience form added; primary `α_rate` retains its explicit two-argument signature; worked example matches |
+| 6 — `native_indexed` overstates regex on Postgres | Fixed — per-(adapter, predicate-kind) capability matrix replaces the adapter-level summary |
+
+### F.4 From the v0.2 third audit
+
+| Finding | Status |
+|---|---|
+| W=2 default not addressed for large Dirichlet frames | Fixed — scaling note added for k > 2 |
+| α_rate Laplace smoothing vs. corpus-W convention conflict | Fixed — α_rate uses the corpus's pinned W and base rate, not Laplace |
+| Gaussian `rule_weighted_avg` vs. `rule_kalman` indistinguishable | Initially "fixed" by aliasing — but the aliasing was itself wrong (broke the trust-vs-precision contract and the idempotence table); properly fixed in the fourth audit (see below) |
+| Gaussian `rule_max_confidence` (the now-deprecated rule) mislabeled non-idempotent | Fixed — its successors are listed as idempotent; only evidence-combining rules are non-idempotent |
+| Beta→Dirichlet "trivial" claim glosses over frame extension | Fixed — same-frame conversion remains trivial; cross-frame requires the explicit `extend_to_frame` operator |
+| §6.1 parallelism estimate stale with erasure deferred | Fixed — re-estimated under the erasure-deferral assumption (further refined in the fourth audit) |
+| Acceptance criterion circular (v0.1.1 obligations in v0.2 criteria) | Fixed — v0.1.1 release gate separated from v0.2 acceptance |
+
+### F.5 From the v0.2 fourth audit
+
+| Finding | Status |
+|---|---|
+| Gaussian `rule_weighted_avg` ≡ `rule_kalman` aliasing breaks the idempotence table and the trust-vs-precision contract | Fixed — de-aliased. `rule_weighted_avg` is trust-weighted opinion averaging (idempotent, spread-preserving via the moment-matched mixture); `rule_kalman` is precision-weighted Bayesian fusion (non-idempotent, variance-reducing). The idempotence table is now uniformly true across all distribution types |
+| `extend_to_frame` mapping underspecified (composite-set mass not representable in plain Dirichlet) | Fixed — base-rate-split semantic defined explicitly with a worked formula; further refined in the fifth audit (see below) |
+| `agreementRatio` formula undefined | Fixed — defined as `largest_group_size / total_claims` |
+| §1↔§3 parallelism overstated (multinomial cluster resolution depends on the Dirichlet bridge) | Fixed — binary-core `resolve_synthesize_belief` split from the protocol-tier `resolve_synthesize_belief_multi` (k>2); parallelism estimate updated to reflect the soft edge |
+| `rule_max_confidence` semantic ambiguity for multi-category distributions (the rule later deprecated) | Initially "fixed" by quietly committing Dirichlet to concentration — but the fix was incomplete (Beta unpinned, name still misleading); properly fixed in the fifth audit by splitting the rule (see below) |
+
+### F.6 From the v0.2 fifth audit
+
+| Finding | Status |
+|---|---|
+| `rule_evidence_pooled` for Beta double-counts the prior under the pinned convention | Fixed — convention-propagation correction. Pooling now uses `α_pooled = α₁ + α₂ − a·W`, matching the Dirichlet implementation; N-input generalization documented |
+| `rule_max_confidence` ambiguity (mean vs. concentration) — the partial third-audit fix was incomplete | Fixed — split into `rule_max_mean` and `rule_max_concentration`; the ambiguous original name deprecated with a breaking-change migration |
+| Moment-matched Gaussian mismodels a bimodal posterior | Fixed — caveat added explaining when the approximation breaks down; library emits `bimodal_approximation_warning` when the between-means term dominates the within-variance terms (see Appendix E.4) |
+| `extend_to_frame` carries the Beta prior into the target frame without renormalization | Fixed — the operation now strips the Beta prior and redistributes raw evidence under the target frame's prior structure; raw-evidence-preserving and prior-consistent |
+| Convention propagation not systematic (audit-by-name missed `rule_evidence_pooled`) | Fixed — process discipline established: convention changes require an explicit re-derivation table for every dependent operation (see Appendix D) |
+
+### F.7 From the v0.2 sixth audit
+
+| Finding | Status |
+|---|---|
+| The convention-propagation table contained a false justification ("prior cancels in the ratio" for the mean row) | Fixed — the mean row now correctly states that `α/(α+β)` is convention-dependent in *value*, per the migration shift (Appendix E.6). Discovering the false justification motivated tightening every table entry to include an explicit derivation rather than a hand-waved assertion |
+| The `rule_max_mean` row over-claimed convention-neutrality (ordering can flip under different conventions) | Fixed — the row now shows the counter-example (`Beta(8,0)` vs `Beta(2,0)` tie under raw counts, first wins under the prior-inclusive convention) and clarifies that `rule_max_mean` is convention-fixed within an implementation but not cross-convention neutral |
+| "Mass-preserving: Σαᵢ = α+β" for `extend_to_frame` overclaimed (true only when W_target = W_binary) | Fixed — the properties bullet was rewritten: "raw-evidence preserving" (r+s invariant) is unconditional; total-concentration equality is conditional on W_target = W_binary. Worked-example annotation updated to flag this |
+| Process: table entries are themselves claims requiring verification, not assertion | Fixed — discipline extended so every entry in a propagation table MUST include its derivation, not just the conclusion; applied retroactively so all rows now show derivations |
+
+### F.8 Process notes accumulated across audit rounds
+
+*Third-audit Gaussian fix (initial round) — wrong-direction resolution.* The third audit flagged that `rule_weighted_avg` and `rule_kalman` looked indistinguishable for Gaussian inputs. The initial response aliased them, which collapsed the semantic distinction and contradicted the rule-idempotence table that had just been fixed. The fourth audit caught the regression, and the correction de-aliased the rules. *Lesson: not every "fix" is in the right direction. Re-derivation against the source math — not label-matching against audit-finding names — is what catches wrong-direction resolutions.*
+
+*Fifth-audit convention propagation.* The fifth audit found that `rule_evidence_pooled` for Beta double-counts the prior under the convention pinned earlier. This is the original convention bug surviving in an operator the audit had not named. *Lesson: convention changes are graph-level; audit findings are node-level. Reconciling audit findings by operator name catches the audited operator but not other operators that depend on the same convention yet were never individually flagged. The convention-propagation check (Appendix D) is the process discipline going forward — when a convention is pinned or corrected, every operation that touches the changed quantity must be re-derived, not just the operators the audit named.*
+
+*Fifth-audit `rule_max_confidence` resolution.* The fifth audit also surfaced that the third-audit "fix" for the now-deprecated `rule_max_confidence` had quietly committed Dirichlet to concentration semantics while leaving the rule name suggesting mean and the Beta criterion unpinned. The fifth-audit fix splits the rule, following the same logic that drove the fourth-audit Gaussian de-aliasing: when two operations have different semantics, give them different names. *Lesson: the protocol-uniform-rule-name contract is not only about cross-type uniformity — it is also about unambiguous naming within a single type. Ambiguous names invite the same audit finding in every future review.*
+
+*Sixth-audit table-entry-as-claim.* The sixth audit found that the convention-propagation table — the very artifact built to enforce rigor — contained a false justification and an over-claim. *Lesson: a table entry is itself a claim that requires verification, not a place to record a conclusion without its derivation. Every entry in a propagation table must show *why* an operation is correct under the convention, not merely assert that it is.*
