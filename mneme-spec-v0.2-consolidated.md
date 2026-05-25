@@ -382,3 +382,118 @@ EvidenceRef =
 
 Evidence forms a directed acyclic graph (DAG) over claims. Cycles are forbidden — a claim cannot transitively cite itself, and self-citation is therefore prohibited. The library MUST enforce acyclicity at write time. The provenance-traversal operator γ (§4) walks this DAG to a bounded depth; acyclicity guarantees that traversal terminates and that the transitive closure is finite.
 
+---
+
+## 3. Catalog model
+
+A **corpus** is a named, schema-bound, access-controlled collection of claims. The library manages a *catalog* of corpora, and queries reference corpora by name. Corpora are first-class: a deployment routinely hosts multiple corpora with different schemas, policies, and storage backends, and a single query MAY reference several of them at once. Treating "the corpus" as one global entity is incorrect.
+
+This section defines the four catalog types: the `Corpus` entity (§3.1), the `ClaimSchema` that types its claims (§3.2), the `CorpusDefaults` that queries inherit (§3.3), and the `AccessPolicy` that authorizes access (§3.4). Catalog *operations* — creating, updating, discovering, and querying across corpora — are specified in §6.
+
+### 3.1 Corpus
+
+A corpus is a named entity in the catalog. Queries reference it by `id`.
+
+```
+Corpus {
+  id            : CorpusId                          -- stable identifier (kebab-case)
+  displayName   : string                            -- human-readable
+  schema        : ClaimSchema                        -- type definition (see §3.2)
+  policy        : AccessPolicy                       -- read/write authorization (see §3.4)
+  defaults      : CorpusDefaults                     -- default behaviors (see §3.3)
+  storage       : StorageAdapterRef                  -- which adapter backs this corpus
+  requiredTiers : Set<TierRequirement>               -- capability tiers this corpus depends on (see §0.2)
+  metadata      : Record<string, any>                -- arbitrary tags
+  createdAt     : Instant
+  updatedAt     : Instant
+}
+```
+
+Standard corpus identifiers follow a `{kind}:{name}` convention:
+
+- `wiki:nestjs-general` — a wiki-style knowledge collection
+- `persona:backend` — a persona-scoped claim collection
+- `workspace:crewtracks-modules` — workspace-scoped claims
+- `audit:run-events` — an append-only event log
+
+The prefix is convention, not enforcement. The library treats corpus IDs as opaque strings; the `{kind}:` prefix is a documentation aid.
+
+**Tier requirements.** The `requiredTiers` field makes the tier model (§0.2) structurally enforced rather than merely documentary. Each corpus declares the capability tiers it depends on as a set of `TierRequirement` values, whose variants are defined in §0.2:
+
+- `core` — only core `[C]` operators are needed.
+- `protocol(name)` — a specific protocol extension `[P]` is needed (e.g. `"dirichlet"`, `"gaussian"`).
+- `profile(name)` — a customer-gated profile `[Prof]` is needed (e.g. `"erasure"`).
+
+A Mneme deployment validates at startup that every required tier for each of its hosted corpora is available in that deployment. A corpus whose `requiredTiers` name a protocol extension or profile the deployment does not provide MUST be rejected at startup with a clear error, rather than failing opaquely at query time. Queries that reference operators outside the deployment's available tier set fail at parse time (see §0.2).
+
+### 3.2 ClaimSchema
+
+A claim schema declares the types and constraints for claims in a corpus.
+
+```
+ClaimSchema {
+  version            : SchemaVersion                 -- e.g., "1.0.0"
+  subjects           : Set<Subject>                  -- allowed subjects in this corpus
+  keys               : Map<Subject, KeyPattern>      -- allowed keys per subject
+  scopeFields        : Map<string, FieldType>        -- declared scope fields and types
+  valueSchemas       : Map<Key, ValueSchema>         -- value type per key (optional)
+  required           : Set<FieldName>                -- which top-level fields are required
+  similarities       : Map<ValueTypeId, SimilarityFn>-- registered similarity functions
+  scalarPseudocount  : Map<Source, Number>           -- per-source pseudo-count for scalar→Beta coercion
+}
+```
+
+Schemas declare what *can* exist in the corpus. Writes that do not conform are rejected. Queries reference field names that MUST exist in the schema; a missing field is a query-time error, not a silent empty result. Where a key declares a `valueSchema`, value predicates against that key are type-checked at parse time against the declared structure (see §4).
+
+Schema versions are tracked per claim: the `Claim.schema` field records the version under which each claim was written. The catalog tracks active schema versions and migration paths.
+
+**Scalar-to-Beta pseudo-counts are required, with no silent default.** When a combination operation must coerce a scalar confidence into a Beta distribution, it needs a pseudo-count — the strength-of-evidence the scalar represents, expressed as an effective observation count. The same scalar mean maps to wildly different evidence weights depending on this choice: a scalar of `0.8` becomes `Beta(8, 2)` or `Beta(80, 20)` with the same mean but ten times the evidence weight, which silently determines how much a scalar-source claim dominates in subsequent pooling. The conversion (derived in Appendix D) is:
+
+```
+scalar_to_beta(scalar, pseudocount, base_rate):
+  α = scalar · pseudocount + base_rate · W
+  β = (1 − scalar) · pseudocount + (1 − base_rate) · W
+```
+
+The `pseudocount` parameter is **REQUIRED, not defaulted**. It is supplied in one of two ways:
+
+1. The corpus schema declares per-source pseudo-counts via `scalarPseudocount: Map<Source, Number>`; or
+2. The conversion operator takes `pseudocount` as an explicit argument.
+
+Implementations **MUST NOT** default the pseudo-count silently. A combination operation that requires scalar-to-Beta coercion without a declared or supplied pseudo-count **MUST fail at parse time**. (Guidance on choosing pseudo-counts by source trust is in Appendix A; the values themselves are corpus-calibrated, never assumed.)
+
+### 3.3 CorpusDefaults
+
+Per-corpus default behaviors that queries inherit unless they override them.
+
+```
+CorpusDefaults {
+  decayPolicy           : DecayPolicy               -- default decay rule
+  confidenceThreshold   : Number                    -- default confidence floor for queries
+  contradictionPolicy   : ContradictionPolicy       -- default write-time policy
+  retentionPolicy       : RetentionPolicy           -- when claims are physically removed
+  defaultSimilarityFn   : SimilarityFn              -- default for ρ when not specified
+  defaultStatus         : Set<Status>               -- default status filter for queries
+}
+```
+
+These are *defaults*. An individual query MAY override any of them. The purpose is to factor common settings out of query expressions: without defaults, every query would have to redeclare its decay policy, confidence threshold, and contradiction policy.
+
+### 3.4 AccessPolicy
+
+An access policy declares who may read, write, subscribe to, and administer a corpus.
+
+```
+AccessPolicy {
+  reads      : Set<PrincipalPattern>                -- who can read
+  writes     : Set<PrincipalPattern>                -- who can write
+  subscribes : Set<PrincipalPattern>                -- who can subscribe
+  admin      : Set<PrincipalPattern>                -- who can modify policy/schema
+  conditions : Set<ConditionalRule>                 -- conditional access (per claim, per scope)
+}
+```
+
+`PrincipalPattern`s are pluggable: they integrate with an authorization engine (Bedrock, or any other) through the authorization adapter protocol (see §9). The library does not implement RBAC internally; it delegates to the authorization adapter.
+
+The library **MUST** enforce the access policy at every read, write, and subscribe operation. Access denials are themselves auditable events and are written to a designated audit corpus.
+
