@@ -1135,7 +1135,7 @@ Each category's marginal is a Beta(`αᵢ`, `S − αᵢ`), so `mean`/`variance`
 - `rule_max_concentration` — argmax over total concentration `Σαᵢ` (= `S`): the most-informed opinion — the one with the most evidence backing — wins, tie-broken by claim ID. **Idempotent ✓.**
 - `rule_dempster` — combination via the SL bridge to multinomial mass functions (convert each input to a mass function per §2.5, apply Dempster's rule, convert back to Dirichlet parameters via the inverse bridge). **Non-idempotent ✗**: combining a mass function with itself increases certainty incorrectly when re-ingesting the same evidence; deduplication is required.
 
-So `is_idempotent` is true for `rule_weighted_avg`, `rule_max_mean`, `rule_max_concentration` and false for `rule_evidence_pooled` and `rule_dempster` — the same per-rule contract the §4.9 equational laws and the errata idempotence table depend on, identical in shape to the Beta binding of §5.2.
+So `is_idempotent` is true for `rule_weighted_avg`, `rule_max_mean`, `rule_max_concentration` and false for `rule_evidence_pooled` and `rule_dempster` — the same per-rule contract the §4.9 equational laws and the §5.6 idempotence table depend on, identical in shape to the Beta binding of §5.2.
 
 **Note on the max-selection split.** `rule_max_mean` and `rule_max_concentration` answer different questions and are not interchangeable for Dirichlet: max-mean selects the input whose top category has the highest point estimate (most confident-sounding), while max-concentration selects the input with the most evidence behind it (largest `S`). For example, an input with a sharp top-category mean but small `S` wins under max-mean and loses under max-concentration to a flatter but far-better-evidenced input. Consumers MUST choose explicitly; there is no consumer-friendly default.
 
@@ -1156,7 +1156,7 @@ Gaussian distributions model continuous measurements — sensor readings, scores
 - `rule_dempster` — **NotSupported.** Dempster's rule is defined on discrete frames, and a Gaussian over continuous values has no natural mass-function representation.
 - `rule_evidence_pooled` — **NotSupported.** Pooling assumes additive evidence counts (Beta/Dirichlet semantics), which has no direct Gaussian analog.
 
-So `is_idempotent` is true for `rule_weighted_avg`, `rule_max_concentration`, and `rule_max_mean`, and false for `rule_kalman` — the same per-rule contract the §4.9 equational laws and the errata idempotence table depend on. Only the evidence-combining rule (`rule_kalman`) is non-idempotent; the averaging and max-selection rules are idempotent, exactly as for Beta (§5.2) and Dirichlet (§5.3).
+So `is_idempotent` is true for `rule_weighted_avg`, `rule_max_concentration`, and `rule_max_mean`, and false for `rule_kalman` — the same per-rule contract the §4.9 equational laws and the §5.6 idempotence table depend on. Only the evidence-combining rule (`rule_kalman`) is non-idempotent; the averaging and max-selection rules are idempotent, exactly as for Beta (§5.2) and Dirichlet (§5.3).
 
 **The trust-vs-precision distinction is the load-bearing semantic difference between the two non-trivial rules for Gaussians.** They are NOT aliases. They answer different questions:
 
@@ -1194,7 +1194,7 @@ The variance formula is the law of total variance: weighted within-component var
 
 When the between-means term `w₁w₂(μ₁−μ₂)²` dominates the within-variance terms `w₁σ₁² + w₂σ₂²`, the moment-matched Gaussian misrepresents the shape of the underlying mixture. Consumers should consider cluster-style representation (per §1, §4.8) instead of averaging, or fuse via `rule_kalman` if the sources are genuinely independent measurements of the same quantity. The library can detect this condition at runtime and warn: the v0.2 reference implementation emits a `bimodal_approximation_warning` when the between-means term exceeds the within-variance terms by 2× or more — i.e. when `w₁w₂(μ₁−μ₂)² ≥ 2·(w₁σ₁² + w₂σ₂²)`.
 
-**Connection to the §5.6 idempotence table.** The de-aliasing keeps the rule-level idempotence claims valid across all distribution types. `rule_weighted_avg` is idempotent for Beta, Dirichlet, scalar, AND Gaussian inputs. The earlier "Gaussian weighted_avg is non-idempotent because it is a kalman alias" claim was a regression that contradicted the errata table; this de-aliasing removes the contradiction. The reference implementation flags the non-idempotence of `rule_kalman` loudly: **consumers using `rule_kalman` MUST implement observation-level deduplication** — re-ingesting the same measurement with the same `observation_id` must be filtered before fusion (§5.1). The protocol's `is_idempotent(rule_id)` returns false for `rule_kalman` so callers know to deduplicate.
+**Connection to the §5.6 idempotence table.** The de-aliasing keeps the rule-level idempotence claims valid across all distribution types. `rule_weighted_avg` is idempotent for Beta, Dirichlet, scalar, AND Gaussian inputs. The earlier "Gaussian weighted_avg is non-idempotent because it is a kalman alias" claim was a regression that contradicted the §5.6 idempotence table; this de-aliasing removes the contradiction. The reference implementation flags the non-idempotence of `rule_kalman` loudly: **consumers using `rule_kalman` MUST implement observation-level deduplication** — re-ingesting the same measurement with the same `observation_id` must be filtered before fusion (§5.1). The protocol's `is_idempotent(rule_id)` returns false for `rule_kalman` so callers know to deduplicate.
 
 References: Welch & Bishop, "An Introduction to the Kalman Filter" (UNC, 1995, periodically updated). For the moment-matching of mixtures, any standard text on mixture distributions or Bayesian model averaging.
 
@@ -1339,7 +1339,7 @@ Precision-weighted Bayesian fusion of independent measurements of a fixed quanti
 
 #### Idempotence summary
 
-The per-rule idempotence flags, consolidated across bindings (the contract the §4.9 equational laws and the errata idempotence table both depend on; matches the per-binding flags of §5.2–§5.4):
+The per-rule idempotence flags, consolidated across bindings (the contract the §4.9 equational laws and this idempotence table both depend on; matches the per-binding flags of §5.2–§5.4):
 
 | Rule | Idempotent |
 |---|---|
