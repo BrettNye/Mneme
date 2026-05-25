@@ -1717,3 +1717,41 @@ SubscriptionState {
 ```
 
 Subscription state is durable. After a library restart, subscriptions resume from their last known state without missing or duplicating notifications (modulo at-least-once semantics).
+
+---
+
+## 9. Access control integration
+
+The library does not implement authorization internally. It delegates every access decision to a pluggable authorization adapter. This keeps the core engine-agnostic: the access-policy fields of a corpus (§3.4) name `PrincipalPattern`s, but the library never interprets them directly — it passes the principal, the corpus, and the operand to the adapter and acts on the returned decision.
+
+### 9.1 Authorization adapter protocol
+
+The authorization adapter conforms to the following `[P]` protocol contract:
+
+```
+AuthorizationAdapter {
+  canRead(principal: Principal, corpus: CorpusId, claim?: Claim) → Decision
+  canWrite(principal: Principal, corpus: CorpusId, candidate: CandidateClaim) → Decision
+  canSubscribe(principal: Principal, corpus: CorpusId, query: AlgebraExpression) → Decision
+  canAdmin(principal: Principal, corpus: CorpusId) → Decision
+}
+
+Decision = allowed | denied(reason: string)
+```
+
+Each method returns a `Decision` that is either `allowed` or `denied(reason)`, where `reason` is a human-readable string explaining the denial. Bedrock is a reference implementation of this protocol. The library is engine-agnostic — any system implementing the protocol works.
+
+### 9.2 Enforcement points
+
+The library MUST call the authorization adapter at every:
+
+- **Read** (snapshot query) — `canRead` per corpus referenced.
+- **Write** — `canWrite` per claim being committed (see the write model, §7).
+- **Subscribe** — `canSubscribe` per corpus referenced (see the subscription model, §8).
+- **Catalog operation** — `canAdmin` for schema/policy modifications (see catalog operations, §6).
+
+Authorization decisions are themselves written to a designated audit corpus, providing a queryable record of access patterns. Because the audit record is an ordinary corpus, access patterns can be inspected with the standard query algebra (§4).
+
+### 9.3 Row-level access
+
+Per-claim authorization is supported via `canRead(principal, corpus, claim)`. When this returns `denied` for individual claims, those claims are filtered from query results — the query succeeds but returns the visible subset. This implements row-level access control without requiring queries to know about authorization.
