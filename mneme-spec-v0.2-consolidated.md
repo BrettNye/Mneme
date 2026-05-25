@@ -2149,3 +2149,61 @@ Demonstrates: Beta-typed rate aggregation via `α_groupBy` with `binary_rate` (�
 **Tier** — the three-level classification (§0.2) that every operator, type, and capability carries: **Core `[C]`** (MUST be supported by all implementations), **Protocol extension `[P]`** (exposed through a declared protocol with a reference implementation, opt-in), and **Customer-gated profile `[Prof]`** (specified architecturally but shipped only when a customer requirement justifies it).
 
 **Transaction** — an atomic batch of writes that become visible together or not at all.
+
+---
+
+## Appendix A — Source-weight and decay defaults
+
+The following corpus-level defaults pair each claim source with a source weight and a default decay half-life. Individual corpora MAY override these per their schema.
+
+| Source        | Weight | Half-life (decay default) | Notes                      |
+|---------------|--------|---------------------------|----------------------------|
+| manual        | 1.3    | 180 days                  | Explicit user input        |
+| verification  | 1.2    | 90 days                   | Verified from tests/build  |
+| workflow      | 1.0    | 60 days                   | Standard workflow output   |
+| heuristic     | 0.9    | 30 days                   | Deterministic extraction   |
+| llm           | 0.7    | 14 days                   | LLM inference              |
+| imported      | 0.6    | 60 days                   | External sources           |
+
+### A.1 Pseudocount guidance for scalar-to-Beta conversion
+
+When converting a scalar confidence to a Beta distribution (§5), the pseudocount controls how much evidence the scalar is treated as carrying. Consumers needing a starting point MAY use the following tiers, keyed to the source's trust level:
+
+- High-trust sources (manual, verification): pseudocount ≥ 10 — treat each scalar as having substantial evidence backing.
+- Medium-trust sources (workflow, heuristic): pseudocount ≈ 5.
+- Low-trust sources (llm, imported): pseudocount ≈ 2 — treat the scalar as weak evidence.
+
+These tiers are *guidance only*. Consumers should calibrate the pseudocount to their domain.
+
+---
+
+## Appendix B — Standard similarity functions
+
+These are the standard similarity functions referenced in §4.6. Each is registered per corpus in the schema's `similarities` map (§3.2); a corpus's `defaultSimilarityFn` (§3.3) selects the one used for ρ when none is named.
+
+| Function           | Input types     | Output range | Cost           | Notes                            |
+|--------------------|-----------------|--------------|----------------|----------------------------------|
+| `sim_cosine`       | Vector × Vector | [0, 1]       | O(d) per claim | Requires embedding adapter       |
+| `sim_jaccard`      | Set × Set       | [0, 1]       | O(n + m)       | Token sets                       |
+| `sim_bm25`         | Text × Text     | [0, ∞)       | O(n)           | Normalized to [0, 1] for ranking |
+| `sim_exact`        | Any × Any       | {0, 1}       | O(1)           | Binary match                     |
+| `sim_structural`   | Typed × Typed   | [0, 1]       | varies         | Domain-specific; user-defined    |
+
+---
+
+## Appendix C — Reserved scope fields
+
+The library reserves the following scope field names with defined semantics:
+
+- `workflowName` — name of the workflow that produced or consumed this claim
+- `runId` — specific run identifier
+- `nodeId` — specific node within a workflow run
+- `personaId` — persona associated with the claim
+- `teamId` — team associated with the claim
+- `entityType` — type of the primary entity this claim is about
+- `entityId` — identifier of the primary entity
+- `topic` — topical grouping
+- `modelId` — LLM model associated with the claim (for LLM-source claims)
+- `embeddingModelId` — embedding model associated with similarity-based provenance; makes embedding-model attribution queryable as a structured scope, in addition to its inclusion in derivation provenance
+
+Custom scope fields are permitted but MUST NOT shadow these reserved names.
