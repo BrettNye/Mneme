@@ -1045,3 +1045,65 @@ The algebra's equational laws enable a query optimizer. Key rewrite rules:
 **Dempster combinations are freely reorderable.** Dempster's rule of combination is unconditionally commutative AND associative: `m₁ ⊕ m₂ = m₂ ⊕ m₁` and `(m₁ ⊕ m₂) ⊕ m₃ = m₁ ⊕ (m₂ ⊕ m₃)` for all mass functions, with the vacuous mass function as identity. The optimizer may therefore group and reorder a chain of Dempster combinations in any order without changing semantics. High-conflict inputs (Zadeh's paradox) can produce counterintuitive results, but that is a property of the rule itself, not a breakdown of associativity, so it places no ordering constraint on the optimizer. Dempster's rule is, however, *not* idempotent (`m ⊕ m ≠ m`), so the optimizer must not introduce or drop duplicate combination inputs when reordering.
 
 The optimizer is a separate component from the algebra. The algebra defines what rewrites are *legal* — the equational laws above and in §4.2–§4.13; the optimizer chooses among legal evaluation orders on cost grounds. An optimizer is never required for correctness, and no rewrite it performs may change a query's result.
+
+## 5. Distribution protocol [P]
+
+Confidence (§2.4) is a distribution, not a point estimate. The query algebra of §4 is generic over the distribution type: operators that touch confidence — decay δ (§4.5), belief combination ⊕ (§4.9), contradiction resolution (§4.8), aggregation α (§4.13) — never branch on whether they hold a Beta, scalar, Dirichlet, Gaussian, or consumer-defined distribution. They call protocol operations, and the registered implementation supplies the type-specific math.
+
+This tiering is deliberate. The Beta and scalar bindings are core `[C]`: every Mneme implementation MUST provide them, because the core types and the worked examples of §2.4–§2.5 depend on them. The remaining bindings are protocol-tier `[P]`: Dirichlet (multi-category beliefs, §5.3), Gaussian (continuous measurements, §5.4), and Kalman fusion are *vertical-specific math*, supplied as reference implementations rather than core obligations. A consumer in a subjective-logic decision domain needs Dirichlet; a consumer in a sensor/measurement domain needs Gaussian and Kalman; a pure-orchestration consumer needs neither. Pushing them behind the protocol narrows core's correctness surface: an implementation that only supports `beta` and `scalar` is not obligated to get Dirichlet or Gaussian correctness right, and an implementation that needs them pulls in a reference binding or registers its own.
+
+The protocol is the single seam between the algebra and distribution-specific math. The per-rule combination semantics referenced throughout §4 (`rule_weighted_avg`, `rule_evidence_pooled`, `rule_max_mean`, `rule_max_concentration`, `rule_dempster`) are dispatched through this protocol and specified per distribution in §5.6.
+
+### 5.1 The protocol interface
+
+A distribution binding is a `DistributionProtocol<T>` over the implementation's parameter type `T` (for Beta, `T = {alpha, beta}`; for scalar, a point value; for Dirichlet, a parameter vector). The library registers one binding per `DistributionType` and dispatches uniformly.
+
+```
+DistributionProtocol<T> {
+  -- Serialization
+  serialize(d: T) → bytes
+  deserialize(b: bytes) → T
+  canonicalize(d: T) → bytes              -- stable byte form for hashing in derivation provenance (§2.7)
+
+  -- Statistics
+  mean(d: T) → Number
+  variance(d: T) → Number
+  pdf(d: T, x: any) → Number              -- optional; MAY throw NotImplemented
+
+  -- Conversion (for mixed-distribution combination)
+  to_subjective_logic_opinion(d: T) → SLOpinion?    -- optional; required for rule_dempster
+  from_subjective_logic_opinion(o: SLOpinion) → T?  -- optional
+
+  -- Combination
+  combine(rule_id: string, a: T, b: T, params: any) → T
+  supported_rules() → Set<string>          -- which rule_ids this binding implements
+  is_idempotent(rule_id: string) → Bool    -- per-rule idempotence flag
+}
+```
+
+**Serialization.** `serialize`/`deserialize` round-trip the parameters for storage. `canonicalize` produces a stable, order-independent byte form used when hashing a derived claim's inputs into its provenance (§2.7); two parameter values that are equal as distributions MUST canonicalize to identical bytes so that derivation hashes are reproducible.
+
+**Statistics.** `mean` is the distribution's point estimate — the value the δ operator (§4.5) and the `rule_max_mean` selection (§4.9) read. `variance` backs `rule_max_concentration` (lower variance = higher concentration = more evidence) and precision-weighted fusion. `pdf` is optional because not every binding has a closed-form density a consumer needs; a binding MAY throw `NotImplemented`.
+
+**Conversion hooks are optional.** `to_subjective_logic_opinion` / `from_subjective_logic_opinion` exist for mixed-distribution combination (§5.5) and for `rule_dempster`, which is defined on subjective-logic mass functions. A binding that does not support Dempster combination MAY omit them (return absent); the library MUST NOT assume their presence and MUST surface a clear error when a rule that needs a conversion is requested against a binding that lacks it.
+
+**Combination and capability declaration.** `combine(rule_id, a, b, params)` performs the type-specific combination for `rule_id`. `supported_rules()` declares which `rule_id`s the binding implements, so the library can reject an unsupported combination before attempting it rather than failing mid-evaluation. `is_idempotent(rule_id)` reports whether `combine(rule_id, x, x, params) = x`; callers consult it to decide whether deduplication is required before combining (a non-idempotent rule such as `rule_kalman` or `rule_evidence_pooled` demands observation-level dedupe; an idempotent rule such as `rule_weighted_avg` does not). `is_idempotent` MUST agree with the idempotence contract that the equational laws of §4.9 depend on, and is specified per rule in §5.6.
+
+### 5.2 Beta and scalar reference binding `[C]`
+
+The Beta and scalar bindings are core. They are the bindings the worked examples and the subjective-logic bridge of §2.4–§2.5 are written against, and every Mneme implementation MUST provide them.
+
+**Beta.** `T = {alpha, beta}` under the `α = r + a·W`, `β = s + (1−a)·W` convention pinned in §0.3.
+
+- `mean(d) = α/(α+β)` — the Beta effective mean. This is the projected probability of the corresponding subjective-logic opinion; the binding MUST NOT diverge from the effective-mean and bridge formulas given in §2.4–§2.5, which are the normative source for the Beta/SL math (not restated here).
+- `variance(d) = αβ / ((α+β)²·(α+β+1))` — backs `rule_max_concentration`, where total concentration `α+β` orders the inputs.
+- `to_subjective_logic_opinion` / `from_subjective_logic_opinion` implement the binomial bridge of §2.5 (`belief = (α−a·W)/(α+β)`, `uncertainty = W/(α+β)`, `base_rate = a`) and its inverse. These enable `rule_dempster` for Beta inputs.
+- `combine(rule_id, a, b, params)` dispatches to the per-rule Beta math specified in §5.6. `supported_rules()` returns all five core rules: `rule_weighted_avg`, `rule_evidence_pooled`, `rule_max_mean`, `rule_max_concentration`, `rule_dempster`.
+- `is_idempotent`: true for `rule_weighted_avg`, `rule_max_mean`, `rule_max_concentration`; false for `rule_evidence_pooled` and `rule_dempster`. This is the contract the §4.9 equational laws rely on; the per-rule derivations are in §5.6.
+
+**Scalar.** `T` is a bare point value `p ∈ [0,1]` — a confidence with `distribution = scalar` (§2.4), carrying no evidence weight.
+
+- `mean(d) = p`; `variance(d) = 0` (a point mass carries no spread); `pdf` throws `NotImplemented` (a point mass has no proper density).
+- `to_subjective_logic_opinion` is absent unless the consumer supplies an explicit pseudocount to lift the scalar into a Beta first (per §5.5); a bare scalar has no evidence total and therefore no well-defined opinion. The library MUST NOT silently fabricate a pseudocount.
+- `supported_rules()` returns the rules that are well-defined without evidence weights: `rule_weighted_avg` (weighted average of the point values, with weights from `params`), `rule_max_mean`, and `rule_max_concentration` (degenerate — all scalars share variance 0, so concentration ties break by claim ID, per §4.9). `rule_evidence_pooled` and `rule_dempster` are NOT supported: both require an evidence total a bare scalar lacks. The per-rule scalar math is in §5.6.
+- `is_idempotent`: true for every rule the scalar binding supports — `rule_weighted_avg`, `rule_max_mean`, `rule_max_concentration` are all idempotent on point values.
