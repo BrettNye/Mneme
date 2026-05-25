@@ -250,6 +250,79 @@ Scope equality is structural and canonical. Two scopes are equal iff they have t
 
 This has a direct consequence for write-time contradiction checking (§7): the *cheap* contradiction check on a `(profile, key, scopeHash)` match MUST additionally filter by status to find the currently-validated competing claim, not just any historical claim. Without the status filter, the cheap check would treat deprecated supersession history as live contradictions.
 
+### 2.4 Confidence `[C]`
+
+Confidence is a distribution, not a point estimate, represented by a parameterized type. The default implementation uses a Beta(α, β) distribution over evidence weights; the algebra is generic over the distribution type via the distribution protocol (§5).
+
+```
+Confidence {
+  distribution : DistributionType                  -- distribution ∈ {beta, scalar, dirichlet, custom}
+  parameters   : DistributionParameters            -- e.g., {alpha: 8.2, beta: 1.4}
+  raw          : Number                            -- raw 0..1 from source (pre-weighting)
+  effective    : Number?                           -- cached point estimate (computed)
+}
+```
+
+`distribution ∈ {beta, scalar, dirichlet, custom}`. The `beta` and `scalar` distributions are core `[C]`; `dirichlet` and other multi-category or fused distributions are protocol extensions `[P]` (§5). A scalar confidence (point estimate only) is supported via `distribution = scalar`, which keeps Mneme compatible with simple confidence models while allowing richer distributions where needed.
+
+**Effective mean.** For a Beta(α, β) confidence the effective point estimate is the Beta mean:
+
+```
+effective mean = α/(α+β)
+```
+
+Under the α, β convention pinned in §0.3 (`α = r + a·W`, `β = s + (1−a)·W`), this is the projected probability of the corresponding subjective-logic opinion (§2.5). Effective confidence is computed at query time (via the δ operator), not at write time: stored confidence is *immutable history*, perceived confidence is *computed*.
+
+**Source weighting at promotion.** Raw source confidence is scaled by a per-source weight applied at promotion time (§6.2), before the Beta parameters are formed. The source-weight defaults (with decay half-lives) are tabulated in Appendix A; corpora MAY override them per their schema.
+
+### 2.5 Subjective-logic bridge `[C]`
+
+The bridge maps a Beta(α, β) confidence to a binomial subjective-logic opinion `(belief, disbelief, uncertainty, base_rate)`, under the convention pinned in §0.3 with non-informative prior weight `W` and base rate `a`. Because `α + β = r + s + W` by that convention, the denominator is the evidence total including prior, computed directly from `α + β`:
+
+```
+belief = (α−a·W)/(α+β) = r/(r+s+W)
+disbelief = (β−(1−a)·W)/(α+β) = s/(r+s+W)
+uncertainty = W/(α+β) = W/(r+s+W)
+base_rate = a
+projected = α/(α+β)
+```
+
+The projected probability `projected = α/(α+β)` equals the Beta effective mean of §2.4, so the opinion and the confidence point estimate agree by construction.
+
+**Worked example — vacuous opinion.** `Beta(1,1)` under `W=2, a=0.5`:
+
+- `r = α − a·W = 1 − 1 = 0`
+- `s = β − (1−a)·W = 1 − 1 = 0`
+- `belief = 0/2 = 0`
+- `disbelief = 0/2 = 0`
+- `uncertainty = 2/2 = 1`
+- `projected = 1/2 = 0.5`
+
+This is the correct vacuous opinion for a no-evidence claim: no belief either way, full uncertainty, base-rate-driven expected probability. (A bridge that yielded non-zero belief or `uncertainty < 1` for `Beta(1,1)` would be wrong; the prior must not be double-counted.)
+
+**Dirichlet generalization `[P]`.** For `Dirichlet(α₁, …, αₖ)` over frame `{x₁, …, xₖ}` with base rates `a₁, …, aₖ`, the bridge generalizes to a multinomial opinion:
+
+```
+belief(xᵢ) = (αᵢ−aᵢW)/Σαⱼ
+uncertainty = W/Σαⱼ
+base_rate(xᵢ) = aᵢ
+projected(xᵢ) = αᵢ/Σαⱼ
+```
+
+This has the same shape as the binary case. The vacuous-opinion property holds: `Dirichlet(W·a₁, …, W·aₖ)` yields zero belief on every singleton and full uncertainty.
+
+*W-scaling caveat for k > 2.* The `W=2` default is tuned for binary frames. For `k > 2` categories with symmetric base rate `aᵢ = 1/k`, each category receives prior weight `W/k`; with `W=2, k=5` that is only `0.4` per category — a very weak prior. Consumers using large frames should consider scaling `W` with frame size (Jøsang's literature uses both `W = 2` constant and `W = k` scaling depending on application). The corpus schema MAY override `W` per-key for keys with declared multi-category value schemas; when it does not, `W=2` applies regardless of frame size, with prior strength diminishing per category as the frame grows.
+
+**Dempster-Shafer mass functions.** A subjective-logic opinion converts to a Dempster-Shafer mass function on the frame:
+
+```
+mass({xᵢ}) = belief(xᵢ)            for each singleton i
+mass(frame) = uncertainty           on the universal set {x₁, …, xₖ}
+mass(∅) = 0                         by definition
+```
+
+Combination of two opinions via Dempster's rule operates on the mass functions, then converts back to an opinion (or directly to combined Beta/Dirichlet parameters using the inverse of the bridge above). See Jøsang, *Subjective Logic* (Springer, 2016), chapters 3 and 6, for the formal treatment of binomial and multinomial opinions and their bridge to Dempster-Shafer theory.
+
 ### 2.6 Time
 
 **Valid-time interval** is `[from, to)` where `from` and `to` are `Instant` values (ms since epoch). `to` MAY be `∞` for claims with no end time. Open intervals are used throughout: `[a, b)` includes `a` and excludes `b`.
