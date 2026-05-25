@@ -1755,3 +1755,115 @@ Authorization decisions are themselves written to a designated audit corpus, pro
 ### 9.3 Row-level access
 
 Per-claim authorization is supported via `canRead(principal, corpus, claim)`. When this returns `denied` for individual claims, those claims are filtered from query results — the query succeeds but returns the visible subset. This implements row-level access control without requiring queries to know about authorization.
+
+---
+
+## 10. Storage adapter protocol
+
+The library is implemented over pluggable storage adapters. Each adapter conforms to the following `[P]` protocol contract:
+
+```
+StorageAdapter {
+  -- Claim operations
+  insertClaim(claim: Claim) → Result
+  getClaim(id: ClaimId) → Claim?
+  deleteClaim(id: ClaimId) → Result                -- soft delete (deprecation)
+
+  -- Bulk operations
+  insertBatch(claims: List<Claim>) → BatchResult
+  query(plan: ExecutionPlan) → ClaimIterator
+
+  -- Indexes
+  ensureIndex(spec: IndexSpec) → Result
+  dropIndex(id: IndexId) → Result
+
+  -- Transactions
+  beginTransaction() → TransactionHandle
+  commit(tx: TransactionHandle) → Result
+  rollback(tx: TransactionHandle) → Result
+
+  -- Subscriptions (optional; adapter may not support push)
+  subscribeChanges(filter: ChangeFilter, callback: ChangeCallback) → SubscriptionHandle?
+
+  -- Metadata
+  capabilities() → AdapterCapabilities
+}
+```
+
+`subscribeChanges` is optional: an adapter that cannot push change notifications returns no handle, and the library supplies the durable, at-least-once subscription semantics of §8 over that adapter's polling interface.
+
+### 10.1 Standard adapters
+
+- **SQLite** — embedded; single-writer; cheap for solo deployments.
+- **Postgres** — networked; multi-writer; production-grade.
+- **DuckDB** — analytical; column-oriented; good for time-series and aggregations.
+- **Vector indices** (Chroma, Qdrant, etc.) — for similarity-heavy access patterns.
+- **Hybrid** — composes multiple adapters with the library routing query parts to the appropriate stores.
+
+Adapters declare their capabilities (`AdapterCapabilities`) so the query optimizer can choose execution plans accordingly. An adapter that supports semantic search natively (Chroma) will be routed similarity queries; an adapter that doesn't (SQLite) will fall back to in-memory similarity over filtered candidates.
+
+### 10.2 Value-predicate support
+
+Value-predicate support is a per-(adapter, predicate-kind) capability, not a single per-adapter flag. Different predicate kinds have different indexing characteristics even within the same adapter — Postgres indexes equality and containment via GIN but falls back to scans for regex. The adapter capability surface therefore carries a per-kind map:
+
+```
+AdapterCapabilities {
+  ...
+  valuePredicateSupport: Map<PredicateKind, ValuePredicateLevel>
+}
+
+PredicateKind =
+  | equality                 -- value.path = X
+  | range                    -- value.path > X, value.path < X, comparison operators
+  | set_membership           -- value.path ∈ S
+  | regex                    -- value.path matches regex
+  | structural_pattern       -- whole-value pattern matching
+  | null_check               -- value.path is null / exists
+
+ValuePredicateLevel =
+  | native_indexed           -- adapter has indexes that accelerate this predicate kind
+  | native_unindexed         -- adapter evaluates this predicate kind via scan
+  | fallback_in_memory       -- library retrieves candidates and filters after retrieval
+  | unsupported              -- adapter rejects queries with this predicate kind
+```
+
+The six `PredicateKind`s correspond directly to the value-predicate forms of the selection operator σ (§4.2): the path/whole-value equality, comparison, set-membership, regex, structural-pattern, and null/existence predicates declared there.
+
+Reference adapter capability matrix:
+
+| Adapter | equality | range | set_membership | regex | structural | null_check |
+|---|---|---|---|---|---|---|
+| Postgres (JSONB+GIN) | native_indexed | native_unindexed* | native_unindexed | native_unindexed | native_unindexed | native_indexed |
+| DuckDB | native_indexed | native_indexed | native_indexed | native_unindexed | native_unindexed | native_indexed |
+| SQLite (JSON1) | native_unindexed | native_unindexed | native_unindexed | native_unindexed | native_unindexed | native_unindexed |
+| ChromaDB | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory |
+| Markdown vault | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory |
+
+*Postgres range queries on JSONB paths can be indexed via expression indexes (`CREATE INDEX ... ON corpus ((value->>'amount')::numeric)`) but require explicit setup per path.
+
+The query optimizer chooses an evaluation strategy per predicate kind and per adapter:
+
+- `native_indexed`: push the predicate to the adapter, accept index cost.
+- `native_unindexed`: push the predicate to the adapter, accept full-scan cost.
+- `fallback_in_memory`: retrieve candidates via indexed predicates first, filter the unindexed value predicates in memory; emit a warning if the working set is large.
+- `unsupported`: reject the query at parse time.
+
+**Important consumer-facing implication:** reading "Postgres supports `native_indexed` value predicates" as "all value predicates are cheap on Postgres" is wrong. Postgres equality on JSONB paths is fast; regex on the same paths is a full scan. Production query planning MUST consult the per-kind matrix, not just the adapter summary.
+
+Consumers should structure queries to use indexed predicate kinds where possible. A logical filter that can be expressed as either equality or regex should use equality. A logical filter that requires regex should expect scan performance regardless of adapter.
+
+Consumers MUST be informed of fallback-mode costs. Production queries against `fallback_in_memory` adapters that retrieve large working sets are operational hazards and should be visible in query plan output.
+
+### 10.3 Backend choice guidance
+
+The fallback-mode classification means backend choice matters. Guidance for consumers:
+
+| Workload pattern | Recommended adapter |
+|---|---|
+| Value-predicate-heavy (structured data filtering) | Postgres or DuckDB |
+| Similarity-heavy (semantic retrieval) | Vector DB |
+| Mixed structured + similarity | Hybrid adapter with routing |
+| Low-volume, human-edited artifacts | Markdown vault (Stoa-style) |
+| Embedded, single-process | SQLite |
+
+Choosing a similarity-optimized adapter for a structured-query workload, or vice versa, produces queries that work correctly but perform pathologically. The optimizer cannot fix a backend-choice mismatch.
