@@ -1394,3 +1394,185 @@ let layered = project ⊳ general
 The library MUST enforce access policy on each corpus reference **individually** — the caller must have read access to *every* corpus referenced in a query. Access is checked per reference, not once for the query as a whole: a query that names one readable and one unreadable corpus is denied, never silently narrowed to the readable subset.
 
 Multi-corpus queries that combine corpora via ⊳, ⋈, or set operations produce a result corpus whose schema is the **union** of the input schemas — or the **intersection**, for restrictive operations that can only emit fields common to all inputs. The library validates that combining operations are schema-compatible before evaluation; incompatible combinations fail at parse time rather than producing claims that violate the result schema.
+
+---
+
+## 7. Write model
+
+The write model defines how claims enter the corpus. It specifies the pipeline a write traverses, the visibility guarantees a successful commit provides, the contradiction policies enforced at write time, the transaction and batch primitives, the derived-write provenance discipline, and idempotency.
+
+### 7.1 Write pipeline
+
+Every write passes through a two-phase pipeline:
+
+```
+candidate emission → promotion → commit
+```
+
+**Candidate emission** — a writer submits a `CandidateClaim` to the library. The candidate is not yet visible to readers. It exists in a staging area.
+
+**Promotion** — the library processes the candidate:
+1. Compute deterministic hashes (`scopeHash`, `valueHash`)
+2. Apply source weighting to raw confidence
+3. Resolve scope fields against the corpus schema
+4. Validate against schema (required fields, value types, key patterns)
+5. Apply cheap contradiction checks (exact key+scope match; see §7.3)
+6. Assign `id`, `recorded`, `status`
+
+**Commit** — the promoted claim is written to storage. The corpus's logical timestamp advances. Subscribers are notified asynchronously.
+
+Two modes are supported:
+- **Immediate-promote** — emission, promotion, and commit happen in one call. The writer takes responsibility for full claim shape; the library does minimal processing.
+- **Staged-promote** — candidates are explicitly emitted; promotion can be batched, deferred, or pipelined.
+
+Most writers use immediate-promote. Staged-promote is for high-throughput ingestion (telemetry, observability) where batching saves cost.
+
+**Correctness vs. performance.** The pipeline described above is a *correctness* model, not a prescription of physical execution. Implementations MAY batch, parallelize, or pipeline the stages provided that the observable behavior — atomic visibility, durability, and contradiction-checking semantics — is preserved. High-throughput consumer workloads (>1000 writes/sec) typically require batched promotion with parallel commit threads. The reference SQLite adapter is single-writer and is not appropriate for such workloads; the reference Postgres adapter supports parallel writers via MVCC.
+
+### 7.2 Visibility guarantees
+
+When a commit call returns successfully, the library guarantees:
+
+- **Durability** — the claim is persisted to storage (fsync or equivalent). Survives library restart.
+- **Read-your-writes within session** — the next snapshot query from the same session will see the new claim.
+- **Recorded-time advance** — the corpus's logical timestamp has advanced past the new claim's `recorded` instant.
+
+The library does NOT guarantee:
+
+- **Synchronous subscription delivery** — subscribers are notified asynchronously, with at-least-once delivery semantics (see §8).
+- **Cross-session immediate visibility** — concurrent readers from other sessions may briefly see the pre-write state (eventual consistency on the order of milliseconds).
+
+A stronger guarantee — synchronous subscriber acknowledgment before commit returns — is available via opt-in flag (`commit(claim, wait_for_subscribers = true)`) but should be used sparingly because it ties writer latency to subscriber speed.
+
+### 7.3 Contradiction policies
+
+Each write specifies a contradiction policy. The library enforces the policy at promotion time.
+
+```
+ContradictionPolicy =
+  | always_accept                                  -- commit regardless of conflicts
+  | reject_on_contradiction                        -- error if higher-confidence claim conflicts
+  | accept_but_mark                                -- commit and write a contradiction artifact
+  | accept_and_resolve(rule: ResolutionRule)       -- apply resolution policy automatically
+```
+
+- **`always_accept`** — for telemetry, observations, audit events. No conflict checking.
+- **`reject_on_contradiction`** — for authoritative records, formal specifications. Promotion fails if a higher-confidence claim with the same `(subject, key, scope)` exists.
+- **`accept_but_mark`** — for operational knowledge, design rationale. Both claims live; a separate `contradiction` claim records the conflict for later review.
+- **`accept_and_resolve(rule)`** — for cases where automatic conflict resolution is desired. The library applies the rule (e.g., `deprecate_lower`, `keep_newer`) at commit time.
+
+Defaults are set per-corpus in `CorpusDefaults.contradictionPolicy` and can be overridden per write.
+
+**Cheap vs. expensive contradiction checking.** At write time, the library performs *cheap* contradiction checks — exact match on `(subject, key, scope)` with different values. Because `(profile, key, scopeHash)` is a *non-unique index* (the unique primary key on a claim is its `id`), multiple claims may share that triple — typically one currently-validated claim plus deprecated supersession history. The cheap contradiction check MUST therefore additionally filter by status to find the currently-validated competing claim, not merely any historical claim; the algebra's standard `σ_status=validated` expresses this filter. Expensive checks (semantic-similarity contradictions, multi-claim aggregate contradictions) are deferred to read-time via the ⊥ operator (§4.8).
+
+### 7.4 Transactions
+
+Atomic batch commits are supported via the transaction primitive:
+
+```
+transaction {
+  commit_candidate(claim_1)
+  commit_candidate(claim_2)
+  commit_derived(claim_3, query, corpusState)
+  ...
+} → TransactionResult
+```
+
+All writes in a transaction become visible atomically — either all succeed and the corpus advances once with all new claims, or the transaction rolls back and the corpus is unchanged.
+
+**Interaction with subscriptions**: subscribers see a transaction as a single corpus-state advance, not as N separate events. A subscription with `trigger: on_every_match` will fire once per matching claim within the transaction, but the underlying corpus state advances only once (see §8).
+
+**Interaction with contradiction policies**: within a transaction, contradictions are checked against the *post-transaction* state. Two writes within a transaction can contradict each other; resolution depends on the transaction's policy.
+
+**Interaction with derived writes**: derived claims can reference earlier writes within the same transaction. The derivation provenance records the pre-transaction corpus state (the state the query saw); the derived claim is committed as part of the same transaction.
+
+Transactions have bounded size. The library MAY reject transactions that exceed implementation-defined limits (e.g., 1000 writes per transaction). For larger batches, use the batch primitive (§7.5).
+
+### 7.5 Batch writes
+
+For non-atomic high-throughput writes:
+
+```
+commit_batch(claims: List<CandidateClaim>, policy: BatchPolicy) → BatchResult
+```
+
+Batch semantics:
+- Writes are committed efficiently (single fsync, batched indexes)
+- Claims may become visible incrementally as the batch processes
+- Failures of individual writes do NOT roll back successful writes in the same batch
+- Batch result includes per-write success/failure status
+
+Use cases: telemetry ingestion, observability event streams, bulk import.
+
+### 7.6 Derived writes
+
+A derived write is a claim produced by a query expression, with the derivation recorded as provenance.
+
+```
+derive_claim_from(
+  query           : AlgebraExpression,
+  target_subject  : Subject,
+  target_key      : Key,
+  scope           : Scope,
+  combination?    : CombinationRule
+) → CandidateClaim
+
+commit_derived(
+  candidate       : CandidateClaim,
+  provenance_query: SerializedAlgebraExpression,
+  corpus_state    : LogicalTimestamp,
+  policy?         : ContradictionPolicy
+) → CommitResult
+```
+
+The derivation provenance (the `DerivationProvenance` type of §2.7) records:
+- The query expression that produced the claim (serialized)
+- The corpus state at evaluation time
+- The combination rule used (if synthesis)
+- The set of input claim IDs that contributed
+- `similarityVersions` — the version of every similarity function used in the query
+- `embeddingModelVersions` — the version of every embedding model used (e.g., the model version captured when `ρ_cosine` is invoked)
+- `evaluationClock` — the pinned evaluation time for time-dependent operators (decay, `τ_now`), eliminating decay drift during replay
+
+**Mandatory version provenance.** `commit_derived` MUST populate `similarityVersions` and `embeddingModelVersions` when the query expression references similarity-based operators. A derived write that omits these fields when the query requires them is invalid and MUST be rejected. The decision to record version information is *irreversible at write time*: a derivation committed without versions cannot retroactively gain them — the information is gone. Implementations MUST begin recording version information immediately, even if the broader replay-verification machinery is not yet built; recording without using is cheap, while not recording forecloses future use.
+
+**Version-conditional reproducibility.** A derived claim is reproducible *conditional on version availability* — the spec does NOT claim universal reproducibility. A consumer can re-run the serialized query against the recorded corpus state and verify the result *iff*:
+1. All input claims are present in the corpus;
+2. All similarity-function versions referenced in provenance remain available in the catalog;
+3. All embedding-model versions referenced in provenance remain available;
+4. The `evaluationClock` is used for time-dependent operators.
+
+This replaces the v0.1 blanket reproducibility claim ("any consumer can re-run the serialized query against the recorded corpus state and verify they get the same derived claim") with the version-aware claim above. Marketing materials and product documentation should reflect this corrected, version-conditional language rather than asserting universal reproducibility.
+
+**Replay status.** When any of the conditions above fails, replay produces a defined degraded result rather than a silent mismatch:
+
+```
+ReplayResult {
+  status              : ReplayStatus
+  result              : Claim?
+  missingDependencies : List<MissingDependency>
+}
+
+ReplayStatus =
+  | exact                    -- all conditions met, result matches recorded
+  | unavailable_models       -- provenance recorded model versions, but those versions are no longer available
+  | missing_inputs           -- provenance recorded input claim IDs, but those claims are no longer present
+  | integrity_unknown        -- derivation committed before mandatory provenance fields existed (v0.1-era); cannot verify
+  | failed                   -- replay fundamentally cannot proceed
+```
+
+For v0.1-era derived claims that lack the version fields, the library treats their replay status as `integrity_unknown`. This distinguishes "we committed without recording what we needed" (`integrity_unknown`) from "we recorded versions but those versions are gone now" (`unavailable_models`). There is no path to retroactively add the missing version information to a v0.1-era derivation; consumers needing reproducibility for these claims must re-derive them under the current provenance discipline.
+
+The library MUST preserve the corpus state at the time of derivation long enough for verification — typically until either an explicit retention policy expires or the derived claim is itself deprecated.
+
+### 7.7 Idempotency
+
+Every write supports an optional idempotency key:
+
+```
+commit(claim, idempotencyKey: string?) → CommitResult
+```
+
+If a write with the same idempotency key has been processed within the idempotency window (default: 24 hours), the library returns the original result without re-processing. This protects against retries during transient failures.
+
+Idempotency keys are scoped to (corpus, writer-identity, key) — the same key from different writers does not collide.
