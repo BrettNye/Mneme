@@ -1265,3 +1265,89 @@ Result: `Dirichlet(3, 1.2, 0.8)`. Total concentration = 5. In this example the i
 **Caveat: this is a maximum-entropy approximation, not a lossless conversion.** The original Beta knew "False" was about a singleton outside {A}; the extended Dirichlet now treats the False evidence as informative about B vs. C in proportion to base rates. This introduces information that was not in the original Beta. The base-rate split is the maximum-entropy choice given no further information, but it remains an approximation.
 
 Consumers who need to preserve "the original source had no opinion about B vs. C" must register a custom converter using a Jøsang hyper-opinion representation — placing mass on the composite focal element {B, C} rather than splitting it between the singletons. Hyper-opinions require extending the DistributionProtocol to support powerset-indexed mass functions, which is outside v0.2 scope. The base-rate split is the v0.2 default; finer control is via custom converter (the hyper-opinion escape hatch).
+
+### 5.6 Combination-rule catalog `[P]`
+
+§5.2–§5.5 specify, per binding, *which* rules each distribution supports and *whether* each is idempotent. This subsection is the normative catalog of *what each rule computes* and the cross-distribution contract that ties the rule names together. The `combine(rule_id, …)` dispatch of §5.1 resolves each `rule_id` to the per-distribution math below; the algebra of §4.9 never names anything not catalogued here.
+
+**Protocol-uniform-rule-name contract.** A `rule_id` denotes one semantic, and every binding that supports it MUST implement *that* semantic for its own math — never a different operation under the same name. `rule_weighted_avg` is always trust-weighted opinion averaging (weights from the source-trust table of §4.9), for Beta, Dirichlet, scalar, and Gaussian alike; it is never silently aliased to precision-weighted fusion. `rule_evidence_pooled` is always additive evidence accumulation with single-prior accounting. `rule_max_mean` always selects the highest point estimate; `rule_max_concentration` always selects the most evidence. `rule_dempster` is always Dempster's rule on the subjective-logic mass functions of §2.5. `rule_kalman` is always precision-weighted Bayesian fusion. A binding that cannot give a rule its contracted semantic MUST return NotSupported rather than substitute a near-neighbour (this is why the Gaussian binding refuses `rule_evidence_pooled` and `rule_dempster`, §5.4, instead of approximating them). This is what lets the §4.9 algebra and a consumer's custom binding agree on what a `rule_id` means without inspecting the distribution type: the name carries the semantic, the binding carries the math.
+
+The catalogued rules:
+
+#### `rule_weighted_avg` — trust-weighted averaging
+
+Trust-weighted average of the inputs, weights drawn from the source-trust table of §4.9 (manual=1.3, verification=1.2, workflow=1.0, heuristic=0.9, llm=0.7, imported=0.6), normalized over the input set. For Beta/Dirichlet it averages the parameter vectors; for Gaussian it returns the moment-matched Gaussian of the trust-weighted mixture (§5.4); for scalar it averages the point values. **Idempotent ✓** for every binding: averaging a value with itself returns the value. This is a *selecting/normalizing* rule, not an evidence-accumulating one — it never inflates the evidence total, so re-ingesting the same input does not fabricate certainty.
+
+#### `rule_evidence_pooled` — additive evidence pooling (Beta)
+
+Pooling treats each input's parameters as *prior-inclusive* evidence counts under the pinned convention `α = r + a·W`, `β = s + (1−a)·W` (§0.3). Pooling two inputs means summing their *raw* evidence and re-applying exactly one prior — not summing the parameters directly, which would carry the prior weight `W` once per input. For `Beta(α₁, β₁)` and `Beta(α₂, β₂)` with prior weight `W` and base rate `a`:
+
+```
+α_pooled = α₁ + α₂ − a·W
+β_pooled = β₁ + β₂ − (1−a)·W
+```
+
+The `−a·W` and `−(1−a)·W` terms remove the one duplicated prior: each input contributed `a·W` to its `α`, so the sum `α₁ + α₂` contains `2·a·W` of prior mass when the pooled result should contain only `a·W`. This is mathematically identical to "extract raw `r = α − a·W` and `s = β − (1−a)·W` from each input, sum the raw counts, then re-add a single prior `(a·W, (1−a)·W)`"; both formulations produce the same result.
+
+**N-input generalization.** Pooling `N` Beta inputs in one call carries `N` priors and must keep one, so it removes `N−1`:
+
+```
+α = (Σ αᵢ) − (N−1)·a·W
+β = (Σ βᵢ) − (N−1)·(1−a)·W
+```
+
+Pairwise pooling in any order gives the same result by associativity, so implementations SHOULD use this closed form for `N` inputs rather than reducing pairwise — it avoids floating-point accumulation error and makes the prior subtraction explicit.
+
+**Worked example.** Two claims, each `Beta(3, 2)` with `W = 2`, `a = 0.5`. Under the pinned convention each is `r = 2` positive, `s = 1` negative (since `α = 2 + 0.5·2 = 3`, `β = 1 + 0.5·2 = 2`). Pooling:
+
+```
+α_pooled = α₁ + α₂ − a·W   = 3 + 3 − 1 = 5
+β_pooled = β₁ + β₂ − (1−a)·W = 2 + 2 − 1 = 3
+```
+
+Result: `Beta(5,3)` — mean 0.625, concentration 8. This is the correct pooling: raw counts sum to `r = 4`, `s = 2`, and re-adding one prior gives `α = 4 + 1 = 5`, `β = 2 + 1 = 3`. A naive parameter sum would give `Beta(6, 4)` (mean 0.600, concentration 10), carrying one extra `W` of phantom evidence — exactly the prior, double-counted. The catalogued form does not do this.
+
+For three `Beta(3,2)` inputs the closed form gives `α = 3·3 − 2·1 = 7`, `β = 3·2 − 2·1 = 4` — `Beta(7,4)` — matching pairwise pooling (`Beta(5,3)` then pool with the third to `Beta(7,4)`), confirming associativity.
+
+`rule_evidence_pooled` is the same additive-pooling semantic on the Dirichlet binding (§5.3): sum the parameter vectors with the analogous per-category prior-`W` subtraction. **Non-idempotent ✗** on every binding that supports it — pooling a value with itself accumulates evidence and inflates the concentration, so consumers MUST deduplicate by `observation_id` before pooling (§5.1). The Gaussian binding returns NotSupported (pooling assumes additive evidence counts with no Gaussian analog, §5.4); evidence accumulation for Gaussian measurements is `rule_kalman`'s job, under its own name and its own non-idempotence.
+
+#### `rule_max_mean` and `rule_max_concentration` — the `rule_max` split
+
+v0.1's single `rule_max_confidence` rule (now deprecated, see below) was ambiguous: its name ("highest-confidence wins") reads as max-*mean* (highest point estimate), but the protocol-tier Dirichlet implementation had quietly committed to max-*concentration* (the most-evidenced input). The two diverge — `Beta(9, 1)` has mean 0.9, concentration 10; `Beta(80, 20)` has mean 0.8, concentration 100; max-mean picks the first, max-concentration the second — so a single name covering both broke the protocol-uniform-rule-name contract. The fix splits it into two rules with distinct, unambiguous semantics:
+
+```
+rule_max_mean          : argmax over the mean (point estimate) of each input
+rule_max_concentration : argmax over the total evidence weight (concentration) of each input
+```
+
+- `rule_max_mean` selects the input with the highest point estimate — "which input sounds most confident?", regardless of evidence backing. Per distribution: Beta `α/(α+β)`; Dirichlet picks the input whose most-likely category has the highest mean; Gaussian `μ` (rarely the desired Gaussian semantic — it just picks the rightmost position — but provided for cross-type consistency); scalar the value itself.
+- `rule_max_concentration` selects the input with the most evidence behind it — "which input is best-evidenced?". Per distribution: Beta/Dirichlet total concentration `α+β` / `Σαᵢ`; Gaussian precision `1/σ²` (lowest variance wins, the "most-precise opinion" selection); scalar concentration is the consumer-declared pseudocount.
+
+Both are **idempotent ✓** (argmax of a value against itself returns that value) given a stable, total tie-breaker; the library defaults to lexicographic ordering on claim ID, overridable per-corpus, and the same tie-breaker secures associativity. For Dirichlet under `rule_max_mean`, two inputs whose top categories share the same mean are tied even when those top categories *differ* (e.g. `Dirichlet(8,1,1)` and `Dirichlet(1,8,1)` both have top-category mean 0.8), and the tie-breaker decides.
+
+`rule_max_mean` and `rule_max_concentration` answer genuinely different questions and there is no consumer-friendly default; consumers MUST choose explicitly. This is the same de-aliasing principle as the Gaussian `rule_kalman` / `rule_weighted_avg` split (§5.4): when two operations have different semantics, they get different names.
+
+> **`rule_max_confidence` — DEPRECATED.** The v0.1 name `rule_max_confidence` is deprecated as ambiguous and is **removed**, not pinned. This is a breaking change for v0.1 consumers. The library MUST reject any query or write referencing `rule_max_confidence` with a **typed error**, and that error MUST name **both** replacements — `rule_max_mean` (point-estimate selection) and `rule_max_concentration` (evidence-weight selection) — and state the semantic distinction so the consumer can choose. Silent migration to either replacement is **forbidden**: defaulting would mask cases where the consumer wanted the other semantic. Implementations migrating from v0.1 MUST audit existing `rule_max_confidence` usage and replace each occurrence explicitly. Splitting and forcing an explicit choice — rather than pinning one interpretation and surprising the consumers who relied on the other — is the principled fix; the breaking change is the cost of restoring the protocol contract.
+
+#### `rule_dempster` — Dempster combination
+
+Dempster's rule of combination on the subjective-logic mass functions of §2.5: convert each input to a mass function via its `to_subjective_logic_opinion` bridge, apply Dempster's rule, convert the result back. Supported by the Beta and Dirichlet bindings (which expose the bridge); NotSupported by Gaussian (no natural mass-function representation over a continuous frame, §5.4). Dempster's rule is unconditionally **commutative and associative** — `m₁ ⊕ m₂ = m₂ ⊕ m₁` and `(m₁ ⊕ m₂) ⊕ m₃ = m₁ ⊕ (m₂ ⊕ m₃)`, with the vacuous mass function as identity. The counterintuitive high-conflict behaviour (Zadeh's example: two sources strongly favouring different singletons combine to strongly support a third) is a *property of the rule*, not a failure of associativity, so the optimizer MAY freely reorder Dempster combinations. **Non-idempotent ✗**: `m ⊕ m ≠ m` in general — combining a mass function with itself increases certainty, which is wrong when re-ingesting the same evidence, so deduplication is required.
+
+#### `rule_kalman` — precision-weighted fusion (Gaussian)
+
+Precision-weighted Bayesian fusion of independent measurements of a fixed quantity, supported only by the Gaussian binding (§5.4). Weights are precisions `1/σ²`; the fused variance `σ² = 1/(1/σ₁² + 1/σ₂²)` is strictly smaller than either input. **Non-idempotent ✗** — fusing a measurement with itself fabricates independence and halves the variance, so consumers MUST deduplicate by `observation_id` before fusion. `rule_kalman` is the Gaussian evidence-accumulating rule; it is *not* an alias of `rule_weighted_avg` (trust-weighted, idempotent) — the trust-vs-precision distinction is load-bearing (§5.4).
+
+#### Idempotence summary
+
+The per-rule idempotence flags, consolidated across bindings (the contract the §4.9 equational laws and the errata idempotence table both depend on; matches the per-binding flags of §5.2–§5.4):
+
+| Rule | Idempotent |
+|---|---|
+| `rule_weighted_avg` | ✓ |
+| `rule_evidence_pooled` | ✗ |
+| `rule_max_mean` | ✓ |
+| `rule_max_concentration` | ✓ |
+| `rule_dempster` | ✗ |
+| `rule_kalman` | ✗ |
+
+The pattern is semantic, not incidental: the *averaging* rule (`rule_weighted_avg`) normalizes and the *selecting* rules (`rule_max_mean`, `rule_max_concentration`) perform no combination, so all three are idempotent; the *evidence-accumulating* rules (`rule_evidence_pooled`, `rule_dempster`, `rule_kalman`) add information on every application and so inflate certainty when fed duplicate inputs — `is_idempotent(rule_id)` (§5.1) returns false for them precisely so callers know observation-level deduplication is mandatory before combining.
