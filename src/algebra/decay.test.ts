@@ -97,6 +97,24 @@ it("delta sets effective field without mutating the original corpus claim", () =
   expect(out.claims[0].confidence.effective).toBeCloseTo(0.45);
 });
 
+// ── negative age (future-recorded / clock skew) regression tests ────────────
+
+it("multiplier returns 1 for none policy when age is negative", () => {
+  expect(multiplier({ kind: "none" }, -DAY)).toBe(1);
+});
+
+it("multiplier returns 1 for exponential policy when age is negative", () => {
+  expect(multiplier({ kind: "exponential", halfLifeDays: 30 }, -DAY)).toBe(1);
+});
+
+it("multiplier returns 1 for linear policy when age is negative", () => {
+  expect(multiplier({ kind: "linear", ratePerDay: 0.01 }, -DAY)).toBe(1);
+});
+
+it("multiplier returns 1 for step policy when age is negative", () => {
+  expect(multiplier({ kind: "step", thresholdDays: 7 }, -DAY)).toBe(1);
+});
+
 it("downstream filter on effective>0.7 respects decayed values", () => {
   // pointEstimate = 0.9, after 1 half-life → effective = 0.45 (below 0.7)
   const clDecayed = makeClaim(0, 9, 1);

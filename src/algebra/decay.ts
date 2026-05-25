@@ -6,6 +6,7 @@ import type { DecayPolicy } from "../catalog/corpus.js";
 const DAY = 86_400_000;
 
 export function multiplier(policy: DecayPolicy, ageMs: number): number {
+  ageMs = Math.max(0, ageMs);
   switch (policy.kind) {
     case "none":
       return 1;
