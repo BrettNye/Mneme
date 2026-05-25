@@ -1576,3 +1576,144 @@ commit(claim, idempotencyKey: string?) → CommitResult
 If a write with the same idempotency key has been processed within the idempotency window (default: 24 hours), the library returns the original result without re-processing. This protects against retries during transient failures.
 
 Idempotency keys are scoped to (corpus, writer-identity, key) — the same key from different writers does not collide.
+
+---
+
+## 8. Subscription model
+
+A subscription registers a long-running query against a corpus together with a notification target. When the corpus evolves in ways that match the subscription's trigger semantics, the library delivers notifications to the target. Subscriptions are how consumers turn the query algebra of §4 from a pull interface into a push interface: the same expression that retrieves a result on demand can instead drive a stream of incremental notifications as the corpus changes.
+
+### 8.1 Subscription primitive
+
+```
+subscribe(
+  query     : AlgebraExpression,
+  trigger   : TriggerSemantics,
+  target    : DeliveryTarget,
+  lifecycle : LifecyclePolicy
+) → SubscriptionHandle
+```
+
+The `query` is any algebra expression of §4. The `trigger` (§8.2) decides *when* a notification fires; the `target` (§8.4) decides *where* it is delivered; the `lifecycle` (§8.7) decides *how long* the subscription lives. The returned `SubscriptionHandle` is used to cancel the subscription and to inspect its durable state (§8.8).
+
+### 8.2 Trigger semantics
+
+```
+TriggerSemantics =
+  | on_every_match                                 -- fire on each new claim matching the query
+  | on_transition(direction: Direction)            -- fire when result set crosses a boundary
+  | on_every_write                                 -- fire on every corpus mutation regardless of match
+
+Direction = to_nonempty | to_empty | either
+```
+
+**`on_every_match`** — for each newly-matching claim, fire one notification. Used for streaming insights, audit-log forwarding, and derived-write triggers.
+
+**`on_transition(direction)`** — fire when the query's result transitions across an empty/nonempty boundary. Used for "alert when something starts happening" (`to_nonempty`) or "alert when something stops happening" (`to_empty`). Requires the library to maintain transition state (§8.8).
+
+**`on_every_write`** — fire on every commit, regardless of whether it matches the query. Used for comprehensive audit pipelines.
+
+Triggers interact with the transaction semantics of §7.4: subscribers see a transaction as a single corpus-state advance, not as N separate events. A subscription with `trigger: on_every_match` fires once per matching claim within the transaction, but the underlying corpus state advances only once.
+
+### 8.3 Streamable vs. non-streamable operators
+
+Subscriptions over arbitrary query expressions may be expensive. The library classifies operators by incremental-evaluation cost, consistent with the per-operator incremental-evaluation notes in §4.
+
+**Streamable** (incremental cost O(1) or O(log n) per write):
+
+- σ, π, τ, δ, ⊥, ⊳, ⊕_dedupe
+- ⋈ on indexed fields
+- γ for bounded depth
+
+The contradiction operators are streamable in both forms (§4.8): a new claim introduces contradictions only with existing claims sharing its `(subject, key, scope)`, so the search is scoped to that triple. This applies to the n-way clustered form `⊥_clusters` as well as `⊥_pairs` — a new claim joins an existing cluster, starts a new cluster, or resolves one — so `⊥_clusters` is **streamable**. The library maintains per-triple cluster state in subscription state (§8.8), updated incrementally on each write.
+
+**Conditionally streamable** — the aggregation family α (§4.13) is streamable only for certain aggregates:
+
+- `α_count`, `α_sum`, `α_avg`, `α_rate` are streamable — each write contributes to running totals.
+- `α_min`, `α_max` are streamable for additions but require a re-scan for deletions (add-only).
+- `α_groupBy` is streamable when the group-field is stable per claim.
+- `α_custom` depends on the function — consumers declare streamability via the `AggregateFunction` protocol.
+
+A subscription whose query includes aggregation must be over streamable aggregates, or it pays the re-evaluation cost on each corpus change (and is treated like a non-streamable subscription below).
+
+**Non-streamable** (require re-evaluation or have pathological worst-case):
+
+- ρ (similarity ranking) — new claims may shift the top-K.
+- ⊕_synthesize_as — new claims may shift the synthesis (and for some combination rules the result is order-dependent).
+- κ, φ_format, β_budget — composition is order- and budget-sensitive.
+
+Subscriptions over query expressions containing non-streamable operators are allowed but emit warnings, and the library MAY apply rate limiting or downsampling. The spec recommends consumers structure subscriptions to avoid non-streamable operators where possible (e.g., subscribe to the underlying selection and apply ranking or composition in the consumer).
+
+### 8.4 Delivery targets
+
+```
+DeliveryTarget =
+  | webhook(url: URL, headers?: Map<string, string>)
+  | mcp_channel(serverId: string, channelId: string)
+  | in_process_callback(fn: Function)
+  | persistent_queue(queueId: string)
+  | log_sink(corpusId: CorpusId)
+```
+
+Delivery targets are pluggable. Standard targets cover webhooks, MCP channels (for AI-agent consumers), in-process callbacks (for tight coupling), persistent queues (for guaranteed-delivery integration), and log sinks (for writing notifications back into a designated corpus).
+
+### 8.5 Delivery semantics
+
+The library provides **at-least-once delivery** with **idempotency keys** and **causal ordering**:
+
+- Every notification carries a unique idempotency key (`subscriptionId + corpusTimestamp + matchingClaimId`).
+- Consumers are expected to be idempotent against retries.
+- Notifications from a single subscription are delivered in causal order (corpus-timestamp-ordered).
+- Notifications from different subscriptions have no cross-subscription ordering guarantee.
+
+Stronger semantics (exactly-once, cross-subscription ordering) require coordination with the consumer and are not provided by default. Notification delivery is asynchronous by default (§7.2); a stronger synchronous-acknowledgment guarantee is available via the opt-in `commit(claim, wait_for_subscribers = true)` flag, which ties writer latency to subscriber speed and should be used sparingly.
+
+### 8.6 Backpressure
+
+When a consumer is slower than the rate of notifications, the library applies the configured backpressure policy:
+
+```
+BackpressurePolicy =
+  | block_writes                                   -- writes wait until subscriber catches up
+  | buffer(capacity: Int)                          -- buffer up to N notifications, drop after
+  | drop_with_warning                              -- log and skip notifications when over capacity
+  | persist_to_queue(queueId: string)              -- offload to persistent queue
+```
+
+**`block_writes`** — for critical subscriptions where delivery is mandatory. Couples writer latency to subscriber speed. Use sparingly.
+
+**`buffer(capacity)`** — for typical subscriptions. Bounded buffering with drop-after-capacity.
+
+**`drop_with_warning`** — for low-priority subscriptions where missed events are acceptable.
+
+**`persist_to_queue`** — for subscriptions that must not drop and cannot block writes. Offloads to a separate persistent queue (Kafka, NATS, etc.).
+
+### 8.7 Lifecycle
+
+```
+LifecyclePolicy =
+  | until_cancelled                                -- runs until explicitly cancelled
+  | until_event(predicate: EventPredicate)         -- runs until matching event
+  | ttl(duration: Duration)                        -- expires after duration
+  | composite(policies: List<LifecyclePolicy>)     -- any condition terminates
+```
+
+Subscriptions can be cancelled explicitly via the `SubscriptionHandle`, or expire automatically per the lifecycle policy. Cancellation is irreversible.
+
+### 8.8 Subscription state
+
+Subscriptions with `on_transition` triggers — and streamable subscriptions that maintain incremental result state, including `⊥_clusters` per-triple cluster state (§8.3) and running aggregate totals (§4.13) — maintain state to evaluate transitions and incremental updates. The library stores per-subscription state separately from the corpus:
+
+```
+SubscriptionState {
+  subscriptionId  : SubscriptionId
+  query           : AlgebraExpression
+  lastResultHash  : Hash                           -- for transition detection
+  lastFiredAt     : Instant
+  deliveryCount   : Int
+  failureCount    : Int
+  ...
+}
+```
+
+Subscription state is durable. After a library restart, subscriptions resume from their last known state without missing or duplicating notifications (modulo at-least-once semantics).
