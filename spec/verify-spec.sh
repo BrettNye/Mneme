@@ -22,6 +22,7 @@ grep -Fq 'α_pooled = α₁ + α₂ − a·W' "$DOC"; check $? pooled-formula
 grep -Fq 'Dirichlet(3, 1.2, 0.8)' "$DOC"; check $? extend-to-frame
 { grep -Eq '0\.55' "$DOC" && grep -Eq '0\.21' "$DOC"; }; check $? wilson-numbers
 grep -Fq '0.793' "$DOC"; check $? migration-shift
+grep -Fq 'Beta(α=r+a·W, β=s+(1−a)·W)' "$DOC"; check $? rate-emits-beta
 
 # Rule 3 — convention pinned
 grep -Fq 'α = r + a·W' "$DOC"; check $? convention-pinned
