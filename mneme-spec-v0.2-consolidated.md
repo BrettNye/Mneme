@@ -1107,3 +1107,36 @@ The Beta and scalar bindings are core. They are the bindings the worked examples
 - `to_subjective_logic_opinion` is absent unless the consumer supplies an explicit pseudocount to lift the scalar into a Beta first (per §5.5); a bare scalar has no evidence total and therefore no well-defined opinion. The library MUST NOT silently fabricate a pseudocount.
 - `supported_rules()` returns the rules that are well-defined without evidence weights: `rule_weighted_avg` (weighted average of the point values, with weights from `params`), `rule_max_mean`, and `rule_max_concentration` (degenerate — all scalars share variance 0, so concentration ties break by claim ID, per §4.9). `rule_evidence_pooled` and `rule_dempster` are NOT supported: both require an evidence total a bare scalar lacks. The per-rule scalar math is in §5.6.
 - `is_idempotent`: true for every rule the scalar binding supports — `rule_weighted_avg`, `rule_max_mean`, `rule_max_concentration` are all idempotent on point values.
+
+### 5.3 Dirichlet reference binding `[P]`
+
+Dirichlet generalizes Beta from a binary frame to `k` categories. It is the protocol-tier `[P]` binding for multi-category beliefs — a consumer in a subjective-logic decision domain over a categorical frame `{x₁, …, xₖ}` registers it; core implementations are not obligated to provide it. `T` is the parameter vector `(α₁, …, αₖ)`, each `αᵢ = rᵢ + aᵢ·W` under the prior-inclusive convention pinned in §0.3, with per-category base rates `a₁, …, aₖ` (Σaᵢ = 1) and non-informative prior weight `W`.
+
+**Statistics.** With total concentration `S = Σⱼ αⱼ`:
+
+```
+mean(d)[i]     = αᵢ / S                          -- per-category projected probability
+variance(d)[i] = αᵢ(S − αᵢ) / (S²·(S + 1))       -- per-category marginal variance
+```
+
+Each category's marginal is a Beta(`αᵢ`, `S − αᵢ`), so `mean`/`variance` reduce to the Beta formulas of §5.2 on that marginal. `mean(d)` returns the point-estimate vector; for the scalar `mean(d) → Number` the binding returns the highest-category projected probability (the mode's mean), which is the value `rule_max_mean` reads. `variance(d)` backs `rule_max_concentration` via `S`: higher `S` is lower per-category variance is more evidence.
+
+**Marginalization.** A Dirichlet marginalizes by summing parameters of the collapsed categories: collapsing `{xᵢ, xⱼ}` into a single category yields parameter `αᵢ + αⱼ`, and the result is a valid Dirichlet over the coarser frame (Beta when the frame collapses to two categories). The binding exposes this so that a consumer can query a belief over a sub-partition of the frame without re-fitting; `S` and base rates aggregate the same way.
+
+**SL bridge.** The Dirichlet ↔ subjective-logic multinomial-opinion bridge is normative in §2.5 (`belief(xᵢ) = (αᵢ − aᵢW)/S`, `uncertainty = W/S`, `base_rate(xᵢ) = aᵢ`, `projected(xᵢ) = αᵢ/S`) and is not restated here. `to_subjective_logic_opinion` / `from_subjective_logic_opinion` implement that bridge and its inverse, which is what enables `rule_dempster` for Dirichlet inputs (via the mass-function conversion of §2.5). The vacuous case `Dirichlet(W·a₁, …, W·aₖ)` yields zero belief on every singleton and full uncertainty, as §2.5 records.
+
+**Note on W scaling for larger frames.** The `W = 2` default is tuned for binary frames; for `k > 2` the per-category prior weight under the symmetric base rate `aᵢ = 1/k` is `W/k` — e.g. `W = 2, k = 5` gives each category a prior weight of `0.4`, a very weak prior. Consumers using large frames should consider scaling `W` with frame size (Jøsang's literature uses both `W = 2` constant and `W = k`); the corpus schema MAY override `W` per-key for multi-category value schemas. Absent an override, `W = 2` applies regardless of `k`, with prior strength diminishing per category as the frame grows.
+
+**Combination rules.** `combine(rule_id, a, b, params)` dispatches to the per-rule Dirichlet math specified in §5.6 (not derived here). `supported_rules()` returns all five rules, with the rule names pinned in §4.9. The per-rule semantics and their idempotence flags:
+
+- `rule_weighted_avg` — trust-weighted average of the parameter vectors, weights from `params` (the source-trust weights of §4.9). **Idempotent ✓**: averaging a vector with itself returns the vector.
+- `rule_evidence_pooled` — sum of the parameter vectors with **prior-W subtraction** to avoid double-counting the shared prior: the pooled vector adds the per-category evidence counts `rᵢ = αᵢ − aᵢ·W` and re-applies a single prior, rather than naively summing `αᵢ` (which would count `W` once per input). **Non-idempotent ✗**: pooling a vector with itself accumulates evidence and inflates `S`, so consumers MUST deduplicate by `observation_id` before pooling (§5.1).
+- `rule_max_mean` — argmax over the per-category mean: selects the input whose most-likely category has the highest mean across all inputs (tie-broken by claim ID, including the cross-category tie where two inputs share a top-category mean on *different* categories). **Idempotent ✓.**
+- `rule_max_concentration` — argmax over total concentration `Σαᵢ` (= `S`): the most-informed opinion — the one with the most evidence backing — wins, tie-broken by claim ID. **Idempotent ✓.**
+- `rule_dempster` — combination via the SL bridge to multinomial mass functions (convert each input to a mass function per §2.5, apply Dempster's rule, convert back to Dirichlet parameters via the inverse bridge). **Non-idempotent ✗**: combining a mass function with itself increases certainty incorrectly when re-ingesting the same evidence; deduplication is required.
+
+So `is_idempotent` is true for `rule_weighted_avg`, `rule_max_mean`, `rule_max_concentration` and false for `rule_evidence_pooled` and `rule_dempster` — the same per-rule contract the §4.9 equational laws and the errata idempotence table depend on, identical in shape to the Beta binding of §5.2.
+
+**Note on the max-selection split.** `rule_max_mean` and `rule_max_concentration` answer different questions and are not interchangeable for Dirichlet: max-mean selects the input whose top category has the highest point estimate (most confident-sounding), while max-concentration selects the input with the most evidence behind it (largest `S`). For example, an input with a sharp top-category mean but small `S` wins under max-mean and loses under max-concentration to a flatter but far-better-evidenced input. Consumers MUST choose explicitly; there is no consumer-friendly default.
+
+References: Jøsang, *Subjective Logic* (Springer, 2016), chapter 6, for the multinomial-opinion treatment and its Dempster-Shafer bridge.
