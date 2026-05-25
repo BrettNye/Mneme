@@ -172,6 +172,38 @@ it("accept_and_resolve calls deleteClaim on the loser before insert", () => {
   expect(adapter.inserted).toHaveLength(1);
 });
 
+it("rejected commit does NOT consume recordedSeq — next successful commit gets seq 0", () => {
+  const existingClaim: Claim = {
+    ...baseCandidate,
+    id: "existing-id" as any,
+    scopeHash: "_",
+    valueHash: "deadbeef1234abcd",
+    value: 99,
+    recorded: Date.now(),
+    recordedSeq: 0,
+    status: "validated",
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+  };
+  const adapter = makeAdapter([existingClaim]);
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any);
+  // First commit — lower confidence, should be rejected
+  const rejected = p.commit(
+    { ...baseCandidate, value: 42, confidence: { distribution: "beta" as const, parameters: { alpha: 1, beta: 9 }, raw: 0.1 } },
+    { policy: { kind: "reject_on_contradiction" }, writer: "u" }
+  );
+  expect(rejected.status).toBe("rejected");
+  // Second commit — use a different key so no contradiction; seq must still be 0
+  const adapter2 = makeAdapter();
+  const p2 = new Promoter(adapter2, { scopeFields: {}, scalarPseudocount: {} } as any);
+  // Simulate on same promoter: after rejection, seq must not have incremented
+  const committed = p.commit(
+    { ...baseCandidate, key: "repo.no_conflict", value: 5 },
+    { policy: { kind: "always_accept" }, writer: "u" }
+  );
+  expect(committed.status).toBe("committed");
+  expect(adapter.inserted[0].recordedSeq).toBe(0);
+});
+
 it("idempotency replay returns original id with status=duplicate, no second insert", () => {
   const adapter = makeAdapter();
   const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any);

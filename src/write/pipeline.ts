@@ -1,5 +1,5 @@
 import type { CandidateClaim, Claim } from "../core/claim.js";
-import { newClaimId } from "../core/ids.js";
+import { newClaimId, type ClaimId } from "../core/ids.js";
 import { scopeHash } from "../core/scope.js";
 import { valueHash } from "../core/value.js";
 import { validateScope, type ClaimSchema } from "../catalog/schema.js";
@@ -34,24 +34,34 @@ export class Promoter {
 
     validateScope(candidate.scope, this.schema);
 
+    // Build a partial claim with hashes and id — needed for enforce() to inspect.
+    // Do NOT mutate this.seq or this.lastRecorded yet; those only advance on accept.
+    const claimId = newClaimId();
+    const candidateForEnforce = {
+      ...candidate,
+      id: claimId,
+      scopeHash: scopeHash(candidate.scope),
+      valueHash: valueHash(candidate.value),
+      recorded: 0,       // placeholder — will be overwritten after accept
+      recordedSeq: 0,    // placeholder — will be overwritten after accept
+      status: candidate.status ?? "validated",
+    } as Claim;
+
+    const outcome = enforce(candidateForEnforce, opts.policy, this.adapter);
+
+    if (outcome.decision === "reject") return { id: claimId, status: "rejected" };
+
+    // Accepted: now advance the monotonic counters and finalize the claim.
     const recorded = Math.max(Date.now(), this.lastRecorded);
     this.lastRecorded = recorded;
 
     const claim: Claim = {
-      ...candidate,
-      id: newClaimId(),
-      scopeHash: scopeHash(candidate.scope),
-      valueHash: valueHash(candidate.value),
+      ...candidateForEnforce,
       recorded,
       recordedSeq: this.seq++,
-      status: candidate.status ?? "validated",
     };
 
-    const outcome = enforce(claim, opts.policy, this.adapter);
-
-    if (outcome.decision === "reject") return { id: claim.id, status: "rejected" };
-
-    outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as any));
+    outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as ClaimId));
     this.adapter.insertClaim(claim);
 
     if (opts.idempotencyKey) {
