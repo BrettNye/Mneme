@@ -5,6 +5,9 @@ DOC="${1:-mneme-spec-v0.2-consolidated.md}"
 fail=0
 check(){ if [ "$1" -eq 0 ]; then printf 'PASS %s\n' "$2"; else printf 'FAIL %s\n' "$2"; fail=1; fi; }
 
+# Fail fast on a missing/empty target so the absence-guards below can't emit misleading PASS lines.
+[ -s "$DOC" ] || { printf 'FAIL %s\n' "doc-missing-or-empty: $DOC"; exit 1; }
+
 # Rule 1 — deprecated-rule guard
 ! { grep -nE 'rule_max_confidence' "$DOC" | grep -vi 'deprecated' | grep -q .; }; check $? no-deprecated-rule
 ! grep -Fq 'sum the underlying Beta parameters' "$DOC"; check $? no-naive-pooling
