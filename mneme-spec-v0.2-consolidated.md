@@ -879,3 +879,154 @@ The composition operator is split into three component operators that compose, p
 - Composition: `κ ≡ β_budget ∘ φ_format ∘ δ_dedup_content` (up to parameterization).
 - NOT streamable — composition is order-sensitive and budget-sensitive in ways that fight incremental evaluation. Re-evaluation on each write is the safe semantics.
 
+### 4.13 Aggregation operators — α `[C]`
+
+The retrieval and combination operators of §4.2–§4.12 cannot compute aggregates over claim sets — count, group-by, sum, rate. Outcome-correlated reweighting, listed as a first-class need, cannot be expressed without them. The aggregation family closes this gap. It is core-tier.
+
+Aggregation introduces a second terminal type alongside `Corpus` and `ComposedContext`:
+
+```
+AggregateResult {
+  groups : Map<GroupKey, AggValue>
+}
+
+GroupKey =
+  | scalar(value: any)
+  | tuple(values: List<any>)
+  | none                              -- for ungrouped aggregates
+
+AggValue =
+  | count(n: Number)
+  | sum(value: Number)
+  | avg(value: Number)
+  | min(value: any)
+  | max(value: any)
+  | rate(beta: Beta)                  -- emits a Beta, NOT a raw ratio
+  | distribution(samples: List<Number>)
+  | custom(value: any, fn: AggregateFunction)
+```
+
+`AggregateResult` is a typed structured value that can be consumed by reweighting operators, used directly by application code, or composed with other aggregates.
+
+The `rate` variant emits a `Beta` distribution rather than a raw numerator/denominator ratio. A raw ratio discards sample-size uncertainty: 22/30 wins and 1/1 wins compute to 0.73 and 1.0 respectively, but the second is overwhelmingly noisier and should not outrank the first. Emitting a Beta parameterized by the underlying counts lets downstream reweighting use the Beta's mean, its Wilson lower bound, or any other confidence-aware scoring — composing cleanly with the distribution machinery of §2.5 and §5.
+
+#### The operators
+
+```
+α_count       : Corpus → AggregateResult                       `[C]`
+α_count_where<predicate> : Corpus → AggregateResult            `[C]`
+
+α_sum<value-path> : Corpus → AggregateResult                   `[C]`
+α_avg<value-path> : Corpus → AggregateResult                   `[C]`
+α_min<value-path> : Corpus → AggregateResult                   `[C]`
+α_max<value-path> : Corpus → AggregateResult                   `[C]`
+
+α_groupBy<group-field, aggregator> : Corpus → AggregateResult  `[C]`
+
+-- Primary rate form: explicit numerator and denominator predicates
+α_rate<num-predicate, denom-predicate> : Corpus → AggregateResult  `[C]`
+
+-- Convenience for binary outcome domains
+α_binary_rate<value-path> : Corpus → AggregateResult           `[C]`
+
+α_custom<fn> : Corpus → AggregateResult                        `[C]`
+```
+
+The `<group-field>` parameter is a field path (`scope.actionId`, `scope.entityId`, `value.category`). The `<aggregator>` is one of the simple aggregate operators or a custom function.
+
+`α_rate<num, denom>` takes two predicates explicitly. The numerator counts claims matching `num-predicate`; the denominator counts claims matching `denom-predicate`. This is the primary form because real outcome domains often include unresolved states (`pending`, `null`, `cancelled`) that should not count as failures.
+
+`α_binary_rate<value-path>` is sugar for `α_rate<num: value-path = true, denom: value-path = true ∨ value-path = false>`. It excludes null/pending/unresolved states from both numerator and denominator. Use this when the outcome domain is strictly binary and unresolved values should be ignored.
+
+#### The Beta-typed rate
+
+Both rate forms emit a Beta distribution parameterized by the corpus's pinned non-informative prior weight `W` and base rate `a` (§0.3). For `r` positive observations (matching the numerator predicate) and `s` negative observations (matching the denominator-but-not-numerator predicate), the emitted Beta is:
+
+```
+Beta(α=r+a·W, β=s+(1−a)·W)
+```
+
+This uses the pinned α, β convention of §0.3, so it composes cleanly with the subjective-logic bridge of §2.5 — the same convention applies. This is NOT Laplace smoothing (`+1/+1`); it uses the corpus's declared prior. Consumers can extract:
+
+- **Mean** — the standard Beta mean, for a point estimate.
+- **Wilson lower bound** — a confidence-aware floor that penalizes small samples.
+- **Full distribution** — for downstream uncertainty propagation.
+
+#### The bridge operator
+
+The bridge from `AggregateResult` back to `RankedCorpus` lets an aggregate reweight a ranked retrieval:
+
+```
+α_join_aggregate<corpus-field, aggregate-key, reweight-fn> :
+  RankedCorpus × AggregateResult → RankedCorpus                `[C]`
+```
+
+For each claim in the `RankedCorpus`, look up the matching aggregate value by the join key, then apply the reweight function to adjust the claim's score.
+
+Standard reweight functions:
+
+```
+reweight_multiply         : score × aggregate_value          -- when aggregate is in [0,1]
+reweight_multiply_mean    : score × mean(aggregate_beta)     -- for Beta aggregates
+reweight_wilson_floor     : score × wilson_lower_bound(beta) -- confidence-aware
+reweight_boost(factor)    : score + (aggregate_value × factor)
+reweight_normalize        : aggregate_value / max(all_aggregates)
+reweight_custom(fn)       : user-defined
+```
+
+`reweight_multiply_mean` and `reweight_wilson_floor` are specifically for Beta-typed aggregates, addressing the sample-size sensitivity that a raw ratio would ignore.
+
+#### Worked example: win-rate reweighting
+
+The pressure-test query that the retrieval-only algebra could not express, now expressed correctly:
+
+```
+let actions  = σ_subject="action" ∧ key="action.recommended" (corpus("sales-app"))
+let outcomes = σ_subject="action" ∧ key="action.outcome"     (corpus("sales-app"))
+
+-- Compute Beta-typed win-rate per action, excluding pending/null outcomes
+let win_betas = α_groupBy<scope.actionId,
+                          binary_rate<value.won>>(outcomes)
+
+-- Rank candidate actions by base similarity
+let ranked = ρ_cosine, current_context (actions)
+
+-- Reweight by Wilson lower bound, which penalizes small samples
+let reranked = α_join_aggregate<scope.actionId,
+                                groupKey,
+                                reweight_wilson_floor>(ranked, win_betas)
+
+-- Compose final context
+let composed = κ_xml, 12000_tokens (reranked)
+return composed
+```
+
+The action with 22/30 wins (Wilson lower bound ≈ 0.55) correctly outranks the action with 1/1 win (Wilson lower bound ≈ 0.21 at 95% confidence). Sample size is respected: even though 1/1 has a higher point estimate (1.0 > 0.73), the Wilson lower bound penalizes the small sample, and the well-evidenced 22/30 action wins. The aggregation family composes with the distribution family.
+
+If the outcome domain had three values (`won`, `lost`, `pending`) and the denominator needed to be controlled explicitly:
+
+```
+let win_betas = α_groupBy<scope.actionId,
+                          rate<num: value.won = true,
+                               denom: value.won = true ∨ value.won = false>>(outcomes)
+```
+
+This excludes pending outcomes from both numerator and denominator — they do not count as losses, but they also do not dilute the rate.
+
+**Equational laws.**
+
+- `α_count(σ_p(C)) = α_count_where<p>(C)` — pre-filtering equals filtered aggregation.
+- Selection generally commutes through aggregation when the predicate does not reference aggregate values.
+
+Aggregation operators do NOT have a closed-form composition with each other. Aggregate results are not corpora, so the type signatures do not match. Composing aggregations requires either an explicit aggregate-to-corpus conversion (deferred, §G) or expressing the composition as a single multi-level `α_groupBy` with appropriate group keys.
+
+**Incremental evaluation.** Aggregation operators are conditionally streamable:
+
+- `α_count`, `α_sum`, `α_avg`, `α_rate` are streamable — each write contributes to running totals.
+- `α_min`, `α_max` are streamable for additions but require a re-scan for deletions.
+- `α_groupBy` is streamable when the group-field is stable per claim.
+- `α_custom` depends on the function — consumers declare streamability via the `AggregateFunction` protocol.
+
+For subscriptions (§8), queries that include aggregation must be over streamable aggregates, or pay re-evaluation cost on each corpus change.
+
+**Storage adapter support.** Aggregation translates well to SQL adapters (`GROUP BY`, `COUNT`, `SUM` are native). Vector DBs typically lack aggregation; the library falls back to retrieving the candidate set and aggregating in memory. For high-cardinality `α_groupBy` operations the library provides cardinality hints to consumers and refuses pathologically expensive queries.
