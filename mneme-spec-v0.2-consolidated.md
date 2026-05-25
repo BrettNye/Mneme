@@ -1351,3 +1351,46 @@ The per-rule idempotence flags, consolidated across bindings (the contract the �
 | `rule_kalman` | ✗ |
 
 The pattern is semantic, not incidental: the *averaging* rule (`rule_weighted_avg`) normalizes and the *selecting* rules (`rule_max_mean`, `rule_max_concentration`) perform no combination, so all three are idempotent; the *evidence-accumulating* rules (`rule_evidence_pooled`, `rule_dempster`, `rule_kalman`) add information on every application and so inflate certainty when fed duplicate inputs — `is_idempotent(rule_id)` (§5.1) returns false for them precisely so callers know observation-level deduplication is mandatory before combining.
+
+---
+
+## 6. Catalog operations
+
+The catalog model (§3) defines corpora as named, schema-bound, access-controlled entities; this section specifies the *operations* over that catalog. Catalog operations divide into three groups: managing corpora (§6.1), discovering them (§6.2), and querying across several of them at once (§6.3). All catalog operations are subject to the access policy (§3.4) of the corpora they touch, enforced through the authorization adapter (§9).
+
+### 6.1 Corpus management
+
+```
+createCorpus(definition: CorpusDefinition) → Corpus
+updateCorpusSchema(id: CorpusId, schema: ClaimSchema, migration: Migration?) → Corpus
+updateCorpusPolicy(id: CorpusId, policy: AccessPolicy) → Corpus
+deleteCorpus(id: CorpusId, options: DeleteOptions) → DeletedCorpusReceipt
+```
+
+Corpus creation requires a schema (§3.2) and an access policy (§3.4). Schema updates trigger validation against existing claims and MAY require a migration path: changing the schema of a populated corpus is a write-model concern, so the migration is applied under the write pipeline's conformance and visibility rules (see §7). A schema update whose new constraints are not satisfiable by the existing claims, and for which no migration is supplied, MUST be rejected rather than leaving non-conforming claims in place.
+
+Policy updates take effect at the next enforcement point (§9); they do not retroactively rewrite already-delivered results. Deletion is irreversible and produces a `DeletedCorpusReceipt` for audit purposes. Every management operation requires `admin` rights on the target corpus per its access policy, and — like access denials — is itself an auditable event written to the designated audit corpus.
+
+### 6.2 Discovery
+
+```
+listCorpora(filter: CorpusFilter?) → List<Corpus>
+getCorpus(id: CorpusId) → Corpus
+getCorpusSchema(id: CorpusId) → ClaimSchema
+```
+
+Discovery operations are read-only and respect the access policy (§3.4): corpora the caller cannot read are not returned by `listCorpora`, and `getCorpus`/`getCorpusSchema` for a corpus the caller cannot read are denied as a read-access failure (not reported as "not found", except where a profile deliberately conflates the two to avoid leaking existence). Enforcement is through the authorization adapter at the read enforcement point (§9).
+
+### 6.3 Multi-corpus queries
+
+Queries that span multiple corpora reference them by name in the query expression:
+
+```
+let general = σ_status=validated (corpus("wiki:nestjs-general"))
+let project = σ_status=validated (corpus("wiki:crewtracks-modules"))
+let layered = project ⊳ general
+```
+
+The library MUST enforce access policy on each corpus reference **individually** — the caller must have read access to *every* corpus referenced in a query. Access is checked per reference, not once for the query as a whole: a query that names one readable and one unreadable corpus is denied, never silently narrowed to the readable subset.
+
+Multi-corpus queries that combine corpora via ⊳, ⋈, or set operations produce a result corpus whose schema is the **union** of the input schemas — or the **intersection**, for restrictive operations that can only emit fields common to all inputs. The library validates that combining operations are schema-compatible before evaluation; incompatible combinations fail at parse time rather than producing claims that violate the result schema.
