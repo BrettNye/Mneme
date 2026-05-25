@@ -2429,3 +2429,67 @@ This appendix records the reconciliation of findings from prior specification re
 *Fifth-audit `rule_max_confidence` resolution.* The fifth audit also surfaced that the third-audit "fix" for the now-deprecated `rule_max_confidence` had quietly committed Dirichlet to concentration semantics while leaving the rule name suggesting mean and the Beta criterion unpinned. The fifth-audit fix splits the rule, following the same logic that drove the fourth-audit Gaussian de-aliasing: when two operations have different semantics, give them different names. *Lesson: the protocol-uniform-rule-name contract is not only about cross-type uniformity — it is also about unambiguous naming within a single type. Ambiguous names invite the same audit finding in every future review.*
 
 *Sixth-audit table-entry-as-claim.* The sixth audit found that the convention-propagation table — the very artifact built to enforce rigor — contained a false justification and an over-claim. *Lesson: a table entry is itself a claim that requires verification, not a place to record a conclusion without its derivation. Every entry in a propagation table must show *why* an operation is correct under the convention, not merely assert that it is.*
+
+## Appendix G — Deferred and out-of-scope
+
+This appendix is a catalogue, not a design. It records what the specification deliberately does not address, so that the boundary of the normative body is explicit rather than implied. Each item names the gap and the reason for deferral; none of them is sketched here, because committing to a design before the deferral conditions are met would be the scope creep the tiering structure exists to prevent. Items marked *deferred to v0.3* are planned subsystems whose design awaits a stable v0.2 core; items marked *out of scope* are concerns the library deliberately leaves to its consumers or downstream products.
+
+### G.1 Deferred to v0.3
+
+**Federation across deployments.** The specification assumes a single Mneme deployment. Multi-deployment scenarios — one Polis instance per client, queries that span across them, identity and authentication across deployments, cross-deployment query semantics with their attendant latency and consistency questions, and conflict resolution when federated corpora disagree — are unspecified. Federation is deferred to v0.3 because its design depends on a stable single-deployment core that v0.2 is still establishing; designing federation against a moving target would be premature.
+
+**Schema-migration tooling.** Schemas are versioned, but the specification does not define migration semantics in depth. A real system needs explicit migration declaration (how to transform v1 claims to v2), read-time schema coercion (querying older claims under a newer schema), and validation strictness levels (strict, permissive, coerce). This is a sizable subsystem deferred to v0.3, deliberately held back until the v0.2 core is stable so that migration tooling is built against settled type and scope conventions rather than evolving ones.
+
+**Cost models and optimizer internals.** The specification classifies operators by incremental-evaluation behavior but provides no cost models. A real query planner needs per-operator cost functions parameterized by input size and adapter capabilities, estimated-cardinality propagation through query plans, and plan-equivalence detection for plan caching. This is normal query-optimizer work, deferred to v0.3 because it depends on having real workloads to calibrate the cost functions against; modelling cost without representative workloads would produce numbers with no predictive value.
+
+**Distributed multi-writer semantics.** The specification assumes the storage adapter handles multi-writer races through its own transaction primitives (Postgres MVCC, SQLite single-writer). Deployments needing distributed multi-writer semantics require additional design — causal ordering across writers, CRDT semantics for specific operators, and quorum-based commit protocols. This is an extension point that v0.2 supports only through the adapter's transaction primitives; the distributed-systems semantics are deferred to v0.3 rather than specified now.
+
+**Library-itself observability.** The library should eventually expose its own observability surface — metrics, traces, slow-query logs, and subscription health — as a first-class concern, both because operators need it and because it integrates with the broader audit story, since the library's own operations are themselves auditable claims. This surface is deferred to v0.3; v0.2 does not specify it.
+
+### G.2 Out of scope
+
+**Consumer-scale operational specifics.** Operational targets that belong to a deployment rather than to the algebra — latency budgets, write-throughput targets, and similar consumer-scale operational specifics — are acknowledged as out of v0.2 scope. They are properties of a particular hosted offering and its workload, not of the library that is the specified artifact, and so they are left to consumers and downstream products rather than mandated by the specification.
+
+### G.3 Deferred decisions
+
+**Reference-implementation language choice.** Consistent with the implementation-neutral stance of §1.4, the specification mandates no host language: a conforming implementation MAY be written in any language whose type system can express the claim and corpus types. The choice of programming language for the *reference* implementation is therefore a deferred decision tracked separately here rather than fixed in the normative body. Pinning an implementation language prematurely would conflate the contract (the typed algebra and its protocols) with one realization of it, and would contradict the implementation-neutral commitment that lets the specification be conformed to in any suitable language.
+
+## Appendix H — Erasure profile [Prof, DEFERRED]
+
+**Status: specified, NOT shipped.** This appendix preserves the architectural sketch for a customer-gated erasure profile. It is explicitly NOT part of the normative body of this specification: erasure is a `[Prof]` customer-gated profile that is DEFERRED, and no conforming v0.2 implementation is expected to provide it. The sketch is recorded so that the design is not lost, the prerequisites already banked in v0.1.1 are accounted for, and the conditions under which the work would be undertaken are documented as a profile gap rather than a system gap.
+
+### H.1 Architectural sketch (preserved)
+
+The earlier v0.2 draft carried a substantive erasure design, sound at the architectural level, whose implementation has issues requiring customer-specific resolution. The sketch is preserved as follows:
+
+- Erasure is physical removal from primary storage, producing a **Tombstone** record.
+- Tombstones preserve metadata (id, schemaVersion, scopeHash, erasure timestamp and reason) but not content.
+- Content hashes MAY be preserved as **cryptographic commitments** under HMAC with KMS-held keys, IF legally permissible for the data category.
+- Derivation provenance includes input hashes (already mandatory per v0.1.1 — see H.3).
+- Replay degrades across **stratified reproducibility tiers**: exact reproduction when inputs are present; integrity-verifiable when inputs are erased but hashes are preserved; acknowledgment-only when the hashes are also erased.
+
+### H.2 The three blocking issues
+
+The v0.1.1 review surfaced three serious issues that block shipping erasure as drafted:
+
+1. **Crypto error — HMAC, not salt.** Per-corpus salt is insufficient for low-entropy content domains; HMAC with KMS-held secret keys is required instead. The earlier draft's cost estimate (~1 week for crypto primitives) was off by 3–4x.
+2. **Legal hole — GDPR hash-as-personal-data.** Under GDPR, a hash of personal data may itself be personal data when re-identification is feasible. For low-entropy data — exactly the data that typically triggers erasure requests — preserving content hashes may not satisfy Article 17, and the integrity-verifiable reproducibility tier may collapse to unverifiable for precisely that data. Legal counsel is required to determine the right policy per jurisdiction.
+3. **Cost underestimate — 22–25 person-weeks.** Authenticated data structures (Merkle accumulators over a bitemporal multi-backend corpus) are weeks of work, not a single week of crypto primitives. Realistic total erasure cost is 22–25 person-weeks, not the 13 originally estimated.
+
+### H.3 Banked v0.1.1 prerequisites
+
+The v0.1.1 errata bank the prerequisites for future erasure work, recorded now because they cannot be added retroactively:
+
+- **Mandatory input hashing** in derivation provenance: future erasures can preserve audit chains for derivations committed under v0.1.1, even though current consumers do not need the data.
+- **Model-version pinning** (embedding-model and similarity-function versions): replay can identify whether the necessary models are still available.
+- **`evaluationClock` pinning**: replay is deterministic, with no decay drift.
+
+### H.4 Trigger conditions
+
+The erasure profile is built when at least one of the following becomes true:
+
+1. A regulated customer (GDPR-, CCPA-, or HIPAA-subject) is in the signed or imminent pipeline.
+2. Legal counsel has provided jurisdiction-specific guidance on hash-preservation policies.
+3. Sufficient engineering capacity is committed for the realistic 22–25 person-week scope.
+
+Until at least one trigger fires, the architectural sketch is preserved, the prerequisite provenance discipline is in place, and the absence of erasure is documented as a profile gap. When a trigger does fire, the work is a 5–7 month, deeply sequential effort (legal review, crypto design against the customer's HMAC/KMS infrastructure, authenticated-data-structure design with a proper cost estimate, implementation per this sketch adjusted for legal findings, and customer-specific compliance documentation) — and customers should be told this honestly.
