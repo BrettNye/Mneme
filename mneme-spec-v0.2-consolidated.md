@@ -691,3 +691,92 @@ The result is a corpus containing both the original claims and their evidence-gr
 
 **Incremental evaluation.** Streamable for bounded `d` when the evidence-graph index is maintained: a new claim brings its own bounded neighborhood. Unbounded depth (`d = ∞`) is generally expensive to maintain incrementally and SHOULD use lazy evaluation.
 
+### 4.8 Contradiction detection — ⊥ `[C]`
+
+Contradiction detection finds claims that conflict. Unlike the retrieval operators of §4.2–§4.7, the contradiction operators do not return a corpus: their output is a set of *meta-relations* over the corpus. Two representations are provided — a pairwise form and a more general clustered form — together with resolution operators that consume the detected conflicts and produce a new corpus state.
+
+```
+⊥_pairs    : Corpus → Set<ContradictionPair>      `[C]`
+⊥_clusters : Corpus → Set<ContradictionCluster>   `[C]`
+```
+
+`⊥_pairs` is the pairwise form. `⊥_clusters` is the more general n-way form. Both are core-tier.
+
+#### Pairwise contradictions — `⊥_pairs`
+
+`⊥_pairs` finds claim pairs that conflict. Two claims conflict iff:
+
+1. They share `(subject, key, scope)`.
+2. They have different `value`s.
+3. Both are above the corpus's contradiction confidence threshold.
+
+The output is the set of pairs, NOT a corpus — contradictions are meta-relations over the corpus.
+
+```
+ContradictionPair {
+  left           : Claim
+  right          : Claim
+  conflictReason : ConflictReason                  -- value-difference, status-conflict, …
+  resolution     : Resolution?                     -- if a resolution policy was applied
+}
+```
+
+#### Clustered contradictions — `⊥_clusters`
+
+When multiple claims disagree about the same `(subject, key, scope)` with three or more distinct values, the pair representation produces `N×(N−1)/2` binary pairs that lose the structure of the disagreement: "three sources support A, one supports B, one supports C" is more informative than "seven pairs in conflict." `⊥_clusters` is the cluster-typed representation that captures this structure alongside the pairwise form.
+
+```
+ContradictionCluster {
+  triple                   : (Subject, Key, Scope)
+  valueGroups              : Map<Value, Set<Claim>>
+  totalClaims              : Number
+  distinctValues           : Number
+  agreementRatio           : Number              -- agreementRatio = largest_group_size / total_claims; 1.0 = consensus, 1/k = perfect disagreement among k groups
+  highestConfidenceGroup   : Value?              -- value with highest combined confidence
+  combinedConfidences      : Map<Value, Confidence>  -- per-value combined confidence
+}
+```
+
+The cluster captures which sources support which values, the combined confidence per value, and the highest-confidence position.
+
+Pairs are a derived special case: each cluster with exactly two distinct values produces one pair. For a cluster with `k` distinct values, the number of derivable pairs is `k×(k−1)/2` if all pairs are needed, or `k−1` if "consensus vs each minority" is sufficient. Both projections are supported via helper operators, exposed as `derived_pairs`.
+
+#### Resolution operators
+
+Resolution operators consume detected conflicts and produce a new corpus state. The pairwise resolvers operate on the pair set; the cluster-aware resolvers operate on the cluster set.
+
+```
+resolve_deprecate_lower : Set<ContradictionPair> × Corpus → Corpus
+resolve_flag_for_review : Set<ContradictionPair> × Corpus → Corpus
+resolve_keep_both       : Set<ContradictionPair> × Corpus → Corpus
+```
+
+```
+resolve_deprecate_minority      : Set<ContradictionCluster> × Corpus → Corpus   `[C]`
+resolve_promote_consensus       : Set<ContradictionCluster> × Corpus → Corpus   `[C]`
+resolve_synthesize_belief       : Set<ContradictionCluster> × Corpus → Corpus   `[C]`
+resolve_synthesize_belief_multi : Set<ContradictionCluster> × Corpus → Corpus   `[P]`
+```
+
+- `resolve_deprecate_minority` deprecates the minority-position claims, leaving the larger value groups in force.
+- `resolve_promote_consensus` deprecates minority-position claims and promotes the consensus value to validated status.
+- `resolve_synthesize_belief` `[C]` produces a new derived claim representing the combined belief over a *binary* disagreement (exactly two value groups). It uses the Beta-typed combined confidence via the subjective-logic bridge of §2.5. Because the binary case requires only Beta math, this operator is core-tier and available to all core consumers without protocol-tier dependencies.
+- `resolve_synthesize_belief_multi` `[P]` handles clusters with `k > 2` distinct value groups using the Dirichlet generalization (forward-reference §5.3). It is protocol-tier because multi-way belief synthesis requires the Dirichlet protocol implementation. Core-only deployments without the Dirichlet protocol cannot use this operator and must either reduce multi-way clusters to pairwise resolution or pull in the protocol extension.
+
+This core/protocol split keeps the core-tier promise honest: cluster *detection* (`⊥_clusters`) and binary belief synthesis work in core, but multi-way belief synthesis is a protocol-tier capability because it requires Dirichlet math.
+
+**Equational laws.**
+
+- `⊥_pairs(C) ⊆ derived_pairs(⊥_clusters(C))` — pairs are derivable from clusters (this is in fact an equality, but `⊆` is the safe lower-bound statement).
+- `⊥_pairs(σ_p(C)) ⊆ ⊥_pairs(C)` — filtering may remove contradiction pairs but cannot create new ones.
+- Cluster generation is deterministic given the `(subject, key, scope)` grouping function.
+- Selection commutes: `⊥_clusters(σ_p(C))` includes only clusters whose claims are all in `σ_p(C)`.
+
+**Incremental evaluation.** Streamable. A new claim either:
+
+- joins an existing cluster (matches an existing `(subject, key, scope)`, adds to a `valueGroup`);
+- starts a new cluster (matches no existing triple); or
+- resolves a cluster (if its value matches an existing group, it increases that group's combined confidence; if it deprecates a minority claim, it may collapse the cluster to consensus).
+
+The pairwise form is maintained the same way: a new claim may introduce contradictions only with existing claims sharing its `(subject, key, scope)`, so the search is scoped to that triple. The library maintains per-triple cluster state in subscription state (§8), updated incrementally on each write.
+
