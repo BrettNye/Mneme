@@ -1030,3 +1030,18 @@ Aggregation operators do NOT have a closed-form composition with each other. Agg
 For subscriptions (§8), queries that include aggregation must be over streamable aggregates, or pay re-evaluation cost on each corpus change.
 
 **Storage adapter support.** Aggregation translates well to SQL adapters (`GROUP BY`, `COUNT`, `SUM` are native). Vector DBs typically lack aggregation; the library falls back to retrieving the candidate set and aggregating in memory. For high-cardinality `α_groupBy` operations the library provides cardinality hints to consumers and refuses pathologically expensive queries.
+
+### 4.14 Optimizer-relevant laws
+
+The algebra's equational laws enable a query optimizer. Key rewrite rules:
+
+- **Push selection down**: apply `σ` as early as possible to shrink working sets before more expensive operators run.
+- **Push temporal slicing down**: apply `τ` before other operators when valid-time and recorded-time semantics permit, so downstream operators see only the relevant time window.
+- **Push decay before confidence filters**: when a query filters by effective confidence, apply `δ` first so the filter sees decayed values.
+- **Hoist similarity to after selection**: apply `σ` before `ρ` so the corpus is filtered before ranking, avoiding expensive similarity computations on claims that are filtered out (the monotonicity-under-selection law of §4.7 justifies this).
+- **Combine adjacent projections**: `π_f ∘ π_g = π_{f ∩ g}` — adjacent projections collapse into a single projection over the intersection of their field sets.
+- **Memoize stable subqueries**: subqueries against stable temporal slices — e.g. `τ_recorded(past)` slices, whose recorded-time window lies wholly in the past and can no longer change — can be cached and reused across queries.
+
+**Dempster combinations are freely reorderable.** Dempster's rule of combination is unconditionally commutative AND associative: `m₁ ⊕ m₂ = m₂ ⊕ m₁` and `(m₁ ⊕ m₂) ⊕ m₃ = m₁ ⊕ (m₂ ⊕ m₃)` for all mass functions, with the vacuous mass function as identity. The optimizer may therefore group and reorder a chain of Dempster combinations in any order without changing semantics. High-conflict inputs (Zadeh's paradox) can produce counterintuitive results, but that is a property of the rule itself, not a breakdown of associativity, so it places no ordering constraint on the optimizer. Dempster's rule is, however, *not* idempotent (`m ⊕ m ≠ m`), so the optimizer must not introduce or drop duplicate combination inputs when reordering.
+
+The optimizer is a separate component from the algebra. The algebra defines what rewrites are *legal* — the equational laws above and in §4.2–§4.13; the optimizer chooses among legal evaluation orders on cost grounds. An optimizer is never required for correctness, and no rewrite it performs may change a query's result.
