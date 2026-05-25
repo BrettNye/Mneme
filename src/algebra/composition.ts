@@ -20,6 +20,9 @@ export const dedupContent =
 
 export type Format = "xml" | "markdown" | "json" | "text";
 
+const escXml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 // φ_format: render a RankedCorpus into a ComposedContext
 export const format =
   (fmt: Format) =>
@@ -29,7 +32,7 @@ export const format =
     switch (fmt) {
       case "xml": {
         const body = rc.scored
-          .map((s) => `<claim score="${s.score}">${String(s.claim.value)}</claim>`)
+          .map((s) => `<claim score="${s.score}">${escXml(String(s.claim.value))}</claim>`)
           .join("\n");
         content = `<context>\n${body}\n</context>`;
         break;
@@ -58,7 +61,10 @@ export const budget =
   (max: number, count: TokenCounter = defaultCounter) =>
   (cc: ComposedContext): ComposedContext => {
     if (count(cc.content) <= max) return cc;
-    const sliced = cc.content.slice(0, max * 4);
+    let sliced = cc.content.slice(0, max * 4);
+    while (sliced.length > 0 && count(sliced) > max) {
+      sliced = sliced.slice(0, Math.floor(sliced.length * 0.9));
+    }
     return { ...cc, content: sliced, tokenCount: count(sliced) };
   };
 

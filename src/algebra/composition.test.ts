@@ -1,4 +1,4 @@
-import { kappa, dedupContent, format, budget, defaultCounter } from "./composition.js";
+import { kappa, dedupContent, format, budget, defaultCounter, type TokenCounter } from "./composition.js";
 
 // kappa xml - basic smoke test from spec
 it("kappa emits well-formed xml under the token budget", () => {
@@ -39,6 +39,25 @@ it("format json produces JSON array with value and score", () => {
   expect(parsed[0].score).toBe(0.7);
 });
 
+// format xml: escapes special XML characters in claim values
+it("format xml escapes < > & in claim values", () => {
+  const rc = { scored: [{ claim: { value: "a < b & b > c" } as any, score: 0.5 }] };
+  const cc = format("xml")(rc);
+  // escaped entities must appear in output
+  expect(cc.content).toContain("&lt;");
+  expect(cc.content).toContain("&gt;");
+  expect(cc.content).toContain("&amp;");
+  // extract body between opening claim tag and closing claim tag
+  const afterOpenTag = cc.content.split('<claim score="0.5">')[1];
+  const body = afterOpenTag.split("</claim>")[0];
+  // no raw < or > in body
+  expect(body).not.toContain("<");
+  expect(body).not.toContain(">");
+  // no raw & (& not followed by entity keyword) — remove known entities and check no & remains
+  const stripped = body.replace(/&amp;|&lt;|&gt;/g, "");
+  expect(stripped).not.toContain("&");
+});
+
 // format text: plain text, no markup
 it("format text produces plain text with no markup", () => {
   const rc = { scored: [{ claim: { value: "plain claim" } as any, score: 0.9 }] };
@@ -56,7 +75,20 @@ it("budget truncates content when over token budget", () => {
   const cc = { format: "text" as const, content: longContent, tokenCount: defaultCounter(longContent) };
   const result = budget(10)(cc); // max 10 tokens
   expect(result.tokenCount).toBeLessThanOrEqual(10);
-  expect(result.content.length).toBeLessThanOrEqual(40 + 1); // 10*4 chars
+  expect(result.content.length).toBeLessThanOrEqual(10 * 4); // 10 tokens * 4 chars/token
+});
+
+// budget: custom token counter — result must honor the counter's token model
+it("budget with custom counter returns tokenCount <= max for any counter", () => {
+  // custom counter: 1 token per char (so max=5 means at most 5 chars)
+  const charCounter: TokenCounter = (s) => s.length;
+  const max = 5;
+  const longContent = "a".repeat(100); // 100 chars => charCounter gives 100 tokens
+  const cc = { format: "text" as const, content: longContent, tokenCount: charCounter(longContent) };
+  const result = budget(max, charCounter)(cc);
+  // with max*4 slice and charCounter, naive slice gives 20 chars which is still > 5
+  expect(result.tokenCount).toBeLessThanOrEqual(max);
+  expect(charCounter(result.content)).toBeLessThanOrEqual(max);
 });
 
 // budget: returns unchanged when under budget
