@@ -497,3 +497,197 @@ AccessPolicy {
 
 The library **MUST** enforce the access policy at every read, write, and subscribe operation. Access denials are themselves auditable events and are written to a designated audit corpus.
 
+---
+
+## 4. Query algebra
+
+The query algebra is the heart of Mneme: a set of composable, typed operators over corpora, each presented with a type signature, an intuition, an equational-law section, and an incremental-evaluation note. This section specifies the retrieval, filtering, and ranking operators — selection (§4.2), projection (§4.3), temporal slicing (§4.4), decay (§4.5), similarity ranking (§4.6), and provenance traversal (§4.7) — under the notation pinned in §0.4. The combination, contradiction, override, join, and composition operators, the optimizer-relevant laws, and the aggregation operators follow in §4.8–§4.14.
+
+### 4.1 Type-signature notation
+
+Each operator is presented with a type signature, an intuition, and an equational-law section, using the operator notation fixed in §0.4. The supporting type names are recalled here:
+
+- `Corpus` denotes a typed collection of claims.
+- `RankedCorpus` is a corpus where each claim carries an associated score (typically a similarity score).
+- `ComposedContext` is a token-budgeted, formatted document ready for LLM input; it is a *terminal* type — the algebra ends when composition produces it.
+
+The retrieval operators in §4.2–§4.7 all have signature `Corpus → Corpus` except similarity ranking, which has signature `Corpus → RankedCorpus`. Because most retrieval operators preserve the `Corpus` type, they compose freely; the equational laws below state when that composition commutes or simplifies, which is what an optimizer (§4.13) exploits.
+
+Every operator carries an **incremental-evaluation note** classifying its cost under a streaming workload — whether the operator can be maintained in `O(1)` or `O(log n)` per write (*streamable*) or requires re-evaluation (*non-streamable*). The subscription model (§8) consumes this classification directly.
+
+### 4.2 Selection — σ `[C]`
+
+```
+σ_p : Corpus → Corpus
+```
+
+Filter the corpus to the claims matching predicate `p`. Selection is the workhorse of the algebra — most queries are mostly selection. The predicate language is composable and includes:
+
+- **Relational predicates** — `key = X`, `subject ∈ S`, `scope.entityId = Y`.
+- **Probabilistic predicates** — `confidence > 0.7`, evaluated using a configurable point estimator over the confidence distribution (the Beta effective mean of §2.4 by default).
+- **Temporal predicates** — `valid-at(D)`, `recorded-after(T)` (see also the τ operator, §4.4).
+- **Tag predicates** — `tag ∈ T`, `tag ⊇ S` (set containment).
+- **Status predicates** — `status = validated`, `status ∈ {validated, provisional}`.
+- **Value predicates** — predicates against the `value` field and paths within it (specified below).
+- **Compound predicates** — `p₁ ∧ p₂`, `p₁ ∨ p₂`, `¬p`; predicates compose via the boolean operators.
+
+#### 4.2.1 Value predicates
+
+The corpus schema (§3.2) declares `valueSchemas`, and the implicit promise of a declared value schema is that values can be queried per their declared structure. The selection language therefore includes value predicates against the `value` field, in two forms — path predicates that address a location *within* the value, and whole-value predicates that match the value as a unit:
+
+```
+-- Value path predicates
+σ_{value.path = X}                  -- equality on a path within the value
+σ_{value.path > X}                  -- comparison (gt, gte, lt, lte)
+σ_{value.path ∈ S}                  -- set membership
+σ_{value.path matches regex}        -- regex match on string-valued paths
+σ_{value.path is null}              -- null check
+σ_{value.path exists}               -- path-existence check
+
+-- Whole-value predicates
+σ_{value = X}                       -- equality for primitive-valued claims
+σ_{value matches pattern}           -- structural pattern match
+```
+
+**Path syntax.** Paths follow JSON-path conventions: dotted access (`value.amount.currency`), array indexing (`value.items[0]`), and wildcard array (`value.items[*]`). **Recursive wildcards are NOT supported** — a path addresses a bounded, statically-knowable set of locations.
+
+**Parse-time type checking.** When the corpus declares a value schema for the key, the library **MUST** perform parse-time type checking of the predicate against that schema and **MUST** reject predicates that:
+
+- reference fields not present in the schema,
+- compare incompatible types, or
+- use enum values not in the declared enum.
+
+When no schema is declared for the key, value predicates are *dynamically typed*. A runtime type mismatch produces a typed error — never a silent empty result. (This mirrors the rule for non-value field references in §3.2: a missing field is a query-time error, not silence.)
+
+**Adapter support.** Value-predicate support is a per-`(adapter, predicate-kind)` capability — different predicate kinds (equality, range, set-membership, regex, structural pattern, null-check) have different indexing characteristics even within one adapter, and the optimizer chooses an evaluation strategy per kind. The adapter-capability matrix and the optimizer's per-kind strategy (push-down to a native index, push-down as a scan, in-memory fallback, or parse-time rejection) are specified with the storage adapter protocol in §10.
+
+**Equational laws.**
+
+- Commutativity: `σ_{p₁}(σ_{p₂}(C)) = σ_{p₂}(σ_{p₁}(C))`.
+- Conjunction split: `σ_{p₁ ∧ p₂}(C) = σ_{p₁}(σ_{p₂}(C))`.
+- Value predicates compose with the rest of the predicate language and respect these laws: commutativity with other selections holds when the addressed paths are unambiguous, and push-down through joins, temporal slicing, and decay holds for value predicates that do not reference those operators' fields (see §4.13).
+
+**Incremental evaluation.** Streamable. For a new write, check whether the new claim matches `p`; if so, add it to the result. On a deletion (deprecation), remove the claim if it had previously matched. Value-predicate matching is per-claim and so does not change this classification; only its *cost* per write varies by adapter capability (§10).
+
+### 4.3 Projection — π `[C]`
+
+```
+π_f : Corpus → Corpus
+```
+
+Restrict each claim to the subset of fields specified by `f`. The result is still a corpus, but with thinner claims (some fields elided). Projection is used primarily for token efficiency in composition: when the consumer does not need full claims, projecting early reduces the data flowing through the rest of the pipeline.
+
+**Equational laws.**
+
+- Idempotence: `π_f(π_f(C)) = π_f(C)`.
+- Composition: `π_f(π_g(C)) = π_{f ∩ g}(C)` when `f ⊆ g`. Adjacent projections combine into a single projection over the intersection of their field sets (see §4.13).
+
+**Incremental evaluation.** Streamable. Each new write is projected independently.
+
+### 4.4 Temporal slicing — τ `[C]`
+
+Bitemporal time-travel over the two time dimensions of §2.6 (valid-time and recorded-time). There are three variants, one for each bitemporal question, plus a shorthand for the present:
+
+```
+τ_valid(T)    : Corpus → Corpus
+τ_recorded(T) : Corpus → Corpus
+τ_known(T)    : Corpus → Corpus
+```
+
+- **`τ_valid(T)`** — restrict to claims whose valid-time interval covers `T`. Answers *"what was true about the world at T."*
+- **`τ_recorded(T)`** — restrict to claims with `recorded ≤ T`. Answers *"what had been written to the corpus by T."*
+- **`τ_known(T)`** — restrict to claims where both the valid-time interval covers `T` *and* `recorded ≤ T`. Answers *"what would the system have computed if asked at T about T."*
+
+**`τ_now`** is shorthand for `τ_known(currentInstant())`. Most queries against the present SHOULD use `τ_now`. Time-traveling queries SHOULD use `τ_known(T)` for the standard "what did we know then" question; the other two variants are for specialized needs — auditing historical writes (`τ_recorded`) or revising a retrospective view as late-arriving claims land (`τ_valid`).
+
+**Equational laws.**
+
+- `τ_valid(T)` and `σ_p` commute when `p` does not reference valid-time.
+- `τ_recorded(T)` and `σ_p` commute when `p` does not reference recorded-time.
+- `τ_known(T) = τ_valid(T) ∘ τ_recorded(T)` — the bitemporal slice is the composition of the two single-dimension slices.
+
+**Incremental evaluation.** For `τ_recorded(T)` with `T ≤ now`, the result is *stable*: no new write can be `recorded` at or before a past `T`, so the slice never changes. For `τ_now` the result evolves, and the library re-evaluates incrementally on each commit (the new claim enters the slice iff its valid-time covers the advancing clock).
+
+### 4.5 Decay — δ `[C]`
+
+```
+δ_policy : Corpus → Corpus
+```
+
+Apply a time-based confidence adjustment per `policy`. A decay policy is a function from `(recorded, current, source)` to a confidence multiplier in `[0, 1]`. Decay does **NOT** mutate the underlying stored confidence; it produces a new corpus in which each claim's *effective* confidence reflects the decay. Subsequent operators that reference confidence (e.g. `σ_{confidence > 0.7}`) see the effective values. This is the operational meaning of "effective confidence is computed at query time, not at write time" (§2.4).
+
+Standard policies:
+
+- **`δ_none`** — no decay; the identity transformation.
+- **`δ_exponential(half_life)`** — exponential decay with the given half-life.
+- **`δ_linear(rate)`** — linear decay at `rate` per day.
+- **`δ_step(threshold)`** — full confidence until the claim reaches `threshold` age, then zero.
+
+Per-source default half-lives for `δ_exponential` are tabulated in Appendix A; corpora MAY override them per schema, and an individual query MAY override the corpus default (§3.3).
+
+**Equational laws.**
+
+- `δ_pol(σ_p(C)) = σ_p(δ_pol(C))` when `p` does not reference confidence — decay and a confidence-independent selection commute.
+- `δ_{pol₁}(δ_{pol₂}(C))` is in general **NOT** equal to `δ_{pol₁ ∘ pol₂}(C)`. Decay is not freely composable: applying two decay policies in sequence is not the same as applying their functional composition, because each policy reads the *current* effective confidence rather than the raw stored value.
+
+**Incremental evaluation.** Streamable. Each new claim has decay applied based on its own `recorded` time and the current time, independently of the other claims.
+
+### 4.6 Similarity ranking — ρ `[C]`
+
+```
+ρ_{sim, q} : Corpus → RankedCorpus
+```
+
+Score each claim by its similarity to a query value `q` under similarity function `sim`. The output is the input corpus annotated with a similarity score per claim — i.e. a `RankedCorpus`. Similarity ranking is the one retrieval operator that changes the corpus type.
+
+Similarity functions are pluggable through the `SimilarityFn` protocol `[P]`:
+
+```
+SimilarityFn {
+  scoreOne(claim: Claim, query: Value) → Number        -- 0..1 similarity
+  scoreBatch(claims: Set<Claim>, query: Value) → Map<ClaimId, Number>
+  isPure : Bool                                          -- deterministic given the same inputs?
+  cost   : CostHint                                      -- O(1), O(log n), O(n), …
+}
+```
+
+`isPure` declares whether the function is deterministic given the same inputs (which governs cacheability and replay), and `cost` is a hint the optimizer uses when ordering operators. A similarity function is registered per corpus in the schema's `similarities` map (§3.2), and the corpus's `defaultSimilarityFn` (§3.3) is used for ρ when none is named.
+
+Standard similarity functions (full input-type and cost table in Appendix B):
+
+- **`sim_cosine`** — vector cosine over embeddings (requires an embedding adapter).
+- **`sim_jaccard`** — Jaccard over token sets.
+- **`sim_bm25`** — BM25 over text content.
+- **`sim_exact`** — exact match (returns `1.0` or `0.0`).
+- **`sim_structural`** — domain-specific structural matching for typed value schemas.
+
+Because `ρ_cosine` (and any embedding-based function) depends on the embedding model in use, a derived write whose query references a similarity-based operator MUST capture the similarity-function and embedding-model versions in derivation provenance (§2.7); replay is conditional on those versions remaining available (§6).
+
+**Equational laws.**
+
+- Monotonicity under selection: `ρ_{sim,q}(σ_p(C))` produces a subset of the rankings of `ρ_{sim,q}(C)` — filtering before ranking yields a subset of the ranking obtained after filtering. (This is the basis for hoisting similarity to after selection in §4.13.)
+- Idempotence: `ρ_{sim,q}(ρ_{sim,q}(C))` is well-defined but typically redundant; the second application is a no-op when scores are stored.
+
+**Incremental evaluation.** **Not streamable** in the general case: a new claim may score higher than the current top-K and shift the ranking. For small `K` the library can maintain a sorted structure efficiently; for large `K`, full re-ranking is expensive. Subscriptions over ρ should be used with caution (see §8).
+
+### 4.7 Provenance traversal — γ `[C]`
+
+```
+γ_d : Corpus → Corpus
+```
+
+For each claim in the input corpus, follow evidence edges to depth `d`, returning the transitive closure of cited claims. The traversal walks the evidence DAG of §2.8; acyclicity guarantees the closure is finite and that traversal terminates.
+
+- `γ_0(C) = C` — depth zero is the identity.
+- `γ_1(C)` includes `C` plus all directly-cited claims.
+- `γ_∞(C)` includes the full provenance graph reachable from `C`.
+
+The result is a corpus containing both the original claims and their evidence-graph ancestors, with no duplication.
+
+**Equational laws.**
+
+- Monotonicity: `C ⊆ γ_d(C)` for all `d ≥ 0` — traversal only ever adds claims.
+- Composition: `γ_{d₁}(γ_{d₂}(C)) = γ_{d₁ + d₂}(C)` — composing two bounded traversals is a single traversal to the summed depth.
+
+**Incremental evaluation.** Streamable for bounded `d` when the evidence-graph index is maintained: a new claim brings its own bounded neighborhood. Unbounded depth (`d = ∞`) is generally expensive to maintain incrementally and SHOULD use lazy evaluation.
+
