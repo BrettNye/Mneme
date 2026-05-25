@@ -1140,3 +1140,60 @@ So `is_idempotent` is true for `rule_weighted_avg`, `rule_max_mean`, `rule_max_c
 **Note on the max-selection split.** `rule_max_mean` and `rule_max_concentration` answer different questions and are not interchangeable for Dirichlet: max-mean selects the input whose top category has the highest point estimate (most confident-sounding), while max-concentration selects the input with the most evidence behind it (largest `S`). For example, an input with a sharp top-category mean but small `S` wins under max-mean and loses under max-concentration to a flatter but far-better-evidenced input. Consumers MUST choose explicitly; there is no consumer-friendly default.
 
 References: Jøsang, *Subjective Logic* (Springer, 2016), chapter 6, for the multinomial-opinion treatment and its Dempster-Shafer bridge.
+
+### 5.4 Gaussian / Kalman reference binding `[P]`
+
+Gaussian distributions model continuous measurements — sensor readings, scores, any quantity living on the real line rather than a discrete frame. It is a protocol-tier `[P]` binding: consumers in sensor and measurement domains register it; core implementations (Beta + scalar, §5.2) are not obligated to provide it. `T` is the pair `(μ, σ²)` — mean and variance.
+
+**Statistics.** `mean(d) = μ`; `variance(d) = σ²`; the 95% confidence interval is `μ ± 1.96σ`; `pdf(x)` is the standard Gaussian density. `mean` is the value `rule_max_mean` reads (§4.9); `variance` backs `rule_max_concentration` — lower variance is higher precision is higher concentration of mass around the mean.
+
+**Combination rules.** `combine(rule_id, a, b, params)` dispatches to the per-rule Gaussian math below, using the rule names pinned in §4.9. The two non-trivial rules — `rule_kalman` and `rule_weighted_avg` — are **distinct, not aliases**; the trust-vs-precision distinction between them is load-bearing (see below). `supported_rules()` returns `rule_kalman`, `rule_weighted_avg`, `rule_max_concentration`, and `rule_max_mean`; `rule_dempster` and `rule_evidence_pooled` return NotSupported.
+
+- `rule_kalman` — **precision-weighted Bayesian fusion** of independent measurements of a fixed underlying quantity. Weights = `1/σ²` (precision). The result variance `σ² = 1/(1/σ₁² + 1/σ₂²)` is strictly smaller than either input variance. **Non-idempotent ✗** — fusing a measurement with itself fabricates independence that does not exist and halves the variance; consumers MUST deduplicate by `observation_id` before fusion (§5.1).
+- `rule_weighted_avg` — **trust-weighted opinion averaging**. Weights come from the source-trust table in §4.9 (manual=1.3, verification=1.2, workflow=1.0, heuristic=0.9, llm=0.7, imported=0.6), **NOT** from precision. The result is the moment-matched Gaussian of the trust-weighted mixture distribution. **Idempotent ✓** — averaging an opinion with itself preserves the opinion.
+- `rule_max_concentration` — lowest-variance argument wins (highest precision = highest concentration of mass around the mean). **Idempotent ✓.** This is the rule for "select the most-precise opinion."
+- `rule_max_mean` — argmax over `μ` (highest position wins). **Idempotent ✓.** Rarely the desired semantic for Gaussian inputs — it just picks the rightmost position — but provided for cross-type consistency with the rule contract.
+- `rule_dempster` — **NotSupported.** Dempster's rule is defined on discrete frames, and a Gaussian over continuous values has no natural mass-function representation.
+- `rule_evidence_pooled` — **NotSupported.** Pooling assumes additive evidence counts (Beta/Dirichlet semantics), which has no direct Gaussian analog.
+
+So `is_idempotent` is true for `rule_weighted_avg`, `rule_max_concentration`, and `rule_max_mean`, and false for `rule_kalman` — the same per-rule contract the §4.9 equational laws and the errata idempotence table depend on. Only the evidence-combining rule (`rule_kalman`) is non-idempotent; the averaging and max-selection rules are idempotent, exactly as for Beta (§5.2) and Dirichlet (§5.3).
+
+**The trust-vs-precision distinction is the load-bearing semantic difference between the two non-trivial rules for Gaussians.** They are NOT aliases. They answer different questions:
+
+- `rule_kalman` answers: "given two independent measurements of the same fixed quantity, what is the Bayesian posterior?" Weights by precision. Reduces variance. Use when sources are equally trusted but you want to reduce uncertainty via independent observations.
+- `rule_weighted_avg` answers: "given two opinions about the same proposition with different source trust levels, what is the trust-weighted average opinion?" Weights by source trust. Preserves or increases variance. Use when sources have different trust levels and you want to preserve uncertainty about which is right.
+
+Combining a high-trust imprecise sensor with a low-trust precise one illustrates the difference: `rule_kalman` would weight by precision (low-trust precise wins), `rule_weighted_avg` would weight by trust (high-trust imprecise wins). These produce different means. The choice between them is a domain modeling decision, not a math choice.
+
+**Why the de-aliasing matters for the protocol contract.** The DistributionProtocol (§5.1) exists to provide a uniform rule-name interface across distribution types. If `rule_weighted_avg` collapsed into `rule_kalman` for Gaussians only, a consumer registering a custom distribution type would not know which semantic to implement — trust-weighted averaging (the Beta/Dirichlet contract) or precision-weighted fusion (the Gaussian-aliased version)? Keeping them distinct keeps the contract uniform: `rule_weighted_avg` is always trust-weighted opinion averaging; `rule_kalman` is always precision-weighted Bayesian fusion. Each distribution type implements the semantics correctly for its math, not by aliasing.
+
+The Kalman combination formula:
+
+```
+combine_kalman(G₁(μ₁, σ₁²), G₂(μ₂, σ₂²)) = G(μ, σ²)
+where:
+  σ²  = 1 / (1/σ₁² + 1/σ₂²)
+  μ   = σ² × (μ₁/σ₁² + μ₂/σ₂²)
+```
+
+The trust-weighted average formula (moment-matched Gaussian of the trust-weighted mixture):
+
+```
+combine_weighted_avg(G₁(μ₁, σ₁²), G₂(μ₂, σ₂²), w₁, w₂) = G(μ_avg, σ²_avg)
+where:
+  w₁, w₂ are normalized source-trust weights from §4.9 (w₁ + w₂ = 1)
+  μ_avg  = w₁μ₁ + w₂μ₂
+  σ²_avg = w₁σ₁² + w₂σ₂² + w₁w₂(μ₁ − μ₂)²
+```
+
+The variance formula is the law of total variance: weighted within-component variance plus between-component variance. The cross-term `w₁w₂(μ₁−μ₂)²` captures the uncertainty about which source is correct, which is exactly what opinion-averaging is supposed to represent. The variance never shrinks below the smaller input; it can be larger than both when the means disagree, which is the right behavior.
+
+**Idempotence verification.** With `G₁ = G₂ = G(μ, σ²)` and any weights `w₁ + w₂ = 1`: `μ_avg = w₁μ + w₂μ = μ`; `σ²_avg = (w₁+w₂)σ² + w₁w₂·0² = σ²`. So `combine_weighted_avg` returns `G(μ, σ²)` exactly. ✓ Idempotent, consistent with the errata §6.2 idempotence table. (`rule_kalman` makes no such guarantee: with `G₁ = G₂ = G(μ, σ²)` it returns `G(μ, σ²/2)` — the variance halves, which is the non-idempotence flagged above.)
+
+**Caveat: moment-matched approximation can misrepresent bimodal shape.** The moment-matched Gaussian is a *unimodal approximation* of what is potentially a bimodal mixture. When two trusted sources strongly disagree (`(μ₁−μ₂)² > σ₁² + σ₂²`, a rough threshold for visible bimodality), `rule_weighted_avg` returns a single Gaussian centered in the empty space between the modes with inflated variance — "probably around the midpoint, uncertain" when the truth is "A or B, not between." This is at odds with §1's rationale for preserving disagreement structure via clusters.
+
+When the between-means term `w₁w₂(μ₁−μ₂)²` dominates the within-variance terms `w₁σ₁² + w₂σ₂²`, the moment-matched Gaussian misrepresents the shape of the underlying mixture. Consumers should consider cluster-style representation (per §1, §4.8) instead of averaging, or fuse via `rule_kalman` if the sources are genuinely independent measurements of the same quantity. The library can detect this condition at runtime and warn: the v0.2 reference implementation emits a `bimodal_approximation_warning` when the between-means term exceeds the within-variance terms by 2× or more — i.e. when `w₁w₂(μ₁−μ₂)² ≥ 2·(w₁σ₁² + w₂σ₂²)`.
+
+**Connection to errata §6.2.** The de-aliasing keeps the rule-level idempotence claims valid across all distribution types. `rule_weighted_avg` is idempotent for Beta, Dirichlet, scalar, AND Gaussian inputs. The earlier "Gaussian weighted_avg is non-idempotent because it is a kalman alias" claim was a regression that contradicted the errata table; this de-aliasing removes the contradiction. The reference implementation flags the non-idempotence of `rule_kalman` loudly: **consumers using `rule_kalman` MUST implement observation-level deduplication** — re-ingesting the same measurement with the same `observation_id` must be filtered before fusion (§5.1). The protocol's `is_idempotent(rule_id)` returns false for `rule_kalman` so callers know to deduplicate.
+
+References: Welch & Bishop, "An Introduction to the Kalman Filter" (UNC, 1995, periodically updated). For the moment-matching of mixtures, any standard text on mixture distributions or Bayesian model averaging.
