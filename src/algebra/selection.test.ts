@@ -2,9 +2,10 @@ import { sigma } from "./selection.js";
 import { corpusOf } from "./types.js";
 import type { Claim } from "../core/claim.js";
 
+let _claimCounter = 0;
 function makeClaim(overrides: Partial<Claim> = {}): Claim {
   return {
-    id: "id-1" as any,
+    id: `id-${++_claimCounter}` as any,
     profile: "profile-1" as any,
     workspace: "ws-1" as any,
     subject: "alice",
@@ -76,10 +77,10 @@ it("sigma is commutative: σ_p1(σ_p2(C)) equals σ_p2(σ_p1(C))", () => {
   const right = sigma(p2)(sigma(p1)(corpus));
 
   expect(left.claims).toHaveLength(right.claims.length);
-  // Same subjects in result
-  const leftSubjects = [...left.claims].map(c => c.subject).sort();
-  const rightSubjects = [...right.claims].map(c => c.subject).sort();
-  expect(leftSubjects).toEqual(rightSubjects);
+  // Same claim ids in result (airtight equivalence)
+  const leftIds = [...left.claims].map(c => c.id).sort();
+  const rightIds = [...right.claims].map(c => c.id).sort();
+  expect(leftIds).toEqual(rightIds);
 });
 
 it("sigma commutativity with tagIn and recordedAfter", () => {
@@ -99,6 +100,10 @@ it("sigma commutativity with tagIn and recordedAfter", () => {
 
   expect(left.claims).toHaveLength(right.claims.length);
   expect(left.claims).toHaveLength(1); // only urgent + recorded > 500
+  // Same claim ids (airtight equivalence)
+  const leftIds = [...left.claims].map(c => c.id).sort();
+  const rightIds = [...right.claims].map(c => c.id).sort();
+  expect(leftIds).toEqual(rightIds);
 });
 
 // ── composed sigma equals single and predicate ─────────────────────────────
@@ -119,6 +124,8 @@ it("σ_p1(σ_p2(C)) equals σ_{p1 ∧ p2}(C)", () => {
 
   expect(composed.claims).toHaveLength(single.claims.length);
   expect(composed.claims).toHaveLength(1);
+  // Same claim id (airtight equivalence)
+  expect(composed.claims[0].id).toBe(single.claims[0].id);
 });
 
 // ── result corpus is still frozen/immutable ────────────────────────────────
