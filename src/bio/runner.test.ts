@@ -136,3 +136,140 @@ it("stop(); stop(); after a start is a safe no-op and does not throw", () => {
     vi.useRealTimers();
   }
 });
+
+// ---- startDreaming tests ----
+
+import type { DreamReport } from "./processes/dreaming-types.js";
+
+const makeDreamMemory = () => {
+  let cycleCalls = 0;
+  let dreamCalls = 0;
+  const dreamEpisodes: string[] = [];
+  const dreamVersions: string[] = [];
+  return {
+    runCycle: (_episode: string): CycleReport => {
+      cycleCalls++;
+      return { opsApplied: cycleCalls, claimsSuperseded: 0, errors: [] };
+    },
+    dream: async (episode: string, run: { modelVersion: string }): Promise<DreamReport> => {
+      dreamCalls++;
+      dreamEpisodes.push(episode);
+      dreamVersions.push(run.modelVersion);
+      return { proposed: 0, admitted: 0, dropped: [], errors: [] };
+    },
+    get cycleCalls() { return cycleCalls; },
+    get dreamCalls() { return dreamCalls; },
+    get dreamEpisodes() { return dreamEpisodes; },
+    get dreamVersions() { return dreamVersions; },
+  };
+};
+
+it("startDreaming schedules periodic memory.dream calls", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeDreamMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.startDreaming({ intervalMs: 200, episode: "ep-1", modelVersion: "gpt-4" });
+    expect(memory.dreamCalls).toBe(0);
+    vi.advanceTimersByTime(200);
+    expect(memory.dreamCalls).toBe(1);
+    vi.advanceTimersByTime(200);
+    expect(memory.dreamCalls).toBe(2);
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startDreaming passes the correct episode and modelVersion to memory.dream", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeDreamMemory();
+    const runner = createRunner(memory, "ep-main");
+    runner.startDreaming({ intervalMs: 100, episode: "ep-dream", modelVersion: "claude-3" });
+    vi.advanceTimersByTime(100);
+    expect(memory.dreamEpisodes).toEqual(["ep-dream"]);
+    expect(memory.dreamVersions).toEqual(["claude-3"]);
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startDreaming with no intervalMs schedules nothing", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeDreamMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.startDreaming({ episode: "ep-1", modelVersion: "gpt-4" });
+    vi.advanceTimersByTime(10_000);
+    expect(memory.dreamCalls).toBe(0);
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startDreaming with intervalMs=0 schedules nothing", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeDreamMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.startDreaming({ intervalMs: 0, episode: "ep-1", modelVersion: "gpt-4" });
+    vi.advanceTimersByTime(10_000);
+    expect(memory.dreamCalls).toBe(0);
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("stop() halts dreaming — no further dream calls after stop", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeDreamMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.startDreaming({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" });
+    vi.advanceTimersByTime(100);
+    expect(memory.dreamCalls).toBe(1);
+    runner.stop();
+    vi.advanceTimersByTime(1_000);
+    expect(memory.dreamCalls).toBe(1); // no more calls after stop
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("double startDreaming does not double-fire — old dream interval is cleared", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeDreamMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.startDreaming({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" });
+    runner.startDreaming({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" }); // should clear the first
+    vi.advanceTimersByTime(100);
+    expect(memory.dreamCalls).toBe(1); // only one interval active
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("stop() clears both the cycle timer and the dream timer", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeDreamMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.start({ intervalMs: 50 });
+    runner.startDreaming({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" });
+    vi.advanceTimersByTime(100);
+    expect(memory.cycleCalls).toBe(2); // 2 cycle ticks at 50ms intervals
+    expect(memory.dreamCalls).toBe(1); // 1 dream tick at 100ms
+    runner.stop();
+    vi.advanceTimersByTime(1_000);
+    expect(memory.cycleCalls).toBe(2); // no more cycle calls
+    expect(memory.dreamCalls).toBe(1); // no more dream calls
+  } finally {
+    vi.useRealTimers();
+  }
+});
