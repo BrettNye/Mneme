@@ -277,7 +277,7 @@ import { SOURCE_WEIGHT } from "../write/source-weight.js";
 // claim id so the first-arg-wins tie-break is lexicographic; evidence_pooled folds exactly.
 export const oplusDedupe = (ruleId: string, params?: unknown) => (c: Corpus): Corpus => {
   assertNotDeprecatedRule(ruleId);
-  const groups = new Map<string, Claim[]>(); // keyed by `${subject} ${key} ${scopeHash}`
+  const groups = new Map<string, Claim[]>(); // keyed by `${subject} ${key} ${scopeHash}`
   for (const cl of c.claims) { /* push into group */ }
   const out: Claim[] = [];
   for (const group of groups.values()) out.push(combineGroup(ruleId, group, params));
