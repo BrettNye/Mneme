@@ -1,6 +1,7 @@
 import type { Corpus } from "../algebra/types.js";
 import { evaluate, type EvalContext, type Stage } from "../algebra/expression.js";
-import type { CandidateClaim } from "../core/claim.js";
+import type { Claim, CandidateClaim } from "../core/claim.js";
+import type { ClaimId } from "../core/ids.js";
 import type { StorageAdapter } from "../adapters/adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import type { Scope } from "../core/scope.js";
@@ -25,45 +26,51 @@ export function deriveClaimFrom(
   pipeline: Stage<any, any>[],
   opts: DeriveOptions
 ): CandidateClaim {
+  const clock: number = opts.evaluationClock ?? Date.now();
   const ctx: EvalContext = {
     adapter,
     catalog,
-    evaluationClock: opts.evaluationClock ?? Date.now(),
+    evaluationClock: clock,
     usedSimilarityVersions: {},
     usedEmbeddingModelVersions: {},
   };
 
   const result = evaluate<Corpus>(pipeline, ctx);
-  const inputClaims = result.claims.map((c) => c.id);
 
-  // Choose the representative/synthesized claim to carry forward.
-  // For a synthesize pipeline that produced one claim, or the top-ranked.
-  const rep = result.claims[result.claims.length - 1] ?? result.claims[0];
+  if (result.claims.length === 0) {
+    throw new Error("deriveClaimFrom: pipeline produced no claims; cannot derive a representative");
+  }
+
+  // The representative/synthesized claim is the last in the corpus (synthesize appends the derived claim last).
+  const rep: Claim = result.claims[result.claims.length - 1];
+
+  // inputClaims are the contributing claims excluding the derived representative itself.
+  const inputClaims: ClaimId[] = result.claims.filter((c) => c !== rep).map((c) => c.id);
 
   return {
     subject: opts.subject,
     key: opts.key,
     scope: opts.scope,
-    value: rep?.value,
-    confidence: rep?.confidence,
-    evidence: rep?.evidence ?? [],
+    value: rep.value,
+    confidence: rep.confidence,
+    evidence: rep.evidence ?? [],
     tags: [],
     source: "workflow",
     // Carry profile/workspace from the representative input claim when available.
-    profile: (rep as any)?.profile,
-    workspace: (rep as any)?.workspace,
+    profile: rep.profile,
+    workspace: rep.workspace,
     // valid: carry from rep if present, or leave as placeholder for commit_derived.
-    valid: (rep as any)?.valid,
-    schema: (rep as any)?.schema ?? "",
+    valid: rep.valid,
+    schema: rep.schema ?? "",
     provenance: {
       derivedFrom: {
         queryExpression: "",
         corpusState: 0,
         combinationRule: opts.combination,
-        inputClaims: inputClaims as any,
+        inputClaims,
         similarityVersions: { ...ctx.usedSimilarityVersions },
         embeddingModelVersions: { ...ctx.usedEmbeddingModelVersions },
-        evaluationClock: ctx.evaluationClock!,
+        evaluationClock: clock,
       },
     },
   } as CandidateClaim;
