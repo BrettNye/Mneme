@@ -29,9 +29,10 @@ export function createRunner(memory: CycleDriver & Partial<DreamDriver>, episode
     },
     startDreaming(opts: { intervalMs?: number; episode: EpisodeId; modelVersion: string }) {
       if (dreamTimer) { clearInterval(dreamTimer); dreamTimer = undefined; }   // never leak a prior interval
+      if (typeof memory.dream !== "function") return;                          // no dream capability → no-op
       if (opts.intervalMs && opts.intervalMs > 0) {
         dreamTimer = setInterval(
-          () => void memory.dream!(opts.episode, { modelVersion: opts.modelVersion }),
+          () => { memory.dream!(opts.episode, { modelVersion: opts.modelVersion }).catch(() => {}); },
           opts.intervalMs,
         );
       }

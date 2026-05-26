@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createRunner } from "./runner.js";
 import type { CycleReport } from "./types.js";
+import type { DreamReport } from "./processes/dreaming-types.js";
 
 const makeMemory = () => {
   let calls = 0;
@@ -139,8 +140,6 @@ it("stop(); stop(); after a start is a safe no-op and does not throw", () => {
 
 // ---- startDreaming tests ----
 
-import type { DreamReport } from "./processes/dreaming-types.js";
-
 const makeDreamMemory = () => {
   let cycleCalls = 0;
   let dreamCalls = 0;
@@ -269,6 +268,24 @@ it("stop() clears both the cycle timer and the dream timer", () => {
     vi.advanceTimersByTime(1_000);
     expect(memory.cycleCalls).toBe(2); // no more cycle calls
     expect(memory.dreamCalls).toBe(1); // no more dream calls
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startDreaming on a cycle-only memory (no dream method) is a no-op — throws nothing, schedules nothing", () => {
+  vi.useFakeTimers();
+  try {
+    // cycle-only memory: does NOT have a dream method
+    const cycleOnlyMemory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+    };
+    const runner = createRunner(cycleOnlyMemory, "ep-1");
+    expect(() => {
+      runner.startDreaming({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" });
+      vi.advanceTimersByTime(1_000);
+    }).not.toThrow();
+    runner.stop();
   } finally {
     vi.useRealTimers();
   }
