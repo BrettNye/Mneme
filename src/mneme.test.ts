@@ -693,3 +693,44 @@ it("promote on an unknown corpus throws", () => {
     m.promote("nonexistent-corpus", "some-id", "validated", { writer: "w" })
   ).toThrow();
 });
+
+// ── read / readByIds surface ──────────────────────────────────────────────────
+
+it("read returns claims by ExecutionPlan; readByIds by id; unknown corpus throws", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  const { id } = m.commit("workspace:canopy", {
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject: "read-subject",
+    key: "read-key",
+    scope: {},
+    value: "read value",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+  }, { writer: "test-writer" });
+
+  // read via ExecutionPlan — corpusId stamped automatically
+  const planClaims = m.read("workspace:canopy", { corpusId: "workspace:canopy" });
+  expect(Array.isArray(planClaims)).toBe(true);
+  expect(planClaims.some(c => c.id === id)).toBe(true);
+
+  // readByIds — returns the matching claim, omits missing ids
+  const byId = m.readByIds("workspace:canopy", [id as any]);
+  expect(byId).toHaveLength(1);
+  expect(byId[0].id).toBe(id);
+
+  const withMissing = m.readByIds("workspace:canopy", [id as any, "nonexistent-id" as any]);
+  expect(withMissing).toHaveLength(1);
+
+  // unknown corpus throws for both methods
+  expect(() => m.read("nope", { corpusId: "nope" })).toThrow();
+  expect(() => m.readByIds("nope", [])).toThrow();
+});

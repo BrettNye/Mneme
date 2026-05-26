@@ -1,9 +1,10 @@
 import { Catalog } from "./catalog/catalog.js";
 import { Promoter } from "./write/pipeline.js";
-import type { StorageAdapter } from "./adapters/adapter.js";
+import type { StorageAdapter, ExecutionPlan } from "./adapters/adapter.js";
 import type { TierRequirement } from "./catalog/tiers.js";
 import type { Corpus as CorpusDef, ContradictionPolicy } from "./catalog/corpus.js";
 import type { CandidateClaim, Claim, Status } from "./core/claim.js";
+import type { ClaimId } from "./core/ids.js";
 import type { Predicate } from "./algebra/predicate.js";
 import type { Corpus, RankedCorpus, ComposedContext } from "./algebra/types.js";
 import type { Value } from "./core/value.js";
@@ -167,6 +168,8 @@ export interface Mneme {
     to: Status,
     opts: { writer: string; reason?: string; idempotencyKey?: string }
   ): { id: string; status: string };
+  read(corpusId: string, plan: ExecutionPlan): Claim[];
+  readByIds(corpusId: string, ids: ClaimId[]): Claim[];
 }
 
 export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
@@ -229,6 +232,16 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
       opts: { writer: string; reason?: string; idempotencyKey?: string }
     ): { id: string; status: string } {
       return promoterFor(corpusId).promote(targetId as any, to, opts);
+    },
+
+    read(corpusId: string, plan: ExecutionPlan): Claim[] {
+      catalog.getCorpus(corpusId);
+      return adapter.query({ ...plan, corpusId });
+    },
+
+    readByIds(corpusId: string, ids: ClaimId[]): Claim[] {
+      catalog.getCorpus(corpusId);
+      return ids.map(id => adapter.getClaim(id)).filter((c): c is Claim => c !== undefined);
     },
   };
 }
