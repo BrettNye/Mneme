@@ -131,6 +131,17 @@ describe("sumCore", () => {
     const result = sumCore("value.amount")(claims);
     expect(result).toEqual({ kind: "sum", value: 5 });
   });
+
+  it("skips non-numeric values and does not NaN the result", () => {
+    const claims = [
+      makeClaim({ value: { amount: 10 } }),
+      makeClaim({ value: { amount: "not-a-number" } }),
+      makeClaim({ value: { amount: 20 } }),
+    ];
+    const result = sumCore("value.amount")(claims);
+    // "not-a-number" should be skipped, so result = 10 + 20 = 30
+    expect(result).toEqual({ kind: "sum", value: 30 });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -269,10 +280,25 @@ describe("rateCore", () => {
     ];
     const result = rateCore(numPred, denomPred)(claims);
     expect(result.kind).toBe("rate");
-    if (result.kind === "rate") {
-      // r=10, s=5, a=0.5, W=2 → alpha=10+0.5*2=11, beta=5+0.5*2=6
-      expect(result.beta).toEqual({ alpha: 11, beta: 6 });
-    }
+    // r=10, s=5, a=0.5, W=2 → alpha=10+0.5*2=11, beta=5+0.5*2=6
+    expect((result as { kind: "rate"; beta: { alpha: number; beta: number } }).beta).toEqual({ alpha: 11, beta: 6 });
+  });
+
+  it("claims matching both numP and denomP count in r and are EXCLUDED from s (denomP ∧ ¬numP)", () => {
+    // numPred matches subject "hit"
+    // denomPred matches subject "hit" OR "trial" (both)
+    // "hit" claims satisfy both numP and denomP → count in r, NOT in s
+    // "trial" claims satisfy denomP but not numP → count in s
+    const numPred: Predicate = { op: "subjectEq", value: "hit" };
+    const denomPred: Predicate = { op: "subjectEq", value: "hit" };
+    // 3 "hit" claims: all match both numP and denomP → r=3, s=0
+    const claims = Array(3).fill(null).map(() => makeClaim({ subject: "hit" }));
+    const result = rateCore(numPred, denomPred)(claims);
+    expect(result.kind).toBe("rate");
+    // r=3, s=0, a=0.5, W=2 → alpha=3+1=4, beta=0+1=1
+    const typed = result as { kind: "rate"; beta: { alpha: number; beta: number } };
+    expect(typed.beta.alpha).toBe(4);
+    expect(typed.beta.beta).toBe(1);
   });
 });
 
@@ -303,11 +329,9 @@ describe("binaryRateCore", () => {
     ];
     const result = binaryRateCore("value.won")(claims);
     expect(result.kind).toBe("rate");
-    if (result.kind === "rate") {
-      // r=22 (true), s=8 (false, excluded from num), a=0.5, W=2
-      // alpha=22+0.5*2=23, beta=8+0.5*2=9
-      expect(result.beta).toEqual({ alpha: 23, beta: 9 });
-    }
+    // r=22 (true), s=8 (false, excluded from num), a=0.5, W=2
+    // alpha=22+0.5*2=23, beta=8+0.5*2=9
+    expect((result as { kind: "rate"; beta: { alpha: number; beta: number } }).beta).toEqual({ alpha: 23, beta: 9 });
   });
 
   it("excludes null/undefined values from both numerator and denominator", () => {
@@ -318,11 +342,10 @@ describe("binaryRateCore", () => {
       makeClaim({ scope: { actionId: "A" }, value: {}, subject: "action", key: "action.outcome" }),
     ];
     const result = binaryRateCore("value.won")(claims);
-    if (result.kind === "rate") {
-      // only true(1) and false(1) count; null/missing excluded
-      // r=1, s=1, alpha=1+1=2, beta=1+1=2
-      expect(result.beta).toEqual({ alpha: 2, beta: 2 });
-    }
+    expect(result.kind).toBe("rate");
+    // only true(1) and false(1) count; null/missing excluded
+    // r=1, s=1, alpha=1+1=2, beta=1+1=2
+    expect((result as { kind: "rate"; beta: { alpha: number; beta: number } }).beta).toEqual({ alpha: 2, beta: 2 });
   });
 });
 
@@ -337,10 +360,8 @@ describe("alphaBinaryRate", () => {
     const group = result.groups.get("__none__")!;
     expect(group.key).toEqual({ kind: "none" });
     expect(group.value.kind).toBe("rate");
-    if (group.value.kind === "rate") {
-      // r=2, s=1, alpha=2+1=3, beta=1+1=2
-      expect(group.value.beta).toEqual({ alpha: 3, beta: 2 });
-    }
+    // r=2, s=1, alpha=2+1=3, beta=1+1=2
+    expect((group.value as { kind: "rate"; beta: { alpha: number; beta: number } }).beta).toEqual({ alpha: 3, beta: 2 });
   });
 });
 
@@ -386,6 +407,22 @@ describe("alphaGroupBy", () => {
     expect(res.groups.size).toBe(2);
     expect(res.groups.get("A")!.value).toEqual({ kind: "count", n: 2 });
     expect(res.groups.get("B")!.value).toEqual({ kind: "count", n: 1 });
+  });
+
+  it("excludes claims whose group field is undefined or null (no phantom 'undefined' group)", () => {
+    const claims = [
+      makeClaim({ scope: { region: "EU" }, value: { score: 10 } }),
+      // scope.region is missing → claimPath returns undefined
+      makeClaim({ scope: {}, value: { score: 99 } }),
+      // scope.region is explicitly null (stored as undefined from scope lookup)
+      makeClaim({ scope: { region: undefined }, value: { score: 50 } }),
+    ];
+    const res = alphaGroupBy("scope.region", countCore)(corpusOf(claims));
+    // Only the "EU" claim should be bucketed; undefined/null group fields are excluded
+    expect(res.groups.size).toBe(1);
+    expect(res.groups.get("EU")).toBeDefined();
+    expect(res.groups.get("undefined")).toBeUndefined();
+    expect(res.groups.get("EU")!.value).toEqual({ kind: "count", n: 1 });
   });
 });
 

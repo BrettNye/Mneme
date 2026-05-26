@@ -51,17 +51,26 @@ export const countCore = (claims: Claim[]): AggValue => ({
 
 export const sumCore =
   (valuePath: string) =>
-  (claims: Claim[]): AggValue => ({
-    kind: "sum",
-    value: claims.reduce((t, c) => t + Number(claimPath(c, valuePath) ?? 0), 0),
-  });
+  (claims: Claim[]): AggValue => {
+    let acc = 0;
+    for (const c of claims) {
+      const n = Number(claimPath(c, valuePath));
+      if (Number.isFinite(n)) acc += n;
+    }
+    return { kind: "sum", value: acc };
+  };
 
 export const avgCore =
   (valuePath: string) =>
   (claims: Claim[]): AggValue => {
     if (claims.length === 0) return { kind: "avg", value: 0 };
-    const total = claims.reduce((t, c) => t + Number(claimPath(c, valuePath) ?? 0), 0);
-    return { kind: "avg", value: total / claims.length };
+    let acc = 0;
+    let count = 0;
+    for (const c of claims) {
+      const n = Number(claimPath(c, valuePath));
+      if (Number.isFinite(n)) { acc += n; count++; }
+    }
+    return { kind: "avg", value: count === 0 ? 0 : acc / count };
   };
 
 export const minCore =
@@ -169,7 +178,9 @@ export const alphaGroupBy =
   (c: Corpus): AggregateResult => {
     const buckets = new Map<string, Claim[]>();
     for (const cl of c.claims) {
-      const k = String(claimPath(cl, groupField));
+      const raw = claimPath(cl, groupField);
+      if (raw === undefined || raw === null) continue;
+      const k = String(raw);
       const arr = buckets.get(k) ?? [];
       arr.push(cl);
       buckets.set(k, arr);
