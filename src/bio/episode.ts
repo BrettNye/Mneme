@@ -10,10 +10,18 @@ export function createEpisodeRegistry() {
       open.set(ep.id, ep);
       return ep;
     },
-    attachRun(id: EpisodeId, runId: string) { open.get(id)?.runIds.push(runId); },
+    attachRun(id: EpisodeId, runId: string): boolean {
+      const ep = open.get(id);
+      if (!ep) return false;
+      ep.runIds.push(runId);
+      return true;
+    },
     closeEpisode(id: EpisodeId): Episode | undefined {
-      const ep = open.get(id); if (!ep) return undefined;
-      ep.endedAt = now(); open.delete(id); return ep;
+      const ep = open.get(id);
+      if (!ep) return undefined;
+      ep.endedAt = now();
+      open.delete(id);
+      return ep;
     },
     get(id: EpisodeId) { return open.get(id); },
   };

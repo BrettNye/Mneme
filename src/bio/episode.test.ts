@@ -18,12 +18,19 @@ it("openEpisode returns a unique id and records startedAt; optional runId seeds 
   expect(typeof ep1.startedAt).toBe("number");
 });
 
-it("attachRun appends additional runIds to an open episode", () => {
+it("attachRun appends additional runIds to an open episode and returns true", () => {
   const r = createEpisodeRegistry();
   const ep = r.openEpisode("run-1");
-  r.attachRun(ep.id, "run-2");
-  r.attachRun(ep.id, "run-3");
+  expect(r.attachRun(ep.id, "run-2")).toBe(true);
+  expect(r.attachRun(ep.id, "run-3")).toBe(true);
   expect(r.get(ep.id)?.runIds).toEqual(["run-1", "run-2", "run-3"]);
+});
+
+it("attachRun returns false and changes nothing when the episode id is unknown", () => {
+  const r = createEpisodeRegistry();
+  const ep = r.openEpisode("run-1");
+  expect(r.attachRun("nonexistent", "run-2")).toBe(false);
+  expect(r.get(ep.id)?.runIds).toEqual(["run-1"]);
 });
 
 it("closeEpisode on an unknown id returns undefined", () => {
