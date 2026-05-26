@@ -5,7 +5,6 @@ export interface SignalBuffer extends SignalView {
   record(sig: Signal): void;
   recordSurfaced(episode: EpisodeId, claimIds: ClaimId[]): void;
   flush(episode: EpisodeId): void;
-  size(): number;
 }
 
 export function createSignalBuffer(cap = 10_000): SignalBuffer {
@@ -13,6 +12,7 @@ export function createSignalBuffer(cap = 10_000): SignalBuffer {
   const outcomes = new Map<EpisodeId, { result: "success" | "failure"; weight?: number }[]>();
   const surfaced = new Map<EpisodeId, ClaimId[]>();
   let count = 0;
+  const perEpisode = new Map<EpisodeId, number>();
 
   const guard = () => {
     if (count >= cap) throw new Error(`SignalBuffer cap ${cap} exceeded — run a cycle to drain`);
@@ -22,6 +22,7 @@ export function createSignalBuffer(cap = 10_000): SignalBuffer {
     record(sig) {
       guard();
       count++;
+      perEpisode.set(sig.episode, (perEpisode.get(sig.episode) ?? 0) + 1);
       if (sig.kind === "usage") {
         usage.set(sig.episode, [...(usage.get(sig.episode) ?? []), ...sig.claimIds]);
       } else {
@@ -38,11 +39,11 @@ export function createSignalBuffer(cap = 10_000): SignalBuffer {
     outcomesFor: (e) => [...(outcomes.get(e) ?? [])],
     surfacedFor: (e) => [...(surfaced.get(e) ?? [])],
     flush(e) {
+      count -= perEpisode.get(e) ?? 0;
+      perEpisode.delete(e);
       usage.delete(e);
       outcomes.delete(e);
       surfaced.delete(e);
-      count = 0;
     },
-    size: () => count,
   };
 }

@@ -74,20 +74,33 @@ it("throws when cap is exceeded", () => {
   ).toThrow(/cap 2 exceeded/);
 });
 
-it("size returns current count of buffered signals", () => {
-  const b = createSignalBuffer();
-  expect(b.size()).toBe(0);
-  b.record({ kind: "usage", claimIds: [c1], episode: ep1 });
-  expect(b.size()).toBe(1);
-  b.record({ kind: "outcome", episode: ep1, result: "failure" });
-  expect(b.size()).toBe(2);
-  b.flush(ep1);
-  expect(b.size()).toBe(0);
-});
-
 it("multiple usage records for same episode accumulate", () => {
   const b = createSignalBuffer();
   b.record({ kind: "usage", claimIds: [c1], episode: ep1 });
   b.record({ kind: "usage", claimIds: [c2, c3], episode: ep1 });
   expect(b.usageFor(ep1)).toHaveLength(3);
+});
+
+it("flush(ep1) only releases ep1's contribution so ep2 signals still count toward the cap", () => {
+  // cap=3, record 2 signals for ep1 and 1 for ep2 (total=3, at cap)
+  const b = createSignalBuffer(3);
+  b.record({ kind: "usage", claimIds: [c1], episode: ep1 });
+  b.record({ kind: "outcome", episode: ep1, result: "success" });
+  b.record({ kind: "usage", claimIds: [c2], episode: ep2 });
+
+  // at cap — next record must throw
+  expect(() =>
+    b.record({ kind: "usage", claimIds: [c3], episode: ep1 })
+  ).toThrow(/cap 3 exceeded/);
+
+  // flush ep1 (frees 2 slots); ep2 still holds 1 slot, so count becomes 1
+  b.flush(ep1);
+
+  // can now record 2 more (up to the freed capacity), but not 3
+  b.record({ kind: "usage", claimIds: [c1], episode: ep1 }); // count=2
+  b.record({ kind: "outcome", episode: ep2, result: "failure" }); // count=3 — at cap again
+
+  expect(() =>
+    b.record({ kind: "usage", claimIds: [c3], episode: ep1 })
+  ).toThrow(/cap 3 exceeded/);
 });
