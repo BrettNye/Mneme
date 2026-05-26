@@ -205,6 +205,21 @@ it("oplusSynthesizeAs throws for deprecated rule_max_confidence", () => {
 });
 
 // -------------------------------------------------------------------
+// REGRESSION: max-rule winner is NOT sorted[0] — result must carry winner's value/id/parameters
+// id "a" value "no" Beta(1,9) mean≈0.1; id "b" value "yes" Beta(9,1) mean≈0.9
+// sorted by id: [a, b]; b has higher mean → b wins → result must have value "yes", id "b"
+// -------------------------------------------------------------------
+it("oplusDedupe rule_max_mean returns the WINNING claim's value and id, not sorted[0]'s", () => {
+  const loser = claim("a", "no", 1, 9);  // id "a" (first lexicographically), mean ≈ 0.1
+  const winner = claim("b", "yes", 9, 1); // id "b", mean ≈ 0.9
+  const out = oplusDedupe("rule_max_mean")(corpusOf([loser, winner]));
+  expect(out.claims).toHaveLength(1);
+  expect(out.claims[0].value).toBe("yes");
+  expect(out.claims[0].id).toBe("b");
+  expect(out.claims[0].confidence.parameters).toEqual({ alpha: 9, beta: 1 });
+});
+
+// -------------------------------------------------------------------
 // Error: assertSupportsRule — unsupported rule on scalar binding throws
 // -------------------------------------------------------------------
 it("oplusDedupe with rule_dempster on scalar claims throws via assertSupportsRule", () => {

@@ -19,7 +19,7 @@ export const oplusDedupe =
     // Group claims by (subject, key, scopeHash)
     const groups = new Map<string, Claim[]>();
     for (const cl of c.claims) {
-      const key = `${cl.subject}\x00${cl.key}\x00${cl.scopeHash}`;
+      const key = JSON.stringify([cl.subject, cl.key, cl.scopeHash]);
       const group = groups.get(key);
       if (group) {
         group.push(cl as Claim);
@@ -117,7 +117,19 @@ function combineGroup(ruleId: string, claims: Claim[], params?: unknown): Claim 
     };
   }
 
-  // For all other rules (evidence_pooled, max_mean, max_concentration, dempster):
+  // For max rules: fold over whole Claim objects, return the actual winner claim
+  // betaBinding.combine returns one of its two param arguments BY REFERENCE for max rules,
+  // so reference-equality tells us which claim won.
+  if (ruleId === RULE.MAX_MEAN || ruleId === RULE.MAX_CONCENTRATION) {
+    let winner = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+      const kept = binding.combine(ruleId, winner.confidence.parameters, sorted[i].confidence.parameters, params);
+      if (kept !== winner.confidence.parameters) winner = sorted[i];
+    }
+    return winner; // the winning claim, whole — no spread, no chimera
+  }
+
+  // For all other rules (evidence_pooled, dempster):
   // simple left-fold through pairwise combine
   let accParams = sorted[0].confidence.parameters;
   for (let i = 1; i < sorted.length; i++) {
