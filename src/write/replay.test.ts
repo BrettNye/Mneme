@@ -1,9 +1,13 @@
 import { replayStatus } from "./replay.js";
 
-it("reports integrity_unknown for a claim with no derivedFrom, missing_inputs when an input is absent", () => {
-  const adapter = { getClaim: (id: string) => (id === "present" ? ({ id } as any) : undefined) } as any;
+it("reports integrity_unknown for a claim with no derivedFrom provenance", () => {
+  const adapter = { getClaim: (_id: string) => ({ id: _id } as any) } as any;
   const plain = { provenance: {} } as any;
   expect(replayStatus(plain, adapter).status).toBe("integrity_unknown");
+});
+
+it("reports missing_inputs when a recorded input claim is absent from the adapter", () => {
+  const adapter = { getClaim: (id: string) => (id === "present" ? ({ id } as any) : undefined) } as any;
   const derived = { provenance: { derivedFrom: { evaluationClock: 1, inputClaims: ["gone"], similarityVersions: {}, embeddingModelVersions: {} } } } as any;
   expect(replayStatus(derived, adapter).status).toBe("missing_inputs");
 });

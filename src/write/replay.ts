@@ -4,7 +4,11 @@ import type { StorageAdapter } from "../adapters/adapter.js";
 import { similarityFn } from "../algebra/similarity.js";
 
 export interface MissingDependency {
-  kind: "input" | "similarity_version" | "embedding_version";
+  // "embedding_version" is intentionally absent: embedding-version checking is deferred until
+  // embedding models and an embedding registry exist (arrives with the deferred `exact`
+  // re-execution engine in a later slice). Only the variants this function actually produces
+  // are declared here.
+  kind: "input" | "similarity_version";
   id: string;
 }
 
@@ -47,7 +51,7 @@ export function replayStatus(claim: Claim, adapter: StorageAdapter): ReplayResul
   for (const [name, ver] of Object.entries(d.similarityVersions)) {
     let available = false;
     try {
-      available = (similarityFn(name) as any).version === ver;
+      available = similarityFn(name).version === ver;
     } catch {
       available = false;
     }
