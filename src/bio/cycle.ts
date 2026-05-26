@@ -20,8 +20,10 @@ export function createCycle(gateway: MnemeGateway, processes: CognitiveProcess[]
       try {
         const ops = processes.flatMap((p) =>
           p.run({
-            read: gateway.read,
-            readByIds: gateway.readByIds,
+            // Bound arrow functions guard against `this`-context loss if gateway
+            // is later refactored to a class instance.
+            read: (q) => gateway.read(q),
+            readByIds: (ids) => gateway.readByIds(ids),
             episode,
             signals: buffer,
             now: now(),
@@ -31,6 +33,13 @@ export function createCycle(gateway: MnemeGateway, processes: CognitiveProcess[]
         buffer.flush(episode.id);
         return {
           opsApplied: res.applied,
+          // NOTE: claimsSuperseded counts supersede ops *emitted* this cycle
+          // (attempted, pre-idempotency), whereas opsApplied is the gateway's
+          // *committed* count (post-idempotency dedup via res.applied). On a
+          // retry of the same episode these two values intentionally diverge —
+          // claimsSuperseded overcounts relative to what the gateway actually
+          // wrote. Exact committed-per-kind counts await an AppendResult
+          // enhancement (deferred).
           claimsSuperseded: ops.filter((o) => o.kind === "supersede").length,
           errors: [],
         };

@@ -164,3 +164,47 @@ it("flushes signals only after successful apply, not before", () => {
   createCycle(gateway, [proc]).run({ id: "ep-8" } as any, buffer);
   expect(callOrder).toEqual(["apply", "flush"]);
 });
+
+it("claimsSuperseded counts emitted (attempted) supersede ops; opsApplied reflects gateway committed count — these diverge on idempotent retry", () => {
+  // This test documents the intentional attempted-vs-committed distinction:
+  //   - claimsSuperseded = supersede ops emitted this cycle (pre-idempotency)
+  //   - opsApplied       = ops the gateway actually committed (post-idempotency dedup)
+  // On a retry of the same episode the gateway skips all ops (applied: 0),
+  // but claimsSuperseded still reflects what was emitted. This asymmetry is
+  // intentional until AppendResult gains a committed-per-kind breakdown (deferred).
+  let callCount = 0;
+  const gateway = {
+    read: () => [],
+    readByIds: () => [],
+    apply: (ops: any[]) => {
+      callCount++;
+      if (callCount === 1) {
+        // First call: gateway commits all ops
+        return { applied: ops.length, skipped: 0 };
+      }
+      // Second call (retry / idempotent replay): gateway skips everything
+      return { applied: 0, skipped: ops.length };
+    },
+  } as any;
+  const buffer = { flush: () => {} } as any;
+  const proc = {
+    name: "p",
+    run: () => [
+      { kind: "supersede" } as any,
+      { kind: "supersede" } as any,
+    ],
+  };
+  const cycle = createCycle(gateway, [proc]);
+
+  // First run — gateway commits both ops
+  const first = cycle.run({ id: "ep-9" } as any, buffer);
+  expect(first.opsApplied).toBe(2);
+  expect(first.claimsSuperseded).toBe(2);
+
+  // Second run (same episode, idempotent retry) — gateway skips everything.
+  // opsApplied drops to 0 because the gateway committed nothing.
+  // claimsSuperseded stays at 2 because the cycle still emitted 2 supersede ops.
+  const second = cycle.run({ id: "ep-9" } as any, buffer);
+  expect(second.opsApplied).toBe(0);
+  expect(second.claimsSuperseded).toBe(2);
+});
