@@ -24,7 +24,7 @@ import {
   tauRecorded as tauRecordedOp,
 } from "./algebra/temporal.js";
 import { delta as deltaOp } from "./algebra/decay.js";
-import { rho as rhoOp } from "./algebra/similarity.js";
+import { rho as rhoOp, similarityFn } from "./algebra/similarity.js";
 import { kappa as kappaOp, type Format } from "./algebra/composition.js";
 import type { Instant } from "./core/time.js";
 
@@ -36,7 +36,8 @@ export type { Format } from "./algebra/composition.js";
 export const sigma = (p: Predicate): Stage<Corpus, Corpus> => liftOp(sigmaOp(p));
 
 export const tau = {
-  now: (): Stage<Corpus, Corpus> => liftOp(tauNowOp()),
+  now: (): Stage<Corpus, Corpus> =>
+    (c, ctx) => tauNowOp(() => ctx.evaluationClock ?? Date.now())(c),
   known: (t: Instant): Stage<Corpus, Corpus> => liftOp(tauKnownOp(t)),
   valid: (t: Instant): Stage<Corpus, Corpus> => liftOp(tauValidOp(t)),
   recorded: (t: Instant): Stage<Corpus, Corpus> => liftOp(tauRecordedOp(t)),
@@ -44,18 +45,30 @@ export const tau = {
 
 export const delta = {
   exponential: (halfLifeDays: number): Stage<Corpus, Corpus> =>
-    liftOp(deltaOp({ kind: "exponential", halfLifeDays }, Date.now())),
+    (c, ctx) => deltaOp({ kind: "exponential", halfLifeDays }, ctx.evaluationClock ?? Date.now())(c),
   none: (): Stage<Corpus, Corpus> =>
-    liftOp(deltaOp({ kind: "none" }, Date.now())),
+    (c, ctx) => deltaOp({ kind: "none" }, ctx.evaluationClock ?? Date.now())(c),
   linear: (ratePerDay: number): Stage<Corpus, Corpus> =>
-    liftOp(deltaOp({ kind: "linear", ratePerDay }, Date.now())),
+    (c, ctx) => deltaOp({ kind: "linear", ratePerDay }, ctx.evaluationClock ?? Date.now())(c),
   step: (thresholdDays: number): Stage<Corpus, Corpus> =>
-    liftOp(deltaOp({ kind: "step", thresholdDays }, Date.now())),
+    (c, ctx) => deltaOp({ kind: "step", thresholdDays }, ctx.evaluationClock ?? Date.now())(c),
 };
 
 export const rho = {
-  jaccard: (query: Value): Stage<Corpus, RankedCorpus> => liftOp(rhoOp("jaccard", query)),
-  exact: (query: Value): Stage<Corpus, RankedCorpus> => liftOp(rhoOp("exact", query)),
+  jaccard: (query: Value): Stage<Corpus, RankedCorpus> =>
+    (c, ctx) => {
+      if (ctx.usedSimilarityVersions) {
+        ctx.usedSimilarityVersions["jaccard"] = similarityFn("jaccard").version;
+      }
+      return rhoOp("jaccard", query)(c);
+    },
+  exact: (query: Value): Stage<Corpus, RankedCorpus> =>
+    (c, ctx) => {
+      if (ctx.usedSimilarityVersions) {
+        ctx.usedSimilarityVersions["exact"] = similarityFn("exact").version;
+      }
+      return rhoOp("exact", query)(c);
+    },
 };
 
 export const gamma = (depth: number): Stage<RankedCorpus, RankedCorpus> => gammaStage(depth);
@@ -89,7 +102,7 @@ export interface Mneme {
     candidate: CandidateClaim,
     opts: { policy?: ContradictionPolicy; writer: string; idempotencyKey?: string }
   ): { id: string; status: "committed" | "rejected" | "duplicate" };
-  query<O>(corpusId: string, pipeline: Stage<any, any>[]): O;
+  query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number }): O;
 }
 
 export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
@@ -124,9 +137,15 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
       });
     },
 
-    query<O>(corpusId: string, pipeline: Stage<any, any>[]): O {
+    query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number }): O {
       catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
-      const ctx: EvalContext = { adapter, catalog };
+      const ctx: EvalContext = {
+        adapter,
+        catalog,
+        evaluationClock: opts?.evaluationClock ?? Date.now(),
+        usedSimilarityVersions: {},
+        usedEmbeddingModelVersions: {},
+      };
       return evaluate<O>(pipeline, ctx);
     },
   };
