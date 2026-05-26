@@ -47,23 +47,27 @@ export function createDreamPass(
         } catch (e) {
           return { proposed: 0, admitted: 0, dropped: [], errors: [String(e)] };
         }
-        const { ops, dropped } = admitInsights(
-          insights,
-          selected,
-          now(),
-          run.modelVersion,
-          opts.schema
-        );
-        const res = gateway.apply(
-          ops,
-          (_op, i) => `dream:${episode.id}:${i}`
-        );
-        return {
-          proposed: insights.length,
-          admitted: res.applied,
-          dropped,
-          errors: [],
-        };
+        try {
+          const { ops, dropped } = admitInsights(
+            insights,
+            selected,
+            now(),
+            run.modelVersion,
+            opts.schema
+          );
+          const res = gateway.apply(
+            ops,
+            (_op, i) => `dream:${episode.id}:${i}`
+          );
+          return {
+            proposed: insights.length,
+            admitted: res.applied,
+            dropped,
+            errors: [],
+          };
+        } catch (e) {
+          return { proposed: insights.length, admitted: 0, dropped: [], errors: [String(e)] };
+        }
       } finally {
         running.delete(episode.id);
       }
