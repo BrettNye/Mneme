@@ -22,6 +22,8 @@ flowchart TD
     classDef running fill:#87ceeb,stroke:#333
     classDef failed fill:#ffb6c1,stroke:#333
     classDef skipped fill:#d3d3d3,stroke:#333,stroke-dasharray: 5 5
+
+    class task-eval-context,task-similarity-version,task-replay,task-facade-clock,task-derive,task-commit-derived done
 ```
 
 ## Context
@@ -64,7 +66,7 @@ depends_on: []
 files:
   - src/algebra/expression.ts
   - src/algebra/expression.test.ts
-status: pending
+status: done
 ```
 
 Extend `EvalContext` with an optional pinned `evaluationClock` and optional mutable version
@@ -116,7 +118,7 @@ depends_on: []
 files:
   - src/algebra/similarity.ts
   - src/algebra/similarity.test.ts
-status: pending
+status: done
 ```
 
 Add a `version` identifier to the `SimilarityFn` protocol and the two core bindings, so derived-write
@@ -163,7 +165,7 @@ depends_on: [task-eval-context, task-similarity-version]
 files:
   - src/mneme.ts
   - src/mneme.test.ts
-status: pending
+status: done
 ```
 
 Wire the pinned clock and version capture into the public façade: `query()` pins one `evaluationClock`
@@ -233,7 +235,7 @@ depends_on: [task-eval-context]
 files:
   - src/write/derive.ts
   - src/write/derive.test.ts
-status: pending
+status: done
 ```
 
 `deriveClaimFrom` runs a query pipeline through a freshly pinned `EvalContext`, takes the synthesized
@@ -306,7 +308,7 @@ depends_on: [task-derive]
 files:
   - src/write/derived-write.ts
   - src/write/derived-write.test.ts
-status: pending
+status: done
 ```
 
 `commitDerived` finalizes the derivation provenance (serialized query string + corpus-state seq),
@@ -369,7 +371,7 @@ depends_on: []
 files:
   - src/write/replay.ts
   - src/write/replay.test.ts
-status: pending
+status: done
 ```
 
 `replayStatus` reports the degraded replay statuses from recorded provenance metadata (§7.6): missing
