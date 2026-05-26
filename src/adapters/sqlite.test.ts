@@ -320,3 +320,60 @@ it("insertClaim uses INSERT OR REPLACE semantics on id (upsert)", () => {
   const fetched = a.getClaim(claim.id)!;
   expect(fetched.value).toBe("updated");
 });
+
+it("query filters by runIds (matches provenance.runId membership)", () => {
+  const a = createSqliteAdapter();
+  const c1 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r1" } });
+  const c2 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r2" } });
+  a.insertClaim(c1);
+  a.insertClaim(c2);
+  const results = a.query({ corpusId: "c1", runIds: ["r1"] });
+  expect(results).toHaveLength(1);
+  expect(results[0].provenance.runId).toBe("r1");
+});
+
+it("query with empty runIds returns all claims (no run_id constraint)", () => {
+  const a = createSqliteAdapter();
+  const c1 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r1" } });
+  const c2 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r2" } });
+  a.insertClaim(c1);
+  a.insertClaim(c2);
+  const results = a.query({ corpusId: "c1", runIds: [] });
+  expect(results).toHaveLength(2);
+});
+
+it("query with absent runIds returns all claims (no run_id constraint)", () => {
+  const a = createSqliteAdapter();
+  const c1 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r1" } });
+  const c2 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r2" } });
+  a.insertClaim(c1);
+  a.insertClaim(c2);
+  const results = a.query({ corpusId: "c1" });
+  expect(results).toHaveLength(2);
+});
+
+it("query filters by runIds combined with status", () => {
+  const a = createSqliteAdapter();
+  const c1 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r1" }, status: "validated" });
+  const c2 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r1" }, status: "deprecated" });
+  const c3 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r2" }, status: "validated" });
+  a.insertClaim(c1);
+  a.insertClaim(c2);
+  a.insertClaim(c3);
+  const results = a.query({ corpusId: "c1", runIds: ["r1"], status: ["validated"] });
+  expect(results).toHaveLength(1);
+  expect(results[0].id).toBe(c1.id);
+});
+
+it("query filters by multiple runIds (IN set)", () => {
+  const a = createSqliteAdapter();
+  const c1 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r1" } });
+  const c2 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r2" } });
+  const c3 = makeValidatedClaim({ provenance: { workflow: "wf-1", runId: "r3" } });
+  a.insertClaim(c1);
+  a.insertClaim(c2);
+  a.insertClaim(c3);
+  const results = a.query({ corpusId: "c1", runIds: ["r1", "r3"] });
+  expect(results).toHaveLength(2);
+  expect(results.map((r) => r.provenance.runId).sort()).toEqual(["r1", "r3"]);
+});

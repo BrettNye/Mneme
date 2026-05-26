@@ -38,6 +38,7 @@ interface ClaimRow {
   evidence_json: string;
   tags_json: string;
   schema: string;
+  run_id: string | null;
 }
 
 interface IdempotencyRow {
@@ -72,6 +73,7 @@ function toRow(c: Claim): ClaimRow {
     evidence_json: JSON.stringify(c.evidence),
     tags_json: JSON.stringify(c.tags),
     schema: c.schema,
+    run_id: c.provenance.runId ?? null,
   };
 }
 
@@ -134,10 +136,12 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       provenance_json TEXT,
       evidence_json TEXT,
       tags_json TEXT,
-      schema TEXT
+      schema TEXT,
+      run_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_claims_pks ON claims(profile, key, scope_hash);
     CREATE INDEX IF NOT EXISTS idx_claims_subject ON claims(subject);
+    CREATE INDEX IF NOT EXISTS idx_claims_run_id ON claims(run_id);
     CREATE TABLE IF NOT EXISTS idempotency (
       scope TEXT,
       key TEXT,
@@ -152,12 +156,14 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       id, profile, workspace, subject, key, scope_hash, scope_json,
       value_json, value_hash, conf_distribution, conf_params, conf_raw,
       conf_effective, valid_from, valid_to, recorded, recorded_seq,
-      status, source, provenance_json, evidence_json, tags_json, schema
+      status, source, provenance_json, evidence_json, tags_json, schema,
+      run_id
     ) VALUES (
       @id, @profile, @workspace, @subject, @key, @scope_hash, @scope_json,
       @value_json, @value_hash, @conf_distribution, @conf_params, @conf_raw,
       @conf_effective, @valid_from, @valid_to, @recorded, @recorded_seq,
-      @status, @source, @provenance_json, @evidence_json, @tags_json, @schema
+      @status, @source, @provenance_json, @evidence_json, @tags_json, @schema,
+      @run_id
     )
   `);
 
@@ -222,12 +228,16 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
         params.push(plan.recordedAtMost);
       }
 
-      let statusClause = "";
       if (plan.status !== undefined && plan.status.length > 0) {
         const placeholders = plan.status.map(() => "?").join(", ");
-        statusClause = `status IN (${placeholders})`;
-        conditions.push(statusClause);
+        conditions.push(`status IN (${placeholders})`);
         params.push(...plan.status);
+      }
+
+      if (plan.runIds !== undefined && plan.runIds.length > 0) {
+        const placeholders = plan.runIds.map(() => "?").join(", ");
+        conditions.push(`run_id IN (${placeholders})`);
+        params.push(...plan.runIds);
       }
 
       const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";

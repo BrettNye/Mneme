@@ -26,6 +26,7 @@ export interface ExecutionPlan {
   status?: string[];
   scopeHash?: string;
   recordedAtMost?: number;
+  runIds?: string[];   // match claims whose provenance.runId ∈ this set
 }
 
 export interface IdempotencyRecord {
