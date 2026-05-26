@@ -7,6 +7,8 @@ import { compose } from "./policies/suppression.js";
 import type { BioQuery, CycleReport, EpisodeId, RetrievalContext, RetrievalPolicy } from "./types.js";
 import type { ClaimId } from "../core/ids.js";
 
+const UNKNOWN_EPISODE_ERROR = "unknown episode";
+
 export function createBioMemory(gateway: MnemeGateway = createMnemeGateway()) {
   const episodes = createEpisodeRegistry();
   const buffer = createSignalBuffer();
@@ -23,17 +25,16 @@ export function createBioMemory(gateway: MnemeGateway = createMnemeGateway()) {
       buffer.record({ kind: "usage", claimIds, episode });
     },
     recordOutcome(episode: EpisodeId, result: "success" | "failure", weight?: number): CycleReport {
-      buffer.record({ kind: "outcome", episode, result, weight });
       const ep = episodes.get(episode);
-      return ep
-        ? cycle.run(ep, buffer)
-        : { opsApplied: 0, claimsSuperseded: 0, errors: ["unknown episode"] };
+      if (!ep) return { opsApplied: 0, claimsSuperseded: 0, errors: [UNKNOWN_EPISODE_ERROR] };
+      buffer.record({ kind: "outcome", episode, result, weight });
+      return cycle.run(ep, buffer);
     },
     runCycle(episode: EpisodeId): CycleReport {
       const ep = episodes.get(episode);
       return ep
         ? cycle.run(ep, buffer)
-        : { opsApplied: 0, claimsSuperseded: 0, errors: ["unknown episode"] };
+        : { opsApplied: 0, claimsSuperseded: 0, errors: [UNKNOWN_EPISODE_ERROR] };
     },
   };
 }

@@ -1,6 +1,6 @@
 import { createBioMemory } from "./bio-memory.js";
 import { createMnemeGateway } from "./gateway.js";
-import { suppression, exponentialDecay } from "./policies/suppression.js";
+import { suppression } from "./policies/suppression.js";
 import type { RetrievalContext } from "./types.js";
 
 // ─── Acceptance Criterion 1 ──────────────────────────────────────────────────
@@ -48,28 +48,16 @@ it("recordOutcome fires an inline cycle scoped to the episode", () => {
   expect(report.errors).toHaveLength(0);
 });
 
-it("recordUsage does not trigger a cycle (opsApplied stays 0 until runCycle)", () => {
-  // We verify by calling recordUsage and then verifying runCycle is still callable
-  // (not a no-op error) — signals survive until an explicit cycle drains them.
+it("recordUsage buffers signals without triggering a cycle; runCycle afterwards reports opsApplied: 0 for empty claimIds", () => {
+  // recordUsage only buffers — no cycle fires. When we call runCycle next it
+  // drains the buffer cleanly. With an empty claimIds list there are no claims
+  // to update, so opsApplied is 0 confirming the cycle ran but found nothing.
   const bio = createBioMemory();
   const ep = bio.openEpisode();
-  // recordUsage just buffers — no cycle fires, so no error here
   bio.recordUsage([], ep.id);
-  // runCycle now explicitly drains the buffer
   const report = bio.runCycle(ep.id);
   expect(report.errors).toHaveLength(0);
-});
-
-it("recordUsage alone does not consume signals (cycle can still run after)", () => {
-  // If recordUsage triggered a cycle it would flush the buffer, so running an
-  // explicit cycle afterwards would find nothing. We can't directly observe the
-  // buffer, but we can confirm runCycle returns a clean report (no error) which
-  // proves it ran successfully (signals were flushed by the cycle, not before).
-  const bio = createBioMemory();
-  const ep = bio.openEpisode();
-  bio.recordUsage([], ep.id);
-  const report = bio.runCycle(ep.id);
-  expect(report).toMatchObject({ errors: [] });
+  expect(report.opsApplied).toBe(0);
 });
 
 // ─── Acceptance Criterion 3 ──────────────────────────────────────────────────
@@ -90,6 +78,28 @@ it("runCycle against an unknown episode returns a report with an error", () => {
   expect(report.errors).toHaveLength(1);
   expect(report.errors[0]).toMatch(/unknown episode/i);
   expect(report.opsApplied).toBe(0);
+});
+
+it("recordOutcome with unknown episode does NOT strand signals in the buffer (calls exceeding the cap do not throw)", () => {
+  // With the bug, each call to recordOutcome unconditionally called buffer.record()
+  // before checking the episode. For an unknown episode no cycle ever runs to
+  // flush the buffer, so each call consumes one slot of the 10 000-slot cap.
+  // Calling it 10 001 times would cause buffer.record() to throw on the 10 001st.
+  // After the fix the episode is checked FIRST; no slot is consumed for unknown
+  // episodes, so calling it 10 001 times never throws.
+  const bio = createBioMemory();
+
+  // 10 001 calls — one more than the default SignalBuffer cap of 10 000.
+  expect(() => {
+    for (let i = 0; i < 10_001; i++) {
+      bio.recordOutcome("ep-does-not-exist", "success");
+    }
+  }).not.toThrow();
+
+  // A subsequent valid operation is unaffected — the buffer has no stranded signals.
+  const ep = bio.openEpisode();
+  const report = bio.recordOutcome(ep.id, "success");
+  expect(report.errors).toHaveLength(0);
 });
 
 // ─── Acceptance Criterion 4 ──────────────────────────────────────────────────
