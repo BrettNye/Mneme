@@ -1,7 +1,8 @@
 // Public library surface — re-export everything consumers need.
 
-export { createMneme, sigma, tau, delta, rho, gamma, kappa, pipe, leaf } from "./mneme.js";
+export { createMneme, sigma, tau, delta, rho, gamma, kappa, pipe, leaf, alpha, reweight } from "./mneme.js";
 export { createSqliteAdapter } from "./adapters/sqlite.js";
+export type { AggregateResult, AggValue, GroupKey } from "./algebra/aggregation.js";
 
 // Public core types
 export type { Claim, CandidateClaim, Status, Source } from "./core/claim.js";

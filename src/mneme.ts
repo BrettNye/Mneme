@@ -3,7 +3,7 @@ import { Promoter } from "./write/pipeline.js";
 import type { StorageAdapter } from "./adapters/adapter.js";
 import type { TierRequirement } from "./catalog/tiers.js";
 import type { Corpus as CorpusDef, ContradictionPolicy } from "./catalog/corpus.js";
-import type { CandidateClaim } from "./core/claim.js";
+import type { CandidateClaim, Claim } from "./core/claim.js";
 import type { Predicate } from "./algebra/predicate.js";
 import type { Corpus, RankedCorpus, ComposedContext } from "./algebra/types.js";
 import type { Value } from "./core/value.js";
@@ -27,6 +27,28 @@ import { delta as deltaOp } from "./algebra/decay.js";
 import { rho as rhoOp, similarityFn } from "./algebra/similarity.js";
 import { kappa as kappaOp, type Format } from "./algebra/composition.js";
 import type { Instant } from "./core/time.js";
+import {
+  alphaCount,
+  alphaCountWhere,
+  alphaGroupBy,
+  alphaRate,
+  alphaBinaryRate,
+  alphaSum,
+  alphaAvg,
+  alphaMin,
+  alphaMax,
+  type AggregateResult,
+  type AggValue,
+} from "./algebra/aggregation.js";
+import {
+  alphaJoinAggregate,
+  reweightMultiply,
+  reweightMultiplyMean,
+  reweightWilsonFloor,
+  reweightNormalize,
+  reweightBoost,
+  type ReweightFn,
+} from "./algebra/aggregate-join.js";
 
 export type { Stage, EvalContext } from "./algebra/expression.js";
 export type { Format } from "./algebra/composition.js";
@@ -82,6 +104,36 @@ export const kappa = {
     liftOp(kappaOp("json", maxTokens, dedupThreshold)),
   text: (maxTokens: number, dedupThreshold?: number): Stage<RankedCorpus, ComposedContext> =>
     liftOp(kappaOp("text", maxTokens, dedupThreshold)),
+};
+
+// ── Aggregation stage builders ───────────────────────────────────────────────
+
+export const alpha = {
+  count: (): Stage<Corpus, AggregateResult> => liftOp(alphaCount),
+  countWhere: (p: Predicate): Stage<Corpus, AggregateResult> => liftOp(alphaCountWhere(p)),
+  sum: (path: string): Stage<Corpus, AggregateResult> => liftOp(alphaSum(path)),
+  avg: (path: string): Stage<Corpus, AggregateResult> => liftOp(alphaAvg(path)),
+  min: (path: string): Stage<Corpus, AggregateResult> => liftOp(alphaMin(path)),
+  max: (path: string): Stage<Corpus, AggregateResult> => liftOp(alphaMax(path)),
+  groupBy: (field: string, core: (claims: Claim[]) => AggValue): Stage<Corpus, AggregateResult> =>
+    liftOp(alphaGroupBy(field, core)),
+  rate: (num: Predicate, denom: Predicate): Stage<Corpus, AggregateResult> =>
+    liftOp(alphaRate(num, denom)),
+  binaryRate: (valuePath: string): Stage<Corpus, AggregateResult> =>
+    liftOp(alphaBinaryRate(valuePath)),
+  joinAggregate: (
+    aggregate: AggregateResult,
+    joinKey: string,
+    fn: ReweightFn
+  ): Stage<RankedCorpus, RankedCorpus> => liftOp(alphaJoinAggregate(aggregate, joinKey, fn)),
+};
+
+export const reweight = {
+  multiply: reweightMultiply,
+  multiplyMean: reweightMultiplyMean,
+  wilsonFloor: reweightWilsonFloor,
+  normalize: reweightNormalize,
+  boost: reweightBoost,
 };
 
 // Re-export pipe and leaf from expression so callers can import them from here.

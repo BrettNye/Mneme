@@ -1,9 +1,10 @@
-import { createMneme } from "./mneme.js";
+import { createMneme, alpha, reweight } from "./mneme.js";
 import { createSqliteAdapter } from "./adapters/sqlite.js";
 import { pipe, leaf, sigma, kappa, tau, rho, delta } from "./mneme.js";
 import type { ComposedContext } from "./algebra/types.js";
 import type { Corpus as CorpusDef } from "./catalog/corpus.js";
 import type { ClaimSchema } from "./catalog/schema.js";
+import type { AggregateResult } from "./algebra/aggregation.js";
 
 const schema: ClaimSchema = {
   version: "1",
@@ -359,4 +360,182 @@ it("tau.now() uses pinned evaluationClock so results are deterministic at a fixe
 
   expect(resultInside.claims.length).toBeGreaterThan(0);
   expect(resultNow.claims.length).toBe(0);
+});
+
+// ── alpha aggregation builders ────────────────────────────────────────────────
+
+const aggCorpusDef: CorpusDef = {
+  id: "workspace:agg-test",
+  displayName: "Agg Test Corpus",
+  schema: {
+    version: "1",
+    subjects: ["workspace:agg-test"],
+    scopeFields: { actionId: "string" },
+    required: [],
+    scalarPseudocount: { manual: 2 },
+  },
+  defaults: {
+    decayPolicy: { kind: "none" },
+    confidenceThreshold: 0.5,
+    contradictionPolicy: { kind: "always_accept" },
+    defaultStatus: ["validated"],
+  },
+  requiredTiers: [{ kind: "core" }],
+  metadata: {},
+  createdAt: 0,
+  updatedAt: 0,
+};
+
+it("alpha.count() returns AggregateResult with groups map", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(aggCorpusDef);
+
+  m.commit("workspace:agg-test", {
+    profile: "profile-1" as any,
+    workspace: "workspace:agg-test" as any,
+    subject: "action-1",
+    key: "outcome",
+    scope: {},
+    value: "result",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:agg-test@1",
+  }, { writer: "test-writer" });
+
+  const agg = m.query<AggregateResult>("workspace:agg-test", pipe(leaf("workspace:agg-test"), alpha.count()));
+  expect(agg.groups).toBeInstanceOf(Map);
+  const entry = agg.groups.get("__none__");
+  expect(entry?.value.kind).toBe("count");
+  expect((entry?.value as any).n).toBe(1);
+});
+
+it("alpha.binaryRate() returns AggregateResult with a rate kind group", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(aggCorpusDef);
+
+  m.commit("workspace:agg-test", {
+    profile: "profile-1" as any,
+    workspace: "workspace:agg-test" as any,
+    subject: "action-a",
+    key: "won",
+    scope: {},
+    value: true,
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:agg-test@1",
+  }, { writer: "test-writer" });
+
+  m.commit("workspace:agg-test", {
+    profile: "profile-1" as any,
+    workspace: "workspace:agg-test" as any,
+    subject: "action-a",
+    key: "won",
+    scope: {},
+    value: false,
+    confidence: { distribution: "beta", parameters: { alpha: 5, beta: 5 }, raw: 0.5 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:agg-test@1",
+  }, { writer: "test-writer" });
+
+  const agg = m.query<AggregateResult>("workspace:agg-test", pipe(leaf("workspace:agg-test"), alpha.binaryRate("value")));
+  expect(agg.groups).toBeInstanceOf(Map);
+  const entry = agg.groups.get("__none__");
+  expect(entry?.value.kind).toBe("rate");
+});
+
+it("alpha.countWhere() counts only matching claims", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(aggCorpusDef);
+
+  m.commit("workspace:agg-test", {
+    profile: "profile-1" as any,
+    workspace: "workspace:agg-test" as any,
+    subject: "action-x",
+    key: "outcome",
+    scope: {},
+    value: "result",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:agg-test@1",
+  }, { writer: "test-writer" });
+
+  m.commit("workspace:agg-test", {
+    profile: "profile-1" as any,
+    workspace: "workspace:agg-test" as any,
+    subject: "action-y",
+    key: "outcome",
+    scope: {},
+    value: "other",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:agg-test@1",
+  }, { writer: "test-writer" });
+
+  const agg = m.query<AggregateResult>("workspace:agg-test", pipe(leaf("workspace:agg-test"), alpha.countWhere({ op: "subjectEq", value: "action-x" })));
+  const entry = agg.groups.get("__none__");
+  expect(entry?.value.kind).toBe("count");
+  expect((entry?.value as any).n).toBe(1);
+});
+
+it("alpha.joinAggregate applies reweightMultiply to a RankedCorpus", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(aggCorpusDef);
+
+  m.commit("workspace:agg-test", {
+    profile: "profile-1" as any,
+    workspace: "workspace:agg-test" as any,
+    subject: "join-subject",
+    key: "score",
+    scope: {},
+    value: "content for ranking",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:agg-test@1",
+  }, { writer: "test-writer" });
+
+  // Build a standalone aggregate (count = 1)
+  const agg = m.query<AggregateResult>("workspace:agg-test", pipe(leaf("workspace:agg-test"), alpha.count()));
+
+  // joinAggregate returns RankedCorpus
+  const ranked = m.query<any>(
+    "workspace:agg-test",
+    pipe(leaf("workspace:agg-test"), rho.jaccard("content for ranking"), alpha.joinAggregate(agg, "subject", reweight.multiply))
+  );
+  expect(ranked.scored).toBeDefined();
+});
+
+it("reweight object exposes multiply, multiplyMean, wilsonFloor, normalize, boost", () => {
+  expect(typeof reweight.multiply).toBe("function");
+  expect(typeof reweight.multiplyMean).toBe("function");
+  expect(typeof reweight.wilsonFloor).toBe("function");
+  expect(typeof reweight.normalize).toBe("function");
+  expect(typeof reweight.boost).toBe("function");
 });
