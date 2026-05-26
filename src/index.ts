@@ -14,3 +14,12 @@ export type { TierRequirement } from "./catalog/tiers.js";
 export type { Predicate } from "./algebra/predicate.js";
 export type { ComposedContext, RankedCorpus, Corpus } from "./algebra/types.js";
 export type { EvalContext, Stage } from "./algebra/expression.js";
+
+// Bio layer public surface
+export { createBioMemory } from "./bio/bio-memory.js";
+export { createRunner } from "./bio/runner.js";
+export { createMnemeGateway } from "./bio/gateway.js";
+export type { MnemeGateway } from "./bio/gateway.js";
+export { suppression, compose, exponentialDecay } from "./bio/policies/suppression.js";
+export { evidenceUpdate } from "./bio/processes/evidence-update.js";
+export type * from "./bio/types.js";
