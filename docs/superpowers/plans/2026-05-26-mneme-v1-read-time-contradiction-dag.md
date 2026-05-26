@@ -17,6 +17,8 @@ flowchart TD
     classDef running fill:#87ceeb,stroke:#333
     classDef failed fill:#ffb6c1,stroke:#333
     classDef skipped fill:#d3d3d3,stroke:#333,stroke-dasharray: 5 5
+
+    class task-contradiction-detect,task-resolution,task-synthesis done
 ```
 
 ## Context
@@ -53,7 +55,7 @@ depends_on: []
 files:
   - src/algebra/contradiction.ts
   - src/algebra/contradiction.test.ts
-status: pending
+status: done
 ```
 
 The §4.8 detection layer and its meta-relation types: `clustersOf` (primary, n-way), with `pairsOf` and
@@ -136,7 +138,7 @@ depends_on: [task-contradiction-detect]
 files:
   - src/algebra/resolution.ts
   - src/algebra/resolution.test.ts
-status: pending
+status: done
 ```
 
 The five resolution operators that need no belief combination (§4.8): pairwise `resolveDeprecateLower`,
@@ -214,7 +216,7 @@ depends_on: [task-contradiction-detect]
 files:
   - src/algebra/synthesis.ts
   - src/algebra/synthesis.test.ts
-status: pending
+status: done
 ```
 
 `resolveSynthesizeBelief` (§4.8, core binary case): for each binary cluster (exactly 2 value groups), fuse the
