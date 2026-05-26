@@ -1,4 +1,4 @@
-import type { CandidateClaim, Claim } from "../core/claim.js";
+import type { CandidateClaim, Claim, Status } from "../core/claim.js";
 import { newClaimId, type ClaimId } from "../core/ids.js";
 import { scopeHash } from "../core/scope.js";
 import { valueHash } from "../core/value.js";
@@ -6,16 +6,54 @@ import { validateScope, type ClaimSchema } from "../catalog/schema.js";
 import { enforce } from "./contradiction.js";
 import { checkIdempotent, recordIdempotent, idempotencyScope } from "./idempotency.js";
 import type { ContradictionPolicy } from "../catalog/corpus.js";
-import type { StorageAdapter } from "../adapters/adapter.js";
+import type { ClaimEvent, StorageAdapter } from "../adapters/adapter.js";
+
+// Forward-only lifecycle transitions (excluding any→deprecated which is always valid)
+const LIFECYCLE_ORDER: Status[] = ["candidate", "provisional", "validated", "deprecated"];
+
+function isForwardTransition(from: Status, to: Status): boolean {
+  if (to === "deprecated") return true; // any → deprecated always valid
+  const fromIdx = LIFECYCLE_ORDER.indexOf(from);
+  const toIdx = LIFECYCLE_ORDER.indexOf(to);
+  // Must be strictly forward (deprecated case handled above)
+  return toIdx > fromIdx;
+}
 
 export class Promoter {
-  private seq = 0;
-  private lastRecorded = 0;
-
   constructor(
     private readonly adapter: StorageAdapter,
-    private readonly schema: ClaimSchema
+    private readonly schema: ClaimSchema,
+    private readonly corpusId = ""
   ) {}
+
+  /**
+   * Atomic write core. Wraps everything in adapter.transaction, derives
+   * recordedSeq from maxRecordedSeq()+1, appends the ClaimEvent, and records
+   * idempotency — all inside the transaction.
+   */
+  private write<T>(
+    idem: { scope: string; key?: string } | undefined,
+    body: (recorded: number, seq: number) => { result: T; id?: string; event: ClaimEvent }
+  ): T {
+    if (idem?.key) {
+      const prior = checkIdempotent(this.adapter, idem.scope, idem.key, Date.now());
+      if (prior) {
+        // Return a duplicate result carrying the prior id.
+        // The generic result type T must accommodate { id, status } so we cast.
+        return { id: prior, status: "duplicate" } as unknown as T;
+      }
+    }
+    return this.adapter.transaction(() => {
+      const recorded = Date.now();
+      const seq = this.adapter.maxRecordedSeq() + 1;
+      const { result, id, event } = body(recorded, seq);
+      this.adapter.appendEvent(event);
+      if (idem?.key && id) {
+        recordIdempotent(this.adapter, idem.scope, idem.key, id, Date.now());
+      }
+      return result;
+    });
+  }
 
   commit(
     candidate: CandidateClaim,
@@ -35,7 +73,6 @@ export class Promoter {
     validateScope(candidate.scope, this.schema);
 
     // Build a partial claim with hashes and id — needed for enforce() to inspect.
-    // Do NOT mutate this.seq or this.lastRecorded yet; those only advance on accept.
     const claimId = newClaimId();
     const candidateForEnforce = {
       ...candidate,
@@ -51,23 +88,146 @@ export class Promoter {
 
     if (outcome.decision === "reject") return { id: claimId, status: "rejected" };
 
-    // Accepted: now advance the monotonic counters and finalize the claim.
-    const recorded = Math.max(Date.now(), this.lastRecorded);
-    this.lastRecorded = recorded;
+    // Accepted: write atomically via the core.
+    return this.adapter.transaction(() => {
+      const recorded = Date.now();
+      const seq = this.adapter.maxRecordedSeq() + 1;
 
-    const claim: Claim = {
-      ...candidateForEnforce,
-      recorded,
-      recordedSeq: this.seq++,
-    };
+      const claim: Claim = {
+        ...candidateForEnforce,
+        recorded,
+        recordedSeq: seq,
+      };
 
-    outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as ClaimId));
-    this.adapter.insertClaim(claim);
+      outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as ClaimId));
+      this.adapter.insertClaim(claim);
+
+      const event: ClaimEvent = {
+        op: "commit",
+        corpusId: this.corpusId,
+        writer: opts.writer,
+        claimId: claim.id,
+        recorded,
+        recordedSeq: seq,
+      };
+      this.adapter.appendEvent(event);
+
+      if (opts.idempotencyKey) {
+        recordIdempotent(this.adapter, scope, opts.idempotencyKey, claim.id, Date.now());
+      }
+
+      return { id: claim.id, status: "committed" as const };
+    });
+  }
+
+  supersede(
+    deprecateId: ClaimId,
+    replacement: CandidateClaim,
+    opts: {
+      writer: string;
+      idempotencyKey?: string;
+    }
+  ): { id: string; status: "superseded" | "duplicate" } {
+    validateScope(replacement.scope, this.schema);
+
+    const idemScope = idempotencyScope(replacement.workspace, opts.writer, replacement.key);
 
     if (opts.idempotencyKey) {
-      recordIdempotent(this.adapter, scope, opts.idempotencyKey, claim.id, Date.now());
+      const prior = checkIdempotent(this.adapter, idemScope, opts.idempotencyKey, Date.now());
+      if (prior) return { id: prior, status: "duplicate" };
     }
 
-    return { id: claim.id, status: "committed" };
+    return this.adapter.transaction(() => {
+      const recorded = Date.now();
+      const seq = this.adapter.maxRecordedSeq() + 1;
+
+      const newId = newClaimId();
+      const newClaim: Claim = {
+        ...replacement,
+        id: newId,
+        scopeHash: scopeHash(replacement.scope),
+        valueHash: valueHash(replacement.value),
+        recorded,
+        recordedSeq: seq,
+        status: replacement.status ?? "validated",
+      };
+
+      // Best-effort soft-deprecate (missing id → no-op for store, but call is made)
+      this.adapter.deleteClaim(deprecateId);
+      this.adapter.insertClaim(newClaim);
+
+      const event: ClaimEvent = {
+        op: "supersede",
+        corpusId: this.corpusId,
+        writer: opts.writer,
+        claimId: newId,
+        deprecatedId: deprecateId,
+        recorded,
+        recordedSeq: seq,
+      };
+      this.adapter.appendEvent(event);
+
+      if (opts.idempotencyKey) {
+        recordIdempotent(this.adapter, idemScope, opts.idempotencyKey, newId, Date.now());
+      }
+
+      return { id: newId, status: "superseded" as const };
+    });
+  }
+
+  promote(
+    targetId: ClaimId,
+    to: Status,
+    opts: {
+      writer: string;
+      reason?: string;
+      idempotencyKey?: string;
+    }
+  ): { id: string; status: "promoted" | "invalid_transition" | "not_found" | "duplicate" } {
+    const target = this.adapter.getClaim(targetId);
+    if (!target) return { id: targetId, status: "not_found" };
+
+    // Forward-only lifecycle check
+    if (!isForwardTransition(target.status, to)) {
+      return { id: targetId, status: "invalid_transition" };
+    }
+
+    const idemScope = idempotencyScope(target.workspace, opts.writer, target.key);
+
+    if (opts.idempotencyKey) {
+      const prior = checkIdempotent(this.adapter, idemScope, opts.idempotencyKey, Date.now());
+      if (prior) return { id: prior, status: "duplicate" };
+    }
+
+    return this.adapter.transaction(() => {
+      // The core's fresh stamp for the event
+      const recorded = Date.now();
+      const seq = this.adapter.maxRecordedSeq() + 1;
+
+      // The claim keeps its own recorded/recordedSeq
+      const promotedClaim: Claim = {
+        ...target,
+        status: to,
+      };
+      this.adapter.insertClaim(promotedClaim);
+
+      const event: ClaimEvent = {
+        op: "promote",
+        corpusId: this.corpusId,
+        writer: opts.writer,
+        claimId: targetId,
+        toStatus: to,
+        reason: opts.reason,
+        recorded,
+        recordedSeq: seq,
+      };
+      this.adapter.appendEvent(event);
+
+      if (opts.idempotencyKey) {
+        recordIdempotent(this.adapter, idemScope, opts.idempotencyKey, targetId, Date.now());
+      }
+
+      return { id: targetId, status: "promoted" as const };
+    });
   }
 }
