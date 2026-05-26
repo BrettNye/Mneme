@@ -3,10 +3,17 @@ import { corpusOf } from "./types.js";
 import type { StorageAdapter } from "../adapters/adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { gamma } from "./provenance-traversal.js";
+import type { Instant } from "../core/time.js";
 
 export interface EvalContext {
   adapter: StorageAdapter;
   catalog: Catalog;
+  /** Pinned evaluation time for time-dependent operators (δ, τ_now); when set, replaces wall-clock. */
+  evaluationClock?: Instant;
+  /** Mutable accumulator populated during evaluation — records the similarity fn version used (ρ). */
+  usedSimilarityVersions?: Record<string, string>;
+  /** Mutable accumulator populated during evaluation — records the embedding model version used. */
+  usedEmbeddingModelVersions?: Record<string, string>;
 }
 
 /**

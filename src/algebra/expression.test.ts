@@ -1,4 +1,5 @@
 import { leaf, evaluate, pipe, liftOp, gammaStage } from "./expression.js";
+import { type EvalContext } from "./expression.js";
 import { sigma } from "./selection.js";
 import { delta } from "./decay.js";
 import { rho } from "./similarity.js";
@@ -170,6 +171,20 @@ it("full §4 pipeline leaf→σ→δ→σ→ρ→γ→κ yields a ComposedContex
   expect(result.format).toBe("markdown");
   expect(typeof result.content).toBe("string");
   expect(typeof result.tokenCount).toBe("number");
+});
+
+// ---------- EvalContext optional fields ----------
+
+it("EvalContext accepts an optional pinned evaluationClock and version accumulators", () => {
+  const ctx: EvalContext = { adapter: {} as any, catalog: {} as any, evaluationClock: 1000, usedSimilarityVersions: {} };
+  expect(ctx.evaluationClock).toBe(1000);
+  const bare: EvalContext = { adapter: {} as any, catalog: {} as any };
+  expect(bare.evaluationClock).toBeUndefined();
+});
+
+it("EvalContext usedEmbeddingModelVersions is optional and can hold version strings", () => {
+  const ctx: EvalContext = { adapter: {} as any, catalog: {} as any, usedEmbeddingModelVersions: { "text-embed-3": "v1" } };
+  expect(ctx.usedEmbeddingModelVersions).toEqual({ "text-embed-3": "v1" });
 });
 
 // ---------- evaluate preserves operator order ----------
