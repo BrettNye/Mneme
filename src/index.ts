@@ -31,3 +31,8 @@ export type {
   RetrievalContext, RetrievalPolicy,
   SignalView, ProcessInput, CognitiveProcess, CycleReport,
 } from "./bio/types.js";
+
+// Dreaming public surface
+export type { DreamFn, DreamInput, ProposedInsight, DreamReport } from "./bio/processes/dreaming-types.js";
+export type { DreamPassOpts } from "./bio/processes/dreaming.js";
+export { createDreamPass } from "./bio/processes/dreaming.js";
