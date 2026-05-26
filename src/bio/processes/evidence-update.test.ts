@@ -221,8 +221,55 @@ it("outcome credit is NOT applied to non-surfaced claims even if they are used",
   }
 });
 
-it("scalar confidence claim is promoted to beta using DEFAULT_PRIOR before applying deltas", () => {
+it("scalar confidence claim with p=0.9 is promoted to beta preserving its mean (not collapsed to 0.5)", () => {
+  // This is the correctness regression test: p=0.9 must produce a beta with mean ~0.9, not 0.5
   const claimId = "sc1" as unknown as ClaimId;
+  const scalarClaim: Claim = {
+    id: claimId,
+    profile: "p1" as Claim["profile"],
+    workspace: "w1" as Claim["workspace"],
+    subject: "test.e1",
+    key: "test.skill.python",
+    scope: { kind: "global" },
+    scopeHash: "sh2",
+    value: { kind: "scalar", v: 0.9 },
+    valueHash: "vh2",
+    confidence: { distribution: "scalar", parameters: { p: 0.9 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    recorded: 1000 as any,
+    recordedSeq: 1,
+    status: "provisional",
+    source: "heuristic",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "v1",
+  };
+
+  const proc = evidenceUpdate();
+  // A small positive usage delta — should not collapse the mean to 0.5
+  const ops = proc.run(
+    makeInput({ usageIds: ["sc1"], surfacedIds: [], outcomes: [], claims: [scalarClaim] })
+  );
+
+  expect(ops).toHaveLength(1);
+  const op = ops[0];
+  if (op.kind === "supersede") {
+    const conf = op.with.confidence;
+    // Should be promoted to beta distribution
+    expect(conf.distribution).toBe("beta");
+    if (conf.distribution === "beta") {
+      // SCALAR_PSEUDOCOUNT = 2; alpha = 0.9*2 + 0.5 = 2.3, beta = 0.1*2 + 0 = 0.2
+      // mean = 2.3 / (2.3 + 0.2) = 0.92 — clearly in [0.85, 0.95], NOT 0.5
+      const mean = conf.parameters.alpha / (conf.parameters.alpha + conf.parameters.beta);
+      expect(mean).toBeGreaterThan(0.85);
+      expect(mean).toBeLessThan(0.95);
+    }
+  }
+});
+
+it("scalar confidence claim with p=0.7 is promoted to beta preserving its mean", () => {
+  const claimId = "sc2" as unknown as ClaimId;
   const scalarClaim: Claim = {
     id: claimId,
     profile: "p1" as Claim["profile"],
@@ -247,7 +294,7 @@ it("scalar confidence claim is promoted to beta using DEFAULT_PRIOR before apply
 
   const proc = evidenceUpdate();
   const ops = proc.run(
-    makeInput({ usageIds: ["sc1"], surfacedIds: [], outcomes: [], claims: [scalarClaim] })
+    makeInput({ usageIds: ["sc2"], surfacedIds: [], outcomes: [], claims: [scalarClaim] })
   );
 
   expect(ops).toHaveLength(1);
@@ -257,9 +304,14 @@ it("scalar confidence claim is promoted to beta using DEFAULT_PRIOR before apply
     // Should be promoted to beta distribution
     expect(conf.distribution).toBe("beta");
     if (conf.distribution === "beta") {
-      // DEFAULT_PRIOR: W=2, a=0.5 → alpha=1, beta=1; then usage adds 0.5
-      expect(conf.parameters.alpha).toBeCloseTo(1.5);
-      expect(conf.parameters.beta).toBeCloseTo(1);
+      // SCALAR_PSEUDOCOUNT = 2; alpha = 0.7*2 + 0.5 = 1.9, beta = 0.3*2 + 0 = 0.6
+      // mean = 1.9 / (1.9 + 0.6) = 0.76 — clearly > 0.5 and close to 0.7
+      const mean = conf.parameters.alpha / (conf.parameters.alpha + conf.parameters.beta);
+      expect(mean).toBeGreaterThan(0.65);
+      expect(mean).toBeLessThan(0.85);
+      // Also verify exact params: alpha=1.9, beta=0.6
+      expect(conf.parameters.alpha).toBeCloseTo(1.9);
+      expect(conf.parameters.beta).toBeCloseTo(0.6);
     }
   }
 });

@@ -1,10 +1,15 @@
 import type { Claim, CandidateClaim } from "../../core/claim.js";
 import type { ClaimId } from "../../core/ids.js";
-import { DEFAULT_PRIOR } from "../../core/confidence.js";
 import type { AppendOp, CognitiveProcess, ProcessInput } from "../types.js";
 
 const USAGE_WEIGHT = 0.5;
 const OUTCOME_WEIGHT = 2.0;
+
+// Explicit bio-layer reinforcement evidence weight for promoting a scalar belief to Beta.
+// This is a documented wave-1 choice: total pseudocount = 2 produces a weak but mean-preserving
+// prior so that a scalar claim with p=0.9 promotes to Beta(1.8, 0.2), mean = 0.9 exactly.
+// NOT a silent default — see design doc docs/superpowers/specs/2026-05-26-bio-layer-design.md.
+const SCALAR_PSEUDOCOUNT = 2;
 
 export function evidenceUpdate(): CognitiveProcess {
   return {
@@ -47,7 +52,7 @@ export function evidenceUpdate(): CognitiveProcess {
         return {
           kind: "supersede",
           deprecate: c.id,
-          with: reweighted(c, d, episode.id),
+          with: reweighted(c, d, episode.id, input.now),
           reason: "evidence-update",
         };
       });
@@ -61,12 +66,21 @@ function reweighted(
   c: Claim,
   d: { dAlpha: number; dBeta: number },
   episodeId: string,
+  now: ProcessInput["now"],
 ): CandidateClaim {
-  // Promote scalar confidence to beta using DEFAULT_PRIOR if needed
+  // Promote scalar confidence to beta preserving its mean exactly.
+  // For a scalar claim with mean p: alpha = p * SCALAR_PSEUDOCOUNT, beta = (1-p) * SCALAR_PSEUDOCOUNT
+  // so that mean = alpha/(alpha+beta) = p. The scalar already represents a belief, not raw counts.
   const p =
     c.confidence.distribution === "beta"
       ? c.confidence.parameters
-      : { alpha: DEFAULT_PRIOR.W / 2, beta: DEFAULT_PRIOR.W / 2 };
+      : (() => {
+          const scalarP = c.confidence.parameters.p;
+          return {
+            alpha: scalarP * SCALAR_PSEUDOCOUNT,
+            beta: (1 - scalarP) * SCALAR_PSEUDOCOUNT,
+          };
+        })();
 
   const params = {
     alpha: p.alpha + d.dAlpha,
@@ -75,6 +89,8 @@ function reweighted(
 
   // Strip fields that CandidateClaim omits
   const { id, recorded, recordedSeq, scopeHash, valueHash, status, ...rest } = c;
+  // Use input.now for provenance timestamps so they reflect evaluation time, not claim-creation time
+  const evalTime = now as unknown as number;
 
   return {
     ...rest,
@@ -87,11 +103,11 @@ function reweighted(
       ...c.provenance,
       derivedFrom: {
         queryExpression: "evidence-update",
-        corpusState: recorded as unknown as number,
+        corpusState: evalTime,
         inputClaims: [c.id],
         similarityVersions: {},
         embeddingModelVersions: {},
-        evaluationClock: recorded as unknown as number,
+        evaluationClock: evalTime,
         combinationRule: `episode:${episodeId}`,
       },
     },
