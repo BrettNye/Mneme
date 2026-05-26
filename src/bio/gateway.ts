@@ -7,6 +7,8 @@ import { valueHash } from "../core/value.js";
 import { now } from "../core/time.js";
 import type { AppendOp, AppendResult, BioQuery } from "./types.js";
 
+const BIO_IDEMPOTENCY_SCOPE = "bio";
+
 export interface MnemeGateway {
   read(query: BioQuery): Claim[];
   readByIds(ids: ClaimId[]): Claim[];
@@ -36,7 +38,7 @@ export function createMnemeGateway(adapter: StorageAdapter = createSqliteAdapter
         skipped = 0;
       for (let i = 0; i < ops.length; i++) {
         const key = opKey(ops[i], i);
-        if (adapter.getIdempotencyRecord("bio", key)) {
+        if (adapter.getIdempotencyRecord(BIO_IDEMPOTENCY_SCOPE, key)) {
           skipped++;
           continue;
         }
@@ -51,13 +53,15 @@ export function createMnemeGateway(adapter: StorageAdapter = createSqliteAdapter
         } else {
           // promote
           const c = adapter.getClaim(op.target);
-          if (c) {
-            // Re-insert the claim with only the status changed; id and all other
-            // fields (value, confidence, evidence) remain untouched.
-            adapter.insertClaim({ ...c, status: op.to });
+          if (!c) {
+            // Target not found — skip silently but do NOT count as applied.
+            continue;
           }
+          // Re-insert the claim with only the status changed; id and all other
+          // fields (value, confidence, evidence) remain untouched.
+          adapter.insertClaim({ ...c, status: op.to });
         }
-        adapter.putIdempotencyRecord("bio", key, {
+        adapter.putIdempotencyRecord(BIO_IDEMPOTENCY_SCOPE, key, {
           result: op.kind,
           createdAt: now(),
         });

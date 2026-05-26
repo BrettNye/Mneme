@@ -190,6 +190,52 @@ it("promote changes a claim's status", () => {
   expect(updated[0].status).toBe("validated");
 });
 
+it("promote preserves the claim id (id is unchanged after status transition)", () => {
+  const gw = createMnemeGateway();
+  gw.apply(
+    [{ kind: "derive", claim: makeCandidateClaim({ subject: "prom-id-test", status: "candidate" }) }],
+    (_op, i) => `prom-id-orig-${i}`
+  );
+  const [original] = gw.read({ corpusId: "c", subject: "prom-id-test" });
+  const originalId = original.id;
+
+  gw.apply(
+    [{ kind: "promote", target: originalId, to: "validated", reason: "checking id preservation" }],
+    (_op, i) => `prom-id-upd-${i}`
+  );
+
+  const updated = gw.readByIds([originalId]);
+  expect(updated.length).toBe(1);
+  expect(updated[0].id).toBe(originalId);
+  expect(updated[0].status).toBe("validated");
+});
+
+it("promote non-existent target yields applied: 0 and changes nothing", () => {
+  const gw = createMnemeGateway();
+  // Insert a known claim so we can verify it is unchanged
+  gw.apply(
+    [{ kind: "derive", claim: makeCandidateClaim({ subject: "prom-missing-bystander" }) }],
+    (_op, i) => `prom-miss-orig-${i}`
+  );
+  const beforeClaims = gw.read({ corpusId: "c", subject: "prom-missing-bystander" });
+  expect(beforeClaims.length).toBe(1);
+
+  // Promote a non-existent id
+  const nonExistentId = newClaimId();
+  const result = gw.apply(
+    [{ kind: "promote", target: nonExistentId, to: "validated", reason: "should be a no-op" }],
+    (_op, i) => `prom-miss-upd-${i}`
+  );
+
+  expect(result.applied).toBe(0);
+  expect(result.skipped).toBe(0);
+
+  // Bystander claim unchanged
+  const afterClaims = gw.read({ corpusId: "c", subject: "prom-missing-bystander" });
+  expect(afterClaims.length).toBe(1);
+  expect(afterClaims[0].status).toBe(beforeClaims[0].status);
+});
+
 // ---------------------------------------------------------------------------
 // Invariant property test (design spec §11)
 //
@@ -199,8 +245,10 @@ it("promote changes a claim's status", () => {
 // ---------------------------------------------------------------------------
 
 function getAllClaims(adapter: StorageAdapter): Claim[] {
-  // Query with no filters to get everything — we use the raw adapter for the
-  // invariant snapshot (the gateway's read path can filter by status).
+  // `corpusId` is intentionally unfiltered here — the adapter ignores it when
+  // no other predicates narrow the result set, so this acts as "read everything".
+  // We use the raw adapter (not the gateway's read path) to capture all rows
+  // regardless of status, which is required for the append-only invariant check.
   return adapter.query({ corpusId: "invariant" });
 }
 
@@ -289,6 +337,8 @@ it("invariant: no claim row is physically removed and no value/confidence/eviden
         // Row must still be physically present (no hard delete)
         expect(current, `Round ${round} op ${opIndex}: row ${id} was physically removed`).toBeDefined();
         if (current) {
+          // id must not have changed (promote must not swap the id for a new one)
+          expect(current.id, `Round ${round} op ${opIndex}: id changed for ${id}`).toBe(id);
           // value must not have changed
           expect(JSON.stringify(current.value), `Round ${round} op ${opIndex}: value mutated for ${id}`).toBe(
             JSON.stringify(snap.value)
