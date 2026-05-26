@@ -500,36 +500,31 @@ it("alpha.countWhere() counts only matching claims", () => {
   expect((entry?.value as any).n).toBe(1);
 });
 
-it("alpha.joinAggregate applies reweightMultiply to a RankedCorpus", () => {
-  const adapter = createSqliteAdapter();
-  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
-  m.createCorpus(aggCorpusDef);
+it("alpha.joinAggregate applies reweightMultiply and the reweight fn IS invoked (score changes)", () => {
+  // Build a manual AggregateResult whose group key equals the claim's join-field value.
+  // This ensures the join MATCHES and the reweight function runs.
+  const agg: AggregateResult = {
+    groups: new Map([
+      ["act-A", { key: { kind: "scalar", value: "act-A" }, value: { kind: "count", n: 4 } }],
+    ]),
+  };
 
-  m.commit("workspace:agg-test", {
-    profile: "profile-1" as any,
-    workspace: "workspace:agg-test" as any,
-    subject: "join-subject",
-    key: "score",
-    scope: {},
-    value: "content for ranking",
-    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
-    valid: { from: 0, to: Infinity },
-    source: "manual",
-    provenance: {},
-    evidence: [],
-    tags: [],
-    schema: "workspace:agg-test@1",
-  }, { writer: "test-writer" });
+  // A ranked corpus with one claim whose subject is "act-A", scored 0.5
+  const ranked = {
+    scored: [
+      {
+        claim: { subject: "act-A", scope: {}, value: {} } as any,
+        score: 0.5,
+      },
+    ],
+  };
 
-  // Build a standalone aggregate (count = 1)
-  const agg = m.query<AggregateResult>("workspace:agg-test", pipe(leaf("workspace:agg-test"), alpha.count()));
+  // joinAggregate returns a Stage<RankedCorpus, RankedCorpus>; call it directly as a function (input, ctx)
+  const stage = alpha.joinAggregate(agg, "subject", reweight.multiply);
+  const out = stage(ranked as any, {} as any);
 
-  // joinAggregate returns RankedCorpus
-  const ranked = m.query<any>(
-    "workspace:agg-test",
-    pipe(leaf("workspace:agg-test"), rho.jaccard("content for ranking"), alpha.joinAggregate(agg, "subject", reweight.multiply))
-  );
-  expect(ranked.scored).toBeDefined();
+  // 0.5 * 4 = 2.0 — proves reweight.multiply ran, NOT the 0.5 fallback
+  expect(out.scored[0].score).toBe(2.0);
 });
 
 it("reweight object exposes multiply, multiplyMean, wilsonFloor, normalize, boost", () => {
