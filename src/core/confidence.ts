@@ -5,9 +5,11 @@ export type Confidence =
   | { distribution: "beta"; parameters: { alpha: number; beta: number }; raw: number; effective?: number }
   | { distribution: "scalar"; parameters: { p: number }; raw: number; effective?: number };
 
+export const betaMean = (alpha: number, beta: number): number => alpha / (alpha + beta);
+
 export function pointEstimate(c: Confidence): number {
   return c.distribution === "beta"
-    ? c.parameters.alpha / (c.parameters.alpha + c.parameters.beta)
+    ? betaMean(c.parameters.alpha, c.parameters.beta)
     : c.parameters.p;
 }
 

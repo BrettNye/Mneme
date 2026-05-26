@@ -1,4 +1,5 @@
 import type { Corpus } from "./types.js";
+import { partitionBy } from "./types.js";
 import type { Claim } from "../core/claim.js";
 import { DEFAULT_PRIOR } from "../core/confidence.js";
 import { getPath } from "./value-predicate.js";
@@ -176,15 +177,11 @@ export const alphaBinaryRate =
 export const alphaGroupBy =
   (groupField: string, core: (claims: Claim[]) => AggValue) =>
   (c: Corpus): AggregateResult => {
-    const buckets = new Map<string, Claim[]>();
-    for (const cl of c.claims) {
+    const keyed = c.claims.filter((cl) => {
       const raw = claimPath(cl, groupField);
-      if (raw === undefined || raw === null) continue;
-      const k = String(raw);
-      const arr = buckets.get(k) ?? [];
-      arr.push(cl);
-      buckets.set(k, arr);
-    }
+      return raw !== undefined && raw !== null;
+    }) as Claim[];
+    const buckets = partitionBy(keyed, (cl) => String(claimPath(cl, groupField)));
     const groups = new Map<string, { key: GroupKey; value: AggValue }>();
     for (const [k, claims] of buckets) {
       groups.set(k, { key: { kind: "scalar", value: k }, value: core(claims) });

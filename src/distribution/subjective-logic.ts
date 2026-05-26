@@ -1,3 +1,5 @@
+import { DEFAULT_PRIOR } from "../core/confidence.js";
+
 export interface SLOpinion {
   belief: number;
   disbelief: number;
@@ -5,7 +7,7 @@ export interface SLOpinion {
   baseRate: number;
 }
 
-export function betaToOpinion(alpha: number, beta: number, W = 2, a = 0.5): SLOpinion {
+export function betaToOpinion(alpha: number, beta: number, W = DEFAULT_PRIOR.W, a = DEFAULT_PRIOR.a): SLOpinion {
   const total = alpha + beta;
   return {
     belief: (alpha - a * W) / total,
@@ -15,7 +17,7 @@ export function betaToOpinion(alpha: number, beta: number, W = 2, a = 0.5): SLOp
   };
 }
 
-export function opinionToBeta(o: SLOpinion, W = 2): { alpha: number; beta: number } {
+export function opinionToBeta(o: SLOpinion, W = DEFAULT_PRIOR.W): { alpha: number; beta: number } {
   if (o.uncertainty === 0) {
     throw new RangeError("opinionToBeta: uncertainty must be > 0 (a dogmatic opinion has no finite Beta equivalent)");
   }

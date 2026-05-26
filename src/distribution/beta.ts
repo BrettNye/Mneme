@@ -1,13 +1,13 @@
 import type { DistributionProtocol } from "./protocol.js";
 import { betaToOpinion, opinionToBeta, type SLOpinion } from "./subjective-logic.js";
 import { RULE } from "./rules.js";
+import { DEFAULT_PRIOR, betaMean } from "../core/confidence.js";
 
 type Beta = { alpha: number; beta: number };
 
-const W = 2;
-const a = 0.5;
+const { W, a } = DEFAULT_PRIOR;
 
-const mean = (d: Beta): number => d.alpha / (d.alpha + d.beta);
+const mean = (d: Beta): number => betaMean(d.alpha, d.beta);
 const conc = (d: Beta): number => d.alpha + d.beta;
 
 /**
@@ -46,7 +46,7 @@ export const betaBinding: DistributionProtocol<Beta> = {
   serialize: (d) => JSON.stringify(d),
   deserialize: (b) => JSON.parse(b) as Beta,
   canonicalize: (d) => `beta:${d.alpha}:${d.beta}`,
-  mean: (d) => d.alpha / (d.alpha + d.beta),
+  mean: (d) => betaMean(d.alpha, d.beta),
   variance: (d) =>
     (d.alpha * d.beta) /
     ((d.alpha + d.beta) ** 2 * (d.alpha + d.beta + 1)),

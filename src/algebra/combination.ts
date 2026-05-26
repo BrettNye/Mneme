@@ -1,10 +1,10 @@
 import type { Corpus } from "./types.js";
-import { corpusOf } from "./types.js";
+import { corpusOf, claimTripleKey, partitionBy, unionEvidence } from "./types.js";
 import type { Claim } from "../core/claim.js";
 import { bindingFor } from "../distribution/registry.js";
 import { assertSupportsRule } from "../distribution/protocol.js";
 import { assertNotDeprecatedRule, RULE } from "../distribution/rules.js";
-import { SOURCE_WEIGHT } from "../write/source-weight.js";
+import { SOURCE_WEIGHT } from "../core/source-trust.js";
 
 /**
  * Fold a group's claims through the pairwise combine(). For weighted_avg, thread the accumulated
@@ -17,16 +17,9 @@ export const oplusDedupe =
     assertNotDeprecatedRule(ruleId);
 
     // Group claims by (subject, key, scopeHash)
-    const groups = new Map<string, Claim[]>();
-    for (const cl of c.claims) {
-      const key = JSON.stringify([cl.subject, cl.key, cl.scopeHash]);
-      const group = groups.get(key);
-      if (group) {
-        group.push(cl as Claim);
-      } else {
-        groups.set(key, [cl as Claim]);
-      }
-    }
+    const groups = partitionBy(c.claims as Claim[], (cl) =>
+      claimTripleKey(cl.subject, cl.key, cl.scopeHash)
+    );
 
     const out: Claim[] = [];
     for (const group of groups.values()) {
@@ -48,11 +41,7 @@ export const oplusSynthesizeAs =
     const folded = combineGroup(ruleId, [...claims], params);
 
     // Union of all input evidence
-    const evidenceUnion = [
-      ...new Map(
-        claims.flatMap((cl) => cl.evidence.map((e) => [JSON.stringify(e), e]))
-      ).values(),
-    ];
+    const evidenceUnion = unionEvidence(claims.map((cl) => cl.evidence));
 
     // Build an unpersisted Claim (no id, recorded, provenance)
     return {

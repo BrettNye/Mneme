@@ -1,4 +1,5 @@
 import type { Corpus } from "./types.js";
+import { claimTripleKey, partitionBy } from "./types.js";
 import type { Claim } from "../core/claim.js";
 import { pointEstimate, type Confidence } from "../core/confidence.js";
 import { bindingFor } from "../distribution/registry.js";
@@ -23,18 +24,12 @@ export function clustersOf(corpus: Corpus, threshold: number): ContradictionClus
   // 1. keep claims with eff(claim) > threshold
   const aboveThreshold = corpus.claims.filter(claim => eff(claim) > threshold);
 
-  // 2. group by `${subject} ${key} ${scopeHash}` => within each triple sub-group by valueHash
+  // 2. group by (subject, key, scopeHash) => within each triple sub-group by valueHash
   const tripleMap = new Map<string, Map<string, Claim[]>>();
-  for (const claim of aboveThreshold) {
-    const tripleKey = `${claim.subject}\x00${claim.key}\x00${claim.scopeHash}`;
-    if (!tripleMap.has(tripleKey)) {
-      tripleMap.set(tripleKey, new Map());
-    }
-    const valueGroups = tripleMap.get(tripleKey)!;
-    if (!valueGroups.has(claim.valueHash)) {
-      valueGroups.set(claim.valueHash, []);
-    }
-    valueGroups.get(claim.valueHash)!.push(claim);
+  for (const [tripleKey, claims] of partitionBy(aboveThreshold, (claim) =>
+    claimTripleKey(claim.subject, claim.key, claim.scopeHash)
+  )) {
+    tripleMap.set(tripleKey, partitionBy(claims, (claim) => claim.valueHash));
   }
 
   // 3. a triple with >= 2 distinct valueHash groups is a cluster
@@ -43,7 +38,7 @@ export function clustersOf(corpus: Corpus, threshold: number): ContradictionClus
   for (const [tripleKey, valueGroups] of tripleMap) {
     if (valueGroups.size < 2) continue;
 
-    const [subject, key, scopeHash] = tripleKey.split("\x00");
+    const [subject, key, scopeHash] = JSON.parse(tripleKey) as [string, string, string];
 
     // Calculate totalClaims and agreementRatio
     let totalClaims = 0;

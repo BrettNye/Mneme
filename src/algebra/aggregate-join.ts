@@ -1,9 +1,8 @@
 import type { RankedCorpus } from "./types.js";
-import { DEFAULT_PRIOR } from "../core/confidence.js";
+import { DEFAULT_PRIOR, betaMean } from "../core/confidence.js";
 import { claimPath, type AggregateResult, type AggValue } from "./aggregation.js";
 
 type Beta = { alpha: number; beta: number };
-const betaMean = (b: Beta) => b.alpha / (b.alpha + b.beta);
 
 // recover raw counts from the prior-inclusive Beta, then Wilson score-interval lower bound (95%, z=1.96)
 export function wilsonLowerBound(b: Beta, z = 1.96): number {
@@ -22,15 +21,22 @@ const aggNumber = (v: AggValue): number => {
   switch (v.kind) {
     case "count": return v.n;
     case "sum": case "avg": return v.value;
-    case "rate": return betaMean(v.beta);
-    default: return Number((v as any).value ?? 0);
+    case "min": case "max": {
+      const n = Number(v.value);
+      return Number.isFinite(n) ? n : 0;
+    }
+    case "rate": return betaMean(v.beta.alpha, v.beta.beta);
+    default: {
+      const _exhaustive: never = v;
+      throw new Error(`aggNumber: unknown AggValue kind: ${JSON.stringify(_exhaustive)}`);
+    }
   }
 };
 
 export type ReweightFn = (score: number, value: AggValue, allValues: AggValue[]) => number;
 
 export const reweightMultiply: ReweightFn = (s, v) => s * aggNumber(v);
-export const reweightMultiplyMean: ReweightFn = (s, v) => s * (v.kind === "rate" ? betaMean(v.beta) : aggNumber(v));
+export const reweightMultiplyMean: ReweightFn = (s, v) => s * (v.kind === "rate" ? betaMean(v.beta.alpha, v.beta.beta) : aggNumber(v));
 export const reweightWilsonFloor: ReweightFn = (s, v) => s * (v.kind === "rate" ? wilsonLowerBound(v.beta) : aggNumber(v));
 export const reweightNormalize: ReweightFn = (s, v, all) => {
   const mx = Math.max(...all.map(aggNumber));

@@ -28,3 +28,21 @@ export const mapCorpus = (c: Corpus, f: (cl: Claim) => Claim): Corpus =>
 
 export const filterCorpus = (c: Corpus, p: (cl: Claim) => boolean): Corpus =>
   corpusOf(c.claims.filter(p));
+
+export const claimTripleKey = (subject: string, key: string, scopeHash: string): string =>
+  JSON.stringify([subject, key, scopeHash]);
+
+export function partitionBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
+  const m = new Map<string, T[]>();
+  for (const it of items) {
+    const k = keyFn(it);
+    const bucket = m.get(k);
+    if (bucket) bucket.push(it);
+    else m.set(k, [it]);
+  }
+  return m;
+}
+
+export function unionEvidence<E>(lists: E[][]): E[] {
+  return [...new Map(lists.flat().map((e) => [JSON.stringify(e), e])).values()];
+}

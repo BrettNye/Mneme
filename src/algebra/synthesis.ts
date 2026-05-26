@@ -1,10 +1,10 @@
 import type { Corpus } from "./types.js";
-import { mapCorpus, corpusOf } from "./types.js";
+import { mapCorpus, corpusOf, unionEvidence } from "./types.js";
 import type { Claim } from "../core/claim.js";
 import { newClaimId } from "../core/ids.js";
 import { bindingFor } from "../distribution/registry.js";
 import { RULE } from "../distribution/rules.js";
-import { SOURCE_WEIGHT } from "../write/source-weight.js";
+import { SOURCE_WEIGHT } from "../core/source-trust.js";
 import type { ContradictionCluster } from "./contradiction.js";
 import { INFINITY } from "../core/time.js";
 
@@ -62,10 +62,10 @@ export const resolveSynthesizeBelief =
       const favoredValue = favoredClaims[0].value;
 
       // Collect evidence from both groups (union)
-      const allEvidence = [
-        ...claimsA.flatMap((c) => c.evidence),
-        ...claimsB.flatMap((c) => c.evidence),
-      ];
+      const allEvidence = unionEvidence([
+        ...claimsA.map((c) => c.evidence),
+        ...claimsB.map((c) => c.evidence),
+      ]);
 
       // Mark all claims in both groups as deprecated
       for (const c of [...claimsA, ...claimsB]) {
