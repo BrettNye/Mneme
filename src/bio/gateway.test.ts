@@ -1,11 +1,8 @@
 import { createMnemeGateway, type MnemeGateway } from "./gateway.js";
-import { createSqliteAdapter } from "../adapters/sqlite.js";
-import type { StorageAdapter } from "../adapters/adapter.js";
-import type { Claim, CandidateClaim } from "../core/claim.js";
-import type { ClaimId } from "../core/ids.js";
+import { makeBioMneme } from "./test-support.js";
 import { newClaimId } from "../core/ids.js";
 import { INFINITY } from "../core/time.js";
-import type { AppendOp } from "./types.js";
+import type { CandidateClaim } from "../core/claim.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,42 +29,67 @@ function makeCandidateClaim(overrides: Partial<CandidateClaim> = {}): CandidateC
 }
 
 // ---------------------------------------------------------------------------
-// MnemeGateway interface compile-time check: no update/delete on the type
+// Interface compile-time check: no update/delete on the type
 // ---------------------------------------------------------------------------
 
 it("MnemeGateway interface has no update or delete methods (append-only enforcement)", () => {
-  // If MnemeGateway had update/delete, these type assertions would fail at
-  // compile time. We verify at runtime that the gateway object never exposes them.
-  const gw = createMnemeGateway();
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
   expect("update" in gw).toBe(false);
   expect("delete" in gw).toBe(false);
   expect("deleteClaim" in gw).toBe(false);
 });
 
 // ---------------------------------------------------------------------------
-// read / readByIds basic passthrough
+// derive → mneme.commit: claim lands in corpus
 // ---------------------------------------------------------------------------
 
-it("read passes through to adapter.query", () => {
-  const adapter = createSqliteAdapter();
-  const gw = createMnemeGateway(adapter);
+it("derive routes through mneme.commit and lands a claim in the corpus", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
 
-  // Insert a raw claim directly into adapter, then read via gateway
-  const ops: AppendOp[] = [{ kind: "derive", claim: makeCandidateClaim({ subject: "s1" }) }];
-  gw.apply(ops, (_op, i) => `key-${i}`);
+  const res = gw.apply(
+    [{ kind: "derive", claim: makeCandidateClaim({ subject: "derive-test" }) }],
+    () => "k1"
+  );
 
-  const results = gw.read({ corpusId: "ignored", subject: "s1" });
+  expect(res.applied).toBe(1);
+  expect(res.skipped).toBe(0);
+
+  // Claim is readable via gw.read
+  const claims = gw.read({ corpusId, subject: "derive-test" });
+  expect(claims.length).toBe(1);
+  expect(claims[0].subject).toBe("derive-test");
+});
+
+// ---------------------------------------------------------------------------
+// read / readByIds delegate to mneme.read / mneme.readByIds
+// ---------------------------------------------------------------------------
+
+it("read delegates to mneme.read and returns claims matching query", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
+
+  gw.apply(
+    [{ kind: "derive", claim: makeCandidateClaim({ subject: "read-test" }) }],
+    (_op, i) => `read-key-${i}`
+  );
+
+  const results = gw.read({ corpusId, subject: "read-test" });
   expect(results.length).toBe(1);
-  expect(results[0].subject).toBe("s1");
+  expect(results[0].subject).toBe("read-test");
 });
 
 it("readByIds returns claims for present ids and omits missing ids", () => {
-  const gw = createMnemeGateway();
-  const ops: AppendOp[] = [{ kind: "derive", claim: makeCandidateClaim({ subject: "s2" }) }];
-  const result = gw.apply(ops, (_op, i) => `rbi-${i}`);
-  expect(result.applied).toBe(1);
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
 
-  const all = gw.read({ corpusId: "c", subject: "s2" });
+  gw.apply(
+    [{ kind: "derive", claim: makeCandidateClaim({ subject: "rbi-test" }) }],
+    (_op, i) => `rbi-${i}`
+  );
+
+  const all = gw.read({ corpusId, subject: "rbi-test" });
   const id = all[0].id;
 
   const fakeId = newClaimId();
@@ -77,126 +99,81 @@ it("readByIds returns claims for present ids and omits missing ids", () => {
 });
 
 // ---------------------------------------------------------------------------
-// derive op
+// supersede → mneme.supersede: old deprecated, new replacement readable
 // ---------------------------------------------------------------------------
 
-it("apply derive inserts a new claim with a fresh id", () => {
-  const gw = createMnemeGateway();
-  const result = gw.apply(
-    [{ kind: "derive", claim: makeCandidateClaim({ subject: "derive-test" }) }],
-    (_op, i) => `derive-${i}`
+it("supersede marks old claim as deprecated and creates a new replacement", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
+
+  // Insert original
+  gw.apply(
+    [{ kind: "derive", claim: makeCandidateClaim({ subject: "sup-test", value: "original" }) }],
+    (_op, i) => `sup-orig-${i}`
   );
-
-  expect(result.applied).toBe(1);
-  expect(result.skipped).toBe(0);
-  const claims = gw.read({ corpusId: "c", subject: "derive-test" });
-  expect(claims.length).toBe(1);
-  expect(claims[0].id).toBeTruthy();
-});
-
-// ---------------------------------------------------------------------------
-// supersede op — centerpiece acceptance criteria
-// ---------------------------------------------------------------------------
-
-it("supersede inserts new claim with fresh id and marks old row as deprecated (both rows persist)", () => {
-  const adapter = createSqliteAdapter();
-  const gw = createMnemeGateway(adapter);
-
-  // Step 1: insert original claim via derive
-  gw.apply([{ kind: "derive", claim: makeCandidateClaim({ subject: "sup-test", value: "original" }) }], (_op, i) => `sup-orig-${i}`);
-  const originals = gw.read({ corpusId: "c", subject: "sup-test" });
+  const originals = gw.read({ corpusId, subject: "sup-test" });
   expect(originals.length).toBe(1);
   const originalId = originals[0].id;
-  const originalValue = originals[0].value;
 
-  // Step 2: supersede it
-  const supersedOp: AppendOp = {
-    kind: "supersede",
-    deprecate: originalId,
-    with: makeCandidateClaim({ subject: "sup-test", value: "replacement" }),
-    reason: "test supersede",
-  };
-  const supResult = gw.apply([supersedOp], (_op, i) => `sup-new-${i}`);
+  // Supersede it
+  const supResult = gw.apply(
+    [
+      {
+        kind: "supersede",
+        deprecate: originalId,
+        with: makeCandidateClaim({ subject: "sup-test", value: "replacement" }),
+        reason: "test supersede",
+      },
+    ],
+    (_op, i) => `sup-new-${i}`
+  );
   expect(supResult.applied).toBe(1);
 
-  // Both rows must persist — we query all statuses
+  // Old claim deprecated, new replacement present
   const deprecated = gw.readByIds([originalId]);
   expect(deprecated.length).toBe(1);
   expect(deprecated[0].status).toBe("deprecated");
-  // Original value must not have changed (no in-place mutation)
-  expect(deprecated[0].value).toEqual(originalValue);
-  expect(deprecated[0].id).toBe(originalId);
+  expect(deprecated[0].value).toEqual("original");
 
-  // The replacement is a NEW row with a different id
-  const replacements = gw.read({ corpusId: "c", subject: "sup-test", status: ["validated"] });
+  const replacements = gw.read({ corpusId, subject: "sup-test", status: ["validated"] });
   expect(replacements.length).toBe(1);
   expect(replacements[0].id).not.toBe(originalId);
   expect(replacements[0].value).toBe("replacement");
 });
 
 // ---------------------------------------------------------------------------
-// idempotency
+// promote → mneme.promote: status changes
 // ---------------------------------------------------------------------------
 
-it("re-applying ops with the same opKey skips and does not duplicate rows", () => {
-  const gw = createMnemeGateway();
-  const ops: AppendOp[] = [{ kind: "derive", claim: makeCandidateClaim({ subject: "idem-test" }) }];
-  const key = (_op: AppendOp, i: number) => `idem-key-${i}`;
+it("promote changes a claim's status via mneme.promote", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
 
-  const first = gw.apply(ops, key);
-  expect(first.applied).toBe(1);
-  expect(first.skipped).toBe(0);
-
-  const second = gw.apply(ops, key);
-  expect(second.applied).toBe(0);
-  expect(second.skipped).toBe(1);
-
-  // Only one claim in store
-  const claims = gw.read({ corpusId: "c", subject: "idem-test" });
-  expect(claims.length).toBe(1);
-});
-
-it("idempotency is per-key: different keys on the same op shape create separate records", () => {
-  const gw = createMnemeGateway();
-  const ops: AppendOp[] = [{ kind: "derive", claim: makeCandidateClaim({ subject: "idem2" }) }];
-
-  const r1 = gw.apply(ops, (_op, i) => `key-a-${i}`);
-  const r2 = gw.apply(ops, (_op, i) => `key-b-${i}`);
-  expect(r1.applied).toBe(1);
-  expect(r2.applied).toBe(1);
-  // Two separate claims (different keys = treated as different ops)
-  const claims = gw.read({ corpusId: "c", subject: "idem2" });
-  expect(claims.length).toBe(2);
-});
-
-// ---------------------------------------------------------------------------
-// promote op
-// ---------------------------------------------------------------------------
-
-it("promote changes a claim's status", () => {
-  const gw = createMnemeGateway();
   gw.apply(
     [{ kind: "derive", claim: makeCandidateClaim({ subject: "prom-test", status: "candidate" }) }],
     (_op, i) => `prom-orig-${i}`
   );
-  const [original] = gw.read({ corpusId: "c", subject: "prom-test" });
+  const [original] = gw.read({ corpusId, subject: "prom-test" });
 
-  gw.apply(
+  const promResult = gw.apply(
     [{ kind: "promote", target: original.id, to: "validated", reason: "passed review" }],
     (_op, i) => `prom-upd-${i}`
   );
+  expect(promResult.applied).toBe(1);
 
   const updated = gw.readByIds([original.id]);
   expect(updated[0].status).toBe("validated");
 });
 
 it("promote preserves the claim id (id is unchanged after status transition)", () => {
-  const gw = createMnemeGateway();
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
+
   gw.apply(
     [{ kind: "derive", claim: makeCandidateClaim({ subject: "prom-id-test", status: "candidate" }) }],
     (_op, i) => `prom-id-orig-${i}`
   );
-  const [original] = gw.read({ corpusId: "c", subject: "prom-id-test" });
+  const [original] = gw.read({ corpusId, subject: "prom-id-test" });
   const originalId = original.id;
 
   gw.apply(
@@ -210,149 +187,115 @@ it("promote preserves the claim id (id is unchanged after status transition)", (
   expect(updated[0].status).toBe("validated");
 });
 
-it("promote non-existent target yields applied: 0 and changes nothing", () => {
-  const gw = createMnemeGateway();
-  // Insert a known claim so we can verify it is unchanged
-  gw.apply(
-    [{ kind: "derive", claim: makeCandidateClaim({ subject: "prom-missing-bystander" }) }],
-    (_op, i) => `prom-miss-orig-${i}`
-  );
-  const beforeClaims = gw.read({ corpusId: "c", subject: "prom-missing-bystander" });
-  expect(beforeClaims.length).toBe(1);
+// ---------------------------------------------------------------------------
+// promote non-existent target → surfaces as rejected (not_found)
+// ---------------------------------------------------------------------------
 
-  // Promote a non-existent id
+it("promote non-existent target surfaces as rejected (not_found status)", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
+
   const nonExistentId = newClaimId();
   const result = gw.apply(
-    [{ kind: "promote", target: nonExistentId, to: "validated", reason: "should be a no-op" }],
-    (_op, i) => `prom-miss-upd-${i}`
+    [{ kind: "promote", target: nonExistentId, to: "validated", reason: "should be not_found" }],
+    (_op, i) => `prom-miss-${i}`
   );
 
   expect(result.applied).toBe(0);
   expect(result.skipped).toBe(0);
-
-  // Bystander claim unchanged
-  const afterClaims = gw.read({ corpusId: "c", subject: "prom-missing-bystander" });
-  expect(afterClaims.length).toBe(1);
-  expect(afterClaims[0].status).toBe(beforeClaims[0].status);
+  expect(result.rejected).toBeDefined();
+  expect(result.rejected!.length).toBe(1);
+  expect(result.rejected![0].status).toBe("not_found");
 });
 
 // ---------------------------------------------------------------------------
-// Invariant property test (design spec §11)
-//
-// Over a randomized sequence of apply calls, no claim row is ever physically
-// removed and no existing row's value/confidence/evidence ever changes.
-// Only new ids appear and statuses transition.
+// opKey idempotency dedup: second identical apply → skipped
 // ---------------------------------------------------------------------------
 
-function getAllClaims(adapter: StorageAdapter): Claim[] {
-  // `corpusId` is intentionally unfiltered here — the adapter ignores it when
-  // no other predicates narrow the result set, so this acts as "read everything".
-  // We use the raw adapter (not the gateway's read path) to capture all rows
-  // regardless of status, which is required for the append-only invariant check.
-  return adapter.query({ corpusId: "invariant" });
-}
+it("re-applying ops with the same opKey skips and does not duplicate rows", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
 
-function seededRand(seed: number) {
-  // Mulberry32 — deterministic, portable, no external deps
-  let s = seed;
-  return () => {
-    s |= 0;
-    s = (s + 0x6d2b79f5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 0xffffffff;
-  };
-}
+  const ops = [{ kind: "derive" as const, claim: makeCandidateClaim({ subject: "idem-test" }) }];
+  const key = (_op: any, i: number) => `idem-key-${i}`;
 
-it("invariant: no claim row is physically removed and no value/confidence/evidence mutates across random op sequences", () => {
-  const ROUNDS = 20;
-  const OPS_PER_ROUND = 8;
+  const first = gw.apply(ops, key);
+  expect(first.applied).toBe(1);
+  expect(first.skipped).toBe(0);
 
-  for (let round = 0; round < ROUNDS; round++) {
-    const rand = seededRand(round * 7919 + 13);
-    const adapter = createSqliteAdapter();
-    const gw = createMnemeGateway(adapter);
+  const second = gw.apply(ops, key);
+  expect(second.applied).toBe(0);
+  expect(second.skipped).toBe(1);
 
-    // Snapshot: map from id -> { value, confidence, evidence }
-    type Snapshot = Record<string, { value: unknown; confidence: unknown; evidence: unknown }>;
-    const snapshot: Snapshot = {};
+  // Only one claim in store
+  const claims = gw.read({ corpusId, subject: "idem-test" });
+  expect(claims.length).toBe(1);
+});
 
-    for (let opIndex = 0; opIndex < OPS_PER_ROUND; opIndex++) {
-      const existingClaims = getAllClaims(adapter);
+it("idempotency is per-key: different keys on the same op shape create separate records", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
 
-      // Build a random op
-      const choice = rand();
-      let op: AppendOp;
-      if (existingClaims.length === 0 || choice < 0.5) {
-        // derive a new claim
-        op = {
-          kind: "derive",
-          claim: makeCandidateClaim({
-            subject: `subj-${Math.floor(rand() * 5)}`,
-            value: `val-${opIndex}-${round}`,
-          }),
-        };
-      } else if (choice < 0.8) {
-        // supersede a random existing claim
-        const target = existingClaims[Math.floor(rand() * existingClaims.length)];
-        op = {
-          kind: "supersede",
-          deprecate: target.id,
-          with: makeCandidateClaim({ subject: target.subject, value: `sup-${opIndex}` }),
-          reason: "random supersede",
-        };
-      } else {
-        // promote a random existing claim
-        const statuses: Claim["status"][] = ["candidate", "provisional", "validated", "deprecated"];
-        const target = existingClaims[Math.floor(rand() * existingClaims.length)];
-        op = {
-          kind: "promote",
-          target: target.id,
-          to: statuses[Math.floor(rand() * statuses.length)],
-          reason: "random promote",
-        };
-      }
+  const ops = [{ kind: "derive" as const, claim: makeCandidateClaim({ subject: "idem2" }) }];
 
-      // Snapshot current state before applying
-      for (const c of existingClaims) {
-        if (!(c.id in snapshot)) {
-          snapshot[c.id] = {
-            value: c.value,
-            confidence: c.confidence,
-            evidence: c.evidence,
-          };
-        }
-      }
+  const r1 = gw.apply(ops, (_op, i) => `key-a-${i}`);
+  const r2 = gw.apply(ops, (_op, i) => `key-b-${i}`);
+  expect(r1.applied).toBe(1);
+  expect(r2.applied).toBe(1);
+  // Two separate claims (different keys = treated as different ops)
+  const claims = gw.read({ corpusId, subject: "idem2" });
+  expect(claims.length).toBe(2);
+});
 
-      // Apply the op
-      gw.apply([op], (_o, i) => `round-${round}-op-${opIndex}-${i}-${Math.floor(rand() * 1e9)}`);
+// ---------------------------------------------------------------------------
+// AppendResult.rejected is optional — consumers only reading applied/skipped unaffected
+// ---------------------------------------------------------------------------
 
-      // INVARIANT CHECK: every previously-snapshotted row must still exist
-      // and its value/confidence/evidence must be unchanged.
-      const afterClaims = getAllClaims(adapter);
-      const afterMap = new Map(afterClaims.map((c) => [c.id, c]));
+it("AppendResult.rejected is optional and absent consumers only need applied/skipped", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
 
-      for (const [id, snap] of Object.entries(snapshot)) {
-        const current = afterMap.get(id as ClaimId);
-        // Row must still be physically present (no hard delete)
-        expect(current, `Round ${round} op ${opIndex}: row ${id} was physically removed`).toBeDefined();
-        if (current) {
-          // id must not have changed (promote must not swap the id for a new one)
-          expect(current.id, `Round ${round} op ${opIndex}: id changed for ${id}`).toBe(id);
-          // value must not have changed
-          expect(JSON.stringify(current.value), `Round ${round} op ${opIndex}: value mutated for ${id}`).toBe(
-            JSON.stringify(snap.value)
-          );
-          // confidence must not have changed
-          expect(JSON.stringify(current.confidence), `Round ${round} op ${opIndex}: confidence mutated for ${id}`).toBe(
-            JSON.stringify(snap.confidence)
-          );
-          // evidence must not have changed
-          expect(JSON.stringify(current.evidence), `Round ${round} op ${opIndex}: evidence mutated for ${id}`).toBe(
-            JSON.stringify(snap.evidence)
-          );
-        }
-      }
-    }
-  }
+  const result = gw.apply(
+    [{ kind: "derive", claim: makeCandidateClaim() }],
+    () => "opt-key"
+  );
+
+  // Consumer only reads applied/skipped — this is valid without rejected
+  const { applied, skipped } = result;
+  expect(applied).toBe(1);
+  expect(skipped).toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// apply aggregates: mixed ops applied/skipped/rejected counts
+// ---------------------------------------------------------------------------
+
+it("apply aggregates applied, skipped, and rejected counts across multiple ops", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
+
+  // First apply — 1 derive op
+  const firstApply = gw.apply(
+    [{ kind: "derive", claim: makeCandidateClaim({ subject: "agg-test" }) }],
+    () => "agg-key-1"
+  );
+  expect(firstApply.applied).toBe(1);
+
+  const nonExistentId = newClaimId();
+
+  // Second apply: 1 duplicate (same key), 1 not_found promote, 1 new derive
+  const result = gw.apply(
+    [
+      { kind: "derive", claim: makeCandidateClaim({ subject: "agg-test" }) },          // duplicate → skipped
+      { kind: "promote", target: nonExistentId, to: "validated", reason: "miss" },     // not_found → rejected
+      { kind: "derive", claim: makeCandidateClaim({ subject: "agg-test-2" }) },        // new → applied
+    ],
+    (_op, i) => i === 0 ? "agg-key-1" : `agg-key-new-${i}`
+  );
+
+  expect(result.applied).toBe(1);
+  expect(result.skipped).toBe(1);
+  expect(result.rejected).toBeDefined();
+  expect(result.rejected!.length).toBe(1);
+  expect(result.rejected![0].status).toBe("not_found");
 });

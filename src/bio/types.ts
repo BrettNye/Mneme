@@ -10,7 +10,7 @@ export type AppendOp =
   | { kind: "supersede"; deprecate: ClaimId; with: CandidateClaim; reason: string }
   | { kind: "promote"; target: ClaimId; to: Status; reason: string };          // wave-2; defined for contract stability
 
-export interface AppendResult { applied: number; skipped: number; }
+export interface AppendResult { applied: number; skipped: number; rejected?: { key: string; status: string }[]; }
 
 export type EpisodeId = string;
 export interface Episode { id: EpisodeId; runIds: string[]; startedAt: Instant; endedAt?: Instant; }
