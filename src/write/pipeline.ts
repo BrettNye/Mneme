@@ -28,12 +28,15 @@ export class Promoter {
 
   /**
    * Atomic write core. Wraps everything in adapter.transaction, derives
-   * recordedSeq from maxRecordedSeq()+1, appends the ClaimEvent, and records
-   * idempotency — all inside the transaction.
+   * recordedSeq from maxRecordedSeq()+1, conditionally appends the ClaimEvent
+   * and records idempotency — all inside the transaction.
+   *
+   * The body may return no event (e.g. reject path) by omitting `event`.
+   * When event is absent, nothing is logged and no idempotency record is written.
    */
   private write<T>(
     idem: { scope: string; key?: string } | undefined,
-    body: (recorded: number, seq: number) => { result: T; id?: string; event: ClaimEvent }
+    body: (recorded: number, seq: number) => { result: T; id?: string; event?: ClaimEvent }
   ): T {
     if (idem?.key) {
       const prior = checkIdempotent(this.adapter, idem.scope, idem.key, Date.now());
@@ -47,7 +50,7 @@ export class Promoter {
       const recorded = Date.now();
       const seq = this.adapter.maxRecordedSeq() + 1;
       const { result, id, event } = body(recorded, seq);
-      this.adapter.appendEvent(event);
+      if (event) this.adapter.appendEvent(event);              // reject path returns no event → nothing logged
       if (idem?.key && id) {
         recordIdempotent(this.adapter, idem.scope, idem.key, id, Date.now());
       }
@@ -65,11 +68,6 @@ export class Promoter {
   ): { id: string; status: "committed" | "rejected" | "duplicate" } {
     const scope = idempotencyScope(candidate.workspace, opts.writer, candidate.key);
 
-    if (opts.idempotencyKey) {
-      const prior = checkIdempotent(this.adapter, scope, opts.idempotencyKey, Date.now());
-      if (prior) return { id: prior, status: "duplicate" };
-    }
-
     validateScope(candidate.scope, this.schema);
 
     // Build a partial claim with hashes and id — needed for enforce() to inspect.
@@ -86,38 +84,36 @@ export class Promoter {
 
     const outcome = enforce(candidateForEnforce, opts.policy, this.adapter);
 
-    if (outcome.decision === "reject") return { id: claimId, status: "rejected" };
+    if (outcome.decision === "reject") {
+      // Reject path: no event, no idempotency record
+      return { id: claimId, status: "rejected" };
+    }
 
-    // Accepted: write atomically via the core.
-    return this.adapter.transaction(() => {
-      const recorded = Date.now();
-      const seq = this.adapter.maxRecordedSeq() + 1;
+    // Accepted: write atomically via the shared core.
+    return this.write(
+      opts.idempotencyKey ? { scope, key: opts.idempotencyKey } : undefined,
+      (recorded, seq) => {
+        const claim: Claim = {
+          ...candidateForEnforce,
+          recorded,
+          recordedSeq: seq,
+        };
 
-      const claim: Claim = {
-        ...candidateForEnforce,
-        recorded,
-        recordedSeq: seq,
-      };
+        outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as ClaimId));
+        this.adapter.insertClaim(claim);
 
-      outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as ClaimId));
-      this.adapter.insertClaim(claim);
+        const event: ClaimEvent = {
+          op: "commit",
+          corpusId: this.corpusId,
+          writer: opts.writer,
+          claimId: claim.id,
+          recorded,
+          recordedSeq: seq,
+        };
 
-      const event: ClaimEvent = {
-        op: "commit",
-        corpusId: this.corpusId,
-        writer: opts.writer,
-        claimId: claim.id,
-        recorded,
-        recordedSeq: seq,
-      };
-      this.adapter.appendEvent(event);
-
-      if (opts.idempotencyKey) {
-        recordIdempotent(this.adapter, scope, opts.idempotencyKey, claim.id, Date.now());
+        return { result: { id: claim.id, status: "committed" as const }, id: claim.id, event };
       }
-
-      return { id: claim.id, status: "committed" as const };
-    });
+    );
   }
 
   supersede(
@@ -132,47 +128,37 @@ export class Promoter {
 
     const idemScope = idempotencyScope(replacement.workspace, opts.writer, replacement.key);
 
-    if (opts.idempotencyKey) {
-      const prior = checkIdempotent(this.adapter, idemScope, opts.idempotencyKey, Date.now());
-      if (prior) return { id: prior, status: "duplicate" };
-    }
+    return this.write(
+      opts.idempotencyKey ? { scope: idemScope, key: opts.idempotencyKey } : undefined,
+      (recorded, seq) => {
+        const newId = newClaimId();
+        const newClaim: Claim = {
+          ...replacement,
+          id: newId,
+          scopeHash: scopeHash(replacement.scope),
+          valueHash: valueHash(replacement.value),
+          recorded,
+          recordedSeq: seq,
+          status: replacement.status ?? "validated",
+        };
 
-    return this.adapter.transaction(() => {
-      const recorded = Date.now();
-      const seq = this.adapter.maxRecordedSeq() + 1;
+        // Best-effort soft-deprecate (missing id → no-op for store, but call is made)
+        this.adapter.deleteClaim(deprecateId);
+        this.adapter.insertClaim(newClaim);
 
-      const newId = newClaimId();
-      const newClaim: Claim = {
-        ...replacement,
-        id: newId,
-        scopeHash: scopeHash(replacement.scope),
-        valueHash: valueHash(replacement.value),
-        recorded,
-        recordedSeq: seq,
-        status: replacement.status ?? "validated",
-      };
+        const event: ClaimEvent = {
+          op: "supersede",
+          corpusId: this.corpusId,
+          writer: opts.writer,
+          claimId: newId,
+          deprecatedId: deprecateId,
+          recorded,
+          recordedSeq: seq,
+        };
 
-      // Best-effort soft-deprecate (missing id → no-op for store, but call is made)
-      this.adapter.deleteClaim(deprecateId);
-      this.adapter.insertClaim(newClaim);
-
-      const event: ClaimEvent = {
-        op: "supersede",
-        corpusId: this.corpusId,
-        writer: opts.writer,
-        claimId: newId,
-        deprecatedId: deprecateId,
-        recorded,
-        recordedSeq: seq,
-      };
-      this.adapter.appendEvent(event);
-
-      if (opts.idempotencyKey) {
-        recordIdempotent(this.adapter, idemScope, opts.idempotencyKey, newId, Date.now());
+        return { result: { id: newId, status: "superseded" as const }, id: newId, event };
       }
-
-      return { id: newId, status: "superseded" as const };
-    });
+    );
   }
 
   promote(
@@ -194,40 +180,29 @@ export class Promoter {
 
     const idemScope = idempotencyScope(target.workspace, opts.writer, target.key);
 
-    if (opts.idempotencyKey) {
-      const prior = checkIdempotent(this.adapter, idemScope, opts.idempotencyKey, Date.now());
-      if (prior) return { id: prior, status: "duplicate" };
-    }
+    return this.write(
+      opts.idempotencyKey ? { scope: idemScope, key: opts.idempotencyKey } : undefined,
+      (recorded, seq) => {
+        // The claim keeps its own recorded/recordedSeq; only status changes
+        const promotedClaim: Claim = {
+          ...target,
+          status: to,
+        };
+        this.adapter.insertClaim(promotedClaim);
 
-    return this.adapter.transaction(() => {
-      // The core's fresh stamp for the event
-      const recorded = Date.now();
-      const seq = this.adapter.maxRecordedSeq() + 1;
+        const event: ClaimEvent = {
+          op: "promote",
+          corpusId: this.corpusId,
+          writer: opts.writer,
+          claimId: targetId,
+          toStatus: to,
+          reason: opts.reason,
+          recorded,
+          recordedSeq: seq,
+        };
 
-      // The claim keeps its own recorded/recordedSeq
-      const promotedClaim: Claim = {
-        ...target,
-        status: to,
-      };
-      this.adapter.insertClaim(promotedClaim);
-
-      const event: ClaimEvent = {
-        op: "promote",
-        corpusId: this.corpusId,
-        writer: opts.writer,
-        claimId: targetId,
-        toStatus: to,
-        reason: opts.reason,
-        recorded,
-        recordedSeq: seq,
-      };
-      this.adapter.appendEvent(event);
-
-      if (opts.idempotencyKey) {
-        recordIdempotent(this.adapter, idemScope, opts.idempotencyKey, targetId, Date.now());
+        return { result: { id: targetId, status: "promoted" as const }, id: targetId, event };
       }
-
-      return { id: targetId, status: "promoted" as const };
-    });
+    );
   }
 }

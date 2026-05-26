@@ -1,5 +1,6 @@
 import { Promoter } from "./pipeline.js";
 import type { StorageAdapter, ExecutionPlan, IdempotencyRecord, ClaimEvent } from "../adapters/adapter.js";
+import { createSqliteAdapter } from "../adapters/sqlite.js";
 import type { Claim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
 
@@ -652,4 +653,36 @@ it("promote idempotency: second call with same key returns duplicate", () => {
   const r2 = p.promote("claim-9" as ClaimId, "validated", { writer: "u", idempotencyKey: "promo-key" });
   expect(r2.status).toBe("duplicate");
   expect(r2.id).toBe("claim-9");
+});
+
+// ======================================================
+// promote — real SQLite adapter: in-place replacement, not duplication
+// ======================================================
+
+it("promote replaces the claim in-place (same id, new status) — real SQLite adapter proves no duplication", () => {
+  const adapter = createSqliteAdapter(":memory:");
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any, "corp");
+
+  // Commit a claim with candidate status so it exists in the real DB and can be promoted
+  const candidateWithStatus = { ...baseCandidate, status: "candidate" as const };
+  const committed = p.commit(candidateWithStatus, { policy: { kind: "always_accept" }, writer: "alice" });
+  expect(committed.status).toBe("committed");
+  const targetId = committed.id as ClaimId;
+
+  // Promote it to validated
+  const promoted = p.promote(targetId, "validated", { writer: "alice" });
+  expect(promoted.status).toBe("promoted");
+  expect(promoted.id).toBe(targetId);
+
+  // (a) getClaim returns the new status with the SAME id
+  const retrieved = adapter.getClaim(targetId);
+  expect(retrieved).toBeDefined();
+  expect(retrieved!.id).toBe(targetId);
+  expect(retrieved!.status).toBe("validated");
+
+  // (b) Exactly one claim exists for that id — query by subject+key should return only one result
+  //     If insertClaim duplicated the row there would be two; INSERT OR REPLACE keeps only one.
+  const all = adapter.query({ subject: baseCandidate.subject, key: baseCandidate.key, status: ["candidate", "provisional", "validated", "deprecated"] } as any);
+  const forThisId = all.filter(c => c.id === targetId);
+  expect(forThisId).toHaveLength(1);
 });
