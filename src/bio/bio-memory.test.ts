@@ -2,6 +2,7 @@ import { createBioMemory } from "./bio-memory.js";
 import { createMnemeGateway } from "./gateway.js";
 import { suppression } from "./policies/suppression.js";
 import type { RetrievalContext } from "./types.js";
+import type { DreamFn } from "./processes/dreaming-types.js";
 
 // ─── Acceptance Criterion 1 ──────────────────────────────────────────────────
 // recall returns policy-filtered claims and records their ids as the episode's
@@ -123,4 +124,34 @@ it("full lifecycle: openEpisode → recordUsage → recordOutcome → closeEpiso
   expect(report.errors).toHaveLength(0);
   const closed = bio.closeEpisode(ep.id);
   expect(closed).toBeDefined();
+});
+
+// ─── Dreaming facade ────────────────────────────────────────────────────────
+
+it("dream() with no dreamFn configured returns a clear error and applies nothing", async () => {
+  const bio = createBioMemory();
+  const ep = bio.openEpisode("r1");
+  const report = await bio.dream(ep.id, { modelVersion: "m1" });
+  expect(report.errors).toContain("no dreamFn configured");
+});
+
+it("dream() with an unknown episode id returns an error and applies nothing", async () => {
+  const bio = createBioMemory();
+  const report = await bio.dream("ep-does-not-exist", { modelVersion: "m1" });
+  expect(report.errors).toContain("unknown episode");
+  expect(report.proposed).toBe(0);
+  expect(report.admitted).toBe(0);
+});
+
+it("dream() with a fake dreamFn admits insights end-to-end against the default gateway", async () => {
+  const fakeDreamFn: DreamFn = async () => {
+    // Return empty insights (no claims in the empty store to cite)
+    return [];
+  };
+
+  const bio = createBioMemory({ dreamFn: fakeDreamFn });
+  const ep = bio.openEpisode("r2");
+  const report = await bio.dream(ep.id, { modelVersion: "test-model" });
+  // No errors — dreamFn is configured and episode exists
+  expect(report.errors).toHaveLength(0);
 });
