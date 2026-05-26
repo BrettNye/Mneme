@@ -102,3 +102,37 @@ it("runner owns no cognitive logic — it only forwards to runCycle", () => {
   runner.runNow();
   expect(calls).toBe(2);
 });
+
+it("second start does not double-fire — old interval is cleared before new one starts", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.start({ intervalMs: 100 });
+    runner.start({ intervalMs: 100 }); // second start: must clear the first interval
+    vi.advanceTimersByTime(100);
+    expect(memory.calls).toBe(1); // only one interval should be active
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("stop(); stop(); after a start is a safe no-op and does not throw", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.start({ intervalMs: 100 });
+    vi.advanceTimersByTime(100);
+    expect(memory.calls).toBe(1);
+    expect(() => {
+      runner.stop();
+      runner.stop(); // second stop must not throw
+    }).not.toThrow();
+    vi.advanceTimersByTime(1_000);
+    expect(memory.calls).toBe(1); // no further calls after double-stop
+  } finally {
+    vi.useRealTimers();
+  }
+});

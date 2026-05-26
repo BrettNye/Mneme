@@ -6,7 +6,8 @@ export function createRunner(memory: CycleDriver, episode: EpisodeId) {
   let timer: ReturnType<typeof setInterval> | undefined;
   return {
     start(opts: { intervalMs?: number } = {}) {
-      if (opts.intervalMs) {
+      if (timer) { clearInterval(timer); timer = undefined; }   // never leak a prior interval
+      if (opts.intervalMs && opts.intervalMs > 0) {
         timer = setInterval(() => memory.runCycle(episode), opts.intervalMs);
       }
     },
