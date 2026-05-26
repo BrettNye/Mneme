@@ -3,7 +3,7 @@ import { Promoter } from "./write/pipeline.js";
 import type { StorageAdapter } from "./adapters/adapter.js";
 import type { TierRequirement } from "./catalog/tiers.js";
 import type { Corpus as CorpusDef, ContradictionPolicy } from "./catalog/corpus.js";
-import type { CandidateClaim, Claim } from "./core/claim.js";
+import type { CandidateClaim, Claim, Status } from "./core/claim.js";
 import type { Predicate } from "./algebra/predicate.js";
 import type { Corpus, RankedCorpus, ComposedContext } from "./algebra/types.js";
 import type { Value } from "./core/value.js";
@@ -155,6 +155,18 @@ export interface Mneme {
     opts: { policy?: ContradictionPolicy; writer: string; idempotencyKey?: string }
   ): { id: string; status: "committed" | "rejected" | "duplicate" };
   query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number }): O;
+  supersede(
+    corpusId: string,
+    deprecateId: string,
+    replacement: CandidateClaim,
+    opts: { writer: string; idempotencyKey?: string }
+  ): { id: string; status: string };
+  promote(
+    corpusId: string,
+    targetId: string,
+    to: Status,
+    opts: { writer: string; reason?: string; idempotencyKey?: string }
+  ): { id: string; status: string };
 }
 
 export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
@@ -164,7 +176,7 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
   function promoterFor(corpusId: string): Promoter {
     let p = promoters.get(corpusId);
     if (!p) {
-      p = new Promoter(adapter, catalog.getCorpusSchema(corpusId));
+      p = new Promoter(adapter, catalog.getCorpusSchema(corpusId), corpusId);
       promoters.set(corpusId, p);
     }
     return p;
@@ -199,6 +211,24 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
         usedEmbeddingModelVersions: {},
       };
       return evaluate<O>(pipeline, ctx);
+    },
+
+    supersede(
+      corpusId: string,
+      deprecateId: string,
+      replacement: CandidateClaim,
+      opts: { writer: string; idempotencyKey?: string }
+    ): { id: string; status: string } {
+      return promoterFor(corpusId).supersede(deprecateId as any, replacement, opts);
+    },
+
+    promote(
+      corpusId: string,
+      targetId: string,
+      to: Status,
+      opts: { writer: string; reason?: string; idempotencyKey?: string }
+    ): { id: string; status: string } {
+      return promoterFor(corpusId).promote(targetId as any, to, opts);
     },
   };
 }

@@ -534,3 +534,162 @@ it("reweight object exposes multiply, multiplyMean, wilsonFloor, normalize, boos
   expect(typeof reweight.normalize).toBe("function");
   expect(typeof reweight.boost).toBe("function");
 });
+
+// ── supersede / promote surface ──────────────────────────────────────────────
+
+const supersedeCorpusDef: CorpusDef = {
+  id: "workspace:supersede-test",
+  displayName: "Supersede Test Corpus",
+  schema: {
+    version: "1",
+    subjects: ["workspace:supersede-test"],
+    scopeFields: {},
+    required: [],
+    scalarPseudocount: { manual: 2 },
+  },
+  defaults: {
+    decayPolicy: { kind: "none" },
+    confidenceThreshold: 0.5,
+    contradictionPolicy: { kind: "always_accept" },
+    defaultStatus: ["validated"],
+  },
+  requiredTiers: [{ kind: "core" }],
+  metadata: {},
+  createdAt: 0,
+  updatedAt: 0,
+};
+
+it("supersede deprecates the named claim and commits the replacement", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(supersedeCorpusDef);
+
+  // Commit an original claim
+  const original = m.commit("workspace:supersede-test", {
+    profile: "profile-1" as any,
+    workspace: "workspace:supersede-test" as any,
+    subject: "subject-1",
+    key: "fact",
+    scope: {},
+    value: "original value",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:supersede-test@1",
+  }, { writer: "test-writer" });
+
+  expect(original.status).toBe("committed");
+
+  // Supersede the original
+  const result = m.supersede("workspace:supersede-test", original.id, {
+    profile: "profile-1" as any,
+    workspace: "workspace:supersede-test" as any,
+    subject: "subject-1",
+    key: "fact",
+    scope: {},
+    value: "replacement value",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:supersede-test@1",
+  }, { writer: "test-writer" });
+
+  expect(result.status).toBe("superseded");
+  expect(typeof result.id).toBe("string");
+  expect(result.id).not.toBe(original.id);
+
+  // Old claim should be soft-deprecated (not physically removed, but status = deprecated)
+  const oldClaim = adapter.getClaim(original.id as any);
+  expect(oldClaim?.status).toBe("deprecated");
+
+  // New claim should have the replacement value
+  const newClaim = adapter.getClaim(result.id as any);
+  expect(newClaim?.value).toBe("replacement value");
+
+  // A supersede event should be recorded
+  const events = adapter.readEvents({ corpusId: "workspace:supersede-test" });
+  const supersedeEvent = events.find(e => e.op === "supersede");
+  expect(supersedeEvent).toBeDefined();
+  expect(supersedeEvent?.deprecatedId).toBe(original.id);
+  expect(supersedeEvent?.claimId).toBe(result.id);
+});
+
+it("promote transitions a claim's status and records an event", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(supersedeCorpusDef);
+
+  // Commit a candidate claim
+  const committed = m.commit("workspace:supersede-test", {
+    profile: "profile-1" as any,
+    workspace: "workspace:supersede-test" as any,
+    subject: "subject-promo",
+    key: "fact",
+    scope: {},
+    value: "promote me",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:supersede-test@1",
+    status: "candidate",
+  }, { writer: "test-writer" });
+
+  expect(committed.status).toBe("committed");
+
+  // Promote it to validated
+  const result = m.promote("workspace:supersede-test", committed.id, "validated", {
+    writer: "test-writer",
+    reason: "approved by reviewer",
+  });
+
+  expect(result.status).toBe("promoted");
+  expect(result.id).toBe(committed.id);
+
+  // The claim should now have status validated
+  const promotedClaim = adapter.getClaim(committed.id as any);
+  expect(promotedClaim?.status).toBe("validated");
+
+  // A promote event should be recorded
+  const events = adapter.readEvents({ corpusId: "workspace:supersede-test" });
+  const promoteEvent = events.find(e => e.op === "promote");
+  expect(promoteEvent).toBeDefined();
+  expect(promoteEvent?.claimId).toBe(committed.id);
+  expect(promoteEvent?.toStatus).toBe("validated");
+});
+
+it("supersede on an unknown corpus throws", () => {
+  const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+  expect(() =>
+    m.supersede("nonexistent-corpus", "some-id", {
+      profile: "profile-1" as any,
+      workspace: "nonexistent-corpus" as any,
+      subject: "s",
+      key: "k",
+      scope: {},
+      value: "v",
+      confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+      valid: { from: 0, to: Infinity },
+      source: "manual",
+      provenance: {},
+      evidence: [],
+      tags: [],
+      schema: "nonexistent-corpus@1",
+    }, { writer: "w" })
+  ).toThrow();
+});
+
+it("promote on an unknown corpus throws", () => {
+  const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+  expect(() =>
+    m.promote("nonexistent-corpus", "some-id", "validated", { writer: "w" })
+  ).toThrow();
+});
