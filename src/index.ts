@@ -22,4 +22,10 @@ export { createMnemeGateway } from "./bio/gateway.js";
 export type { MnemeGateway } from "./bio/gateway.js";
 export { suppression, compose, exponentialDecay } from "./bio/policies/suppression.js";
 export { evidenceUpdate } from "./bio/processes/evidence-update.js";
-export type * from "./bio/types.js";
+export type {
+  BioQuery, AppendOp, AppendResult,
+  EpisodeId, Episode, Signal,
+  DecayPolicy as BioDecayPolicy,   // aliased: avoids clash with catalog/corpus.ts DecayPolicy
+  RetrievalContext, RetrievalPolicy,
+  SignalView, ProcessInput, CognitiveProcess, CycleReport,
+} from "./bio/types.js";
