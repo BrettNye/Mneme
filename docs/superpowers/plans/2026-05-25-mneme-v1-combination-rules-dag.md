@@ -21,6 +21,8 @@ flowchart TD
     classDef running fill:#87ceeb,stroke:#333
     classDef failed fill:#ffb6c1,stroke:#333
     classDef skipped fill:#d3d3d3,stroke:#333,stroke-dasharray: 5 5
+
+    class task-rules,task-beta-combine,task-scalar-combine,task-combination-operator done
 ```
 
 ## Context
@@ -64,7 +66,7 @@ depends_on: []
 files:
   - src/distribution/rules.ts
   - src/distribution/rules.test.ts
-status: pending
+status: done
 ```
 
 Canonical rule-id string constants (referenced by both bindings and the operator) plus
@@ -121,7 +123,7 @@ depends_on: [task-rules]
 files:
   - src/distribution/beta.ts
   - src/distribution/beta.test.ts
-status: pending
+status: done
 ```
 
 Fill in `combine()` for all five rules in the Beta binding (§5.6), and make `supportedRules()`
@@ -190,7 +192,7 @@ depends_on: [task-rules]
 files:
   - src/distribution/scalar.ts
   - src/distribution/scalar.test.ts
-status: pending
+status: done
 ```
 
 Fill in `combine()` for the three rules a bare point value supports (§5.6): `rule_weighted_avg`,
@@ -249,7 +251,7 @@ depends_on: [task-rules, task-beta-combine, task-scalar-combine]
 files:
   - src/algebra/combination.ts
   - src/algebra/combination.test.ts
-status: pending
+status: done
 ```
 
 The `⊕` algebra operator (§4.9): `oplusDedupe` collapses claims sharing `(subject, key, scopeHash)`
