@@ -17,7 +17,9 @@ export interface DreamReport { proposed: number; admitted: number; dropped: { ke
 export const depthTag = (n: number): string => `dream-depth:${n}`;
 export function depthOf(claim: Claim): number {
   const t = claim.tags.find((x) => x.startsWith("dream-depth:"));
-  return t ? Number(t.slice("dream-depth:".length)) : 0;   // non-dream claims = depth 0
+  if (!t) return 0;                                          // non-dream claim
+  const n = Number(t.slice("dream-depth:".length));
+  return Number.isFinite(n) ? n : MAX_DREAM_DEPTH;          // malformed → treat as at-cap (fail-safe: excluded from reseeding)
 }
 export const isUnvalidatedDream = (c: Claim): boolean =>
   c.provenance.workflow === DREAM_WORKFLOW && c.status === "candidate";

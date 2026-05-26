@@ -5,6 +5,15 @@ it("depthOf round-trips depthTag and defaults to 0 for non-dream claims", () => 
   expect(depthOf({ tags: [] } as any)).toBe(0);
 });
 
+it("depthOf returns MAX_DREAM_DEPTH (not NaN, not 0) for a malformed depth tag", () => {
+  expect(depthOf({ tags: ["dream-depth:abc"] } as any)).toBe(MAX_DREAM_DEPTH);
+});
+
+it("depthOf malformed tag is excluded by a depth-cap check (fail-safe: not eligible for reseeding)", () => {
+  const malformedDepth = depthOf({ tags: ["dream-depth:abc"] } as any);
+  expect(malformedDepth < MAX_DREAM_DEPTH).toBe(false);
+});
+
 it("depthTag produces the expected string format", () => {
   expect(depthTag(0)).toBe("dream-depth:0");
   expect(depthTag(3)).toBe("dream-depth:3");
