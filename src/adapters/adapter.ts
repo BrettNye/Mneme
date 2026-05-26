@@ -1,6 +1,18 @@
 import type { Claim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
 
+export interface ClaimEvent {
+  op: "commit" | "supersede" | "promote";
+  corpusId: string;
+  writer: string;
+  claimId: string;
+  deprecatedId?: string;   // supersede
+  toStatus?: string;       // promote
+  reason?: string;         // promote
+  recorded: number;
+  recordedSeq: number;
+}
+
 export type PredicateKind =
   | "equality"
   | "range"
@@ -43,6 +55,10 @@ export interface StorageAdapter {
   getIdempotencyRecord(scope: string, key: string): IdempotencyRecord | undefined;
   putIdempotencyRecord(scope: string, key: string, rec: IdempotencyRecord): void;
   capabilities(): AdapterCapabilities;
+  transaction<T>(fn: () => T): T;
+  maxRecordedSeq(): number;
+  appendEvent(e: ClaimEvent): void;
+  readEvents(filter?: { corpusId?: string; claimId?: string; since?: number }): ClaimEvent[];
 }
 
 export const valuePredicateLevel = (

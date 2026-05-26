@@ -1,5 +1,5 @@
 import { Promoter } from "./pipeline.js";
-import type { StorageAdapter, ExecutionPlan, IdempotencyRecord } from "../adapters/adapter.js";
+import type { StorageAdapter, ExecutionPlan, IdempotencyRecord, ClaimEvent } from "../adapters/adapter.js";
 import type { Claim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
 
@@ -35,6 +35,10 @@ function makeAdapter(preloaded: Claim[] = []): StorageAdapter & { inserted: Clai
         null_check: "fallback_in_memory",
       },
     }),
+    transaction<T>(fn: () => T): T { return fn(); },
+    maxRecordedSeq(): number { return 0; },
+    appendEvent(_e: ClaimEvent): void {},
+    readEvents(_filter?: { corpusId?: string; claimId?: string; since?: number }): ClaimEvent[] { return []; },
   } as StorageAdapter & { inserted: Claim[]; deleted: ClaimId[] };
 }
 

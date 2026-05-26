@@ -4,6 +4,7 @@ import type {
   ExecutionPlan,
   AdapterCapabilities,
   IdempotencyRecord,
+  ClaimEvent,
 } from "./adapter.js";
 import type { Claim, Status, Source } from "../core/claim.js";
 import type { ClaimId, ProfileId, WorkspaceId } from "../core/ids.js";
@@ -46,6 +47,19 @@ interface IdempotencyRow {
   key: string;
   result: string;
   created_at: number;
+}
+
+interface ClaimEventRow {
+  seq_pk: number;
+  op: string;
+  corpus_id: string;
+  writer: string;
+  claim_id: string;
+  deprecated_id: string | null;
+  to_status: string | null;
+  reason: string | null;
+  recorded: number;
+  recorded_seq: number;
 }
 
 function toRow(c: Claim): ClaimRow {
@@ -149,6 +163,19 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       created_at REAL,
       PRIMARY KEY(scope, key)
     );
+    CREATE TABLE IF NOT EXISTS claim_events (
+      seq_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+      op TEXT,
+      corpus_id TEXT,
+      writer TEXT,
+      claim_id TEXT,
+      deprecated_id TEXT,
+      to_status TEXT,
+      reason TEXT,
+      recorded REAL,
+      recorded_seq INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_claim ON claim_events(claim_id);
   `);
 
   const insertStmt = db.prepare<ClaimRow>(`
@@ -181,6 +208,15 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
 
   const putIdempotencyStmt = db.prepare<IdempotencyRow>(
     "INSERT OR REPLACE INTO idempotency (scope, key, result, created_at) VALUES (@scope, @key, @result, @created_at)"
+  );
+
+  const eventInsertStmt = db.prepare<Omit<ClaimEventRow, "seq_pk">>(
+    `INSERT INTO claim_events (op, corpus_id, writer, claim_id, deprecated_id, to_status, reason, recorded, recorded_seq)
+     VALUES (@op, @corpus_id, @writer, @claim_id, @deprecated_id, @to_status, @reason, @recorded, @recorded_seq)`
+  );
+
+  const maxRecordedSeqStmt = db.prepare<[], { m: number }>(
+    "SELECT COALESCE(MAX(recorded_seq), 0) AS m FROM claims"
   );
 
   return {
@@ -271,6 +307,66 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
           null_check: lvl,
         },
       };
+    },
+
+    transaction<T>(fn: () => T): T {
+      return db.transaction(fn)();
+    },
+
+    maxRecordedSeq(): number {
+      return (maxRecordedSeqStmt.get() as { m: number }).m;
+    },
+
+    appendEvent(e: ClaimEvent): void {
+      eventInsertStmt.run({
+        op: e.op,
+        corpus_id: e.corpusId,
+        writer: e.writer,
+        claim_id: e.claimId,
+        deprecated_id: e.deprecatedId ?? null,
+        to_status: e.toStatus ?? null,
+        reason: e.reason ?? null,
+        recorded: e.recorded,
+        recorded_seq: e.recordedSeq,
+      });
+    },
+
+    readEvents(filter?: { corpusId?: string; claimId?: string; since?: number }): ClaimEvent[] {
+      const conditions: string[] = [];
+      const params: (string | number)[] = [];
+
+      if (filter?.corpusId !== undefined) {
+        conditions.push("corpus_id = ?");
+        params.push(filter.corpusId);
+      }
+      if (filter?.claimId !== undefined) {
+        conditions.push("claim_id = ?");
+        params.push(filter.claimId);
+      }
+      if (filter?.since !== undefined) {
+        conditions.push("recorded >= ?");
+        params.push(filter.since);
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+      const sql = `SELECT * FROM claim_events ${where} ORDER BY seq_pk ASC`;
+      const stmt = db.prepare<unknown[], ClaimEventRow>(sql);
+      const rows = stmt.all(...params);
+
+      return rows.map((row) => {
+        const event: ClaimEvent = {
+          op: row.op as ClaimEvent["op"],
+          corpusId: row.corpus_id,
+          writer: row.writer,
+          claimId: row.claim_id,
+          recorded: row.recorded,
+          recordedSeq: row.recorded_seq,
+        };
+        if (row.deprecated_id != null) event.deprecatedId = row.deprecated_id;
+        if (row.to_status != null) event.toStatus = row.to_status;
+        if (row.reason != null) event.reason = row.reason;
+        return event;
+      });
     },
   };
 }

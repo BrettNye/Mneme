@@ -1,6 +1,7 @@
 import { createSqliteAdapter } from "./sqlite.js";
 import type { Claim } from "../core/claim.js";
 import type { ClaimId, ProfileId, WorkspaceId } from "../core/ids.js";
+import type { ClaimEvent } from "./adapter.js";
 
 function makeValidatedClaim(overrides: Partial<Claim> = {}): Claim {
   const base: Claim = {
@@ -376,4 +377,152 @@ it("query filters by multiple runIds (IN set)", () => {
   const results = a.query({ corpusId: "c1", runIds: ["r1", "r3"] });
   expect(results).toHaveLength(2);
   expect(results.map((r) => r.provenance.runId).sort()).toEqual(["r1", "r3"]);
+});
+
+// --- New write-primitives tests ---
+
+it("maxRecordedSeq returns 0 on empty db", () => {
+  const a = createSqliteAdapter();
+  expect(a.maxRecordedSeq()).toBe(0);
+});
+
+it("maxRecordedSeq returns true max recorded_seq after inserts", () => {
+  const a = createSqliteAdapter();
+  a.insertClaim(makeValidatedClaim({ recordedSeq: 3 }));
+  a.insertClaim(makeValidatedClaim({ recordedSeq: 7 }));
+  a.insertClaim(makeValidatedClaim({ recordedSeq: 2 }));
+  expect(a.maxRecordedSeq()).toBe(7);
+});
+
+it("appendEvent and readEvents round-trips a commit event", () => {
+  const a = createSqliteAdapter();
+  const event: ClaimEvent = {
+    op: "commit",
+    corpusId: "corp-1",
+    writer: "writer-1",
+    claimId: "claim-abc",
+    recorded: 1716000000000,
+    recordedSeq: 1,
+  };
+  a.appendEvent(event);
+  const events = a.readEvents();
+  expect(events).toHaveLength(1);
+  expect(events[0].op).toBe("commit");
+  expect(events[0].corpusId).toBe("corp-1");
+  expect(events[0].writer).toBe("writer-1");
+  expect(events[0].claimId).toBe("claim-abc");
+  expect(events[0].recorded).toBe(1716000000000);
+  expect(events[0].recordedSeq).toBe(1);
+});
+
+it("appendEvent round-trips a supersede event with deprecatedId", () => {
+  const a = createSqliteAdapter();
+  const event: ClaimEvent = {
+    op: "supersede",
+    corpusId: "corp-1",
+    writer: "writer-1",
+    claimId: "claim-new",
+    deprecatedId: "claim-old",
+    recorded: 1716000001000,
+    recordedSeq: 2,
+  };
+  a.appendEvent(event);
+  const events = a.readEvents();
+  expect(events[0].deprecatedId).toBe("claim-old");
+});
+
+it("appendEvent round-trips a promote event with toStatus and reason", () => {
+  const a = createSqliteAdapter();
+  const event: ClaimEvent = {
+    op: "promote",
+    corpusId: "corp-1",
+    writer: "writer-1",
+    claimId: "claim-abc",
+    toStatus: "validated",
+    reason: "reviewed",
+    recorded: 1716000002000,
+    recordedSeq: 3,
+  };
+  a.appendEvent(event);
+  const events = a.readEvents();
+  expect(events[0].toStatus).toBe("validated");
+  expect(events[0].reason).toBe("reviewed");
+});
+
+it("readEvents returns events in insertion order", () => {
+  const a = createSqliteAdapter();
+  const e1: ClaimEvent = { op: "commit", corpusId: "c", writer: "w", claimId: "id-1", recorded: 1000, recordedSeq: 1 };
+  const e2: ClaimEvent = { op: "commit", corpusId: "c", writer: "w", claimId: "id-2", recorded: 2000, recordedSeq: 2 };
+  const e3: ClaimEvent = { op: "commit", corpusId: "c", writer: "w", claimId: "id-3", recorded: 3000, recordedSeq: 3 };
+  a.appendEvent(e1);
+  a.appendEvent(e2);
+  a.appendEvent(e3);
+  const events = a.readEvents();
+  expect(events.map((e) => e.claimId)).toEqual(["id-1", "id-2", "id-3"]);
+});
+
+it("readEvents filters by corpusId", () => {
+  const a = createSqliteAdapter();
+  a.appendEvent({ op: "commit", corpusId: "corp-A", writer: "w", claimId: "c1", recorded: 1000, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "corp-B", writer: "w", claimId: "c2", recorded: 2000, recordedSeq: 2 });
+  const results = a.readEvents({ corpusId: "corp-A" });
+  expect(results).toHaveLength(1);
+  expect(results[0].claimId).toBe("c1");
+});
+
+it("readEvents filters by claimId", () => {
+  const a = createSqliteAdapter();
+  a.appendEvent({ op: "commit", corpusId: "c", writer: "w", claimId: "claim-X", recorded: 1000, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "c", writer: "w", claimId: "claim-Y", recorded: 2000, recordedSeq: 2 });
+  const results = a.readEvents({ claimId: "claim-X" });
+  expect(results).toHaveLength(1);
+  expect(results[0].claimId).toBe("claim-X");
+});
+
+it("readEvents filters by since (recorded >= since)", () => {
+  const a = createSqliteAdapter();
+  a.appendEvent({ op: "commit", corpusId: "c", writer: "w", claimId: "c1", recorded: 1000, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "c", writer: "w", claimId: "c2", recorded: 2000, recordedSeq: 2 });
+  a.appendEvent({ op: "commit", corpusId: "c", writer: "w", claimId: "c3", recorded: 3000, recordedSeq: 3 });
+  const results = a.readEvents({ since: 2000 });
+  expect(results).toHaveLength(2);
+  expect(results.map((e) => e.claimId).sort()).toEqual(["c2", "c3"]);
+});
+
+it("readEvents returns empty array when no events match", () => {
+  const a = createSqliteAdapter();
+  expect(a.readEvents()).toHaveLength(0);
+  expect(a.readEvents({ corpusId: "no-such" })).toHaveLength(0);
+});
+
+it("transaction commits on normal return", () => {
+  const a = createSqliteAdapter();
+  const claim = makeValidatedClaim({ recordedSeq: 5 });
+  a.transaction(() => {
+    a.insertClaim(claim);
+    a.appendEvent({ op: "commit", corpusId: "c", writer: "w", claimId: claim.id, recorded: 1000, recordedSeq: 5 });
+  });
+  expect(a.getClaim(claim.id)?.id).toBe(claim.id);
+  expect(a.readEvents()).toHaveLength(1);
+  expect(a.maxRecordedSeq()).toBe(5);
+});
+
+it("transaction rolls back all writes when fn throws", () => {
+  const a = createSqliteAdapter();
+  const claim = makeValidatedClaim({ recordedSeq: 99 });
+  expect(() =>
+    a.transaction(() => {
+      a.insertClaim(claim);
+      a.appendEvent({ op: "commit", corpusId: "c", writer: "w", claimId: claim.id, recorded: 1000, recordedSeq: 99 });
+      throw new Error("boom");
+    })
+  ).toThrow();
+  expect(a.maxRecordedSeq()).toBe(0);
+  expect(a.readEvents()).toHaveLength(0);
+});
+
+it("transaction returns the value from fn", () => {
+  const a = createSqliteAdapter();
+  const result = a.transaction(() => 42);
+  expect(result).toBe(42);
 });

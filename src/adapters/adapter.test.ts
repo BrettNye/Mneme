@@ -1,4 +1,4 @@
-import { valuePredicateLevel, type AdapterCapabilities, type StorageAdapter, type ExecutionPlan, type IdempotencyRecord } from "./adapter.js";
+import { valuePredicateLevel, type AdapterCapabilities, type StorageAdapter, type ExecutionPlan, type IdempotencyRecord, type ClaimEvent } from "./adapter.js";
 import type { Claim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
 
@@ -45,6 +45,10 @@ it("StorageAdapter interface is satisfied by a stub implementation", () => {
         },
       };
     },
+    transaction<T>(fn: () => T): T { return fn(); },
+    maxRecordedSeq(): number { return 0; },
+    appendEvent(_e: ClaimEvent): void {},
+    readEvents(_filter?: { corpusId?: string; claimId?: string; since?: number }): ClaimEvent[] { return []; },
   };
   // The stub satisfies the interface; query returns an empty array
   expect(stub.query({ corpusId: "c1" })).toEqual([]);
