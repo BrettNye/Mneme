@@ -84,6 +84,12 @@ it("similarityFn throws for unknown name", () => {
   expect(() => similarityFn("nonexistent")).toThrow(/no similarity fn "nonexistent"/);
 });
 
+it("similarity fns expose a stable version identifier", () => {
+  expect(simJaccard.version).toBe("jaccard@1");
+  expect(simExact.version).toBe("exact@1");
+  expect(similarityFn("jaccard").version).toBe("jaccard@1");
+});
+
 // rho operator
 it("rho returns a RankedCorpus sorted by descending score", () => {
   const corpus = corpusOf([

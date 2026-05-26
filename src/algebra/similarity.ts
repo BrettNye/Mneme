@@ -5,6 +5,7 @@ import { canonicalizeValue } from "../core/value.js";
 export interface SimilarityFn {
   scoreOne(value: Value, query: Value): number;
   isPure: boolean;
+  version: string; // stable identifier recorded in derivation provenance
 }
 
 const tokens = (v: Value): Set<string> =>
@@ -14,6 +15,7 @@ const tokens = (v: Value): Set<string> =>
 
 export const simJaccard: SimilarityFn = {
   isPure: true,
+  version: "jaccard@1",
   scoreOne(v, q) {
     const a = tokens(v);
     const b = tokens(q);
@@ -25,6 +27,7 @@ export const simJaccard: SimilarityFn = {
 
 export const simExact: SimilarityFn = {
   isPure: true,
+  version: "exact@1",
   scoreOne: (v, q) => (canonicalizeValue(v) === canonicalizeValue(q) ? 1 : 0),
 };
 
