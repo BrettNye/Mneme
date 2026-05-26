@@ -18,6 +18,8 @@ flowchart TD
     classDef running fill:#87ceeb,stroke:#333
     classDef failed fill:#ffb6c1,stroke:#333
     classDef skipped fill:#d3d3d3,stroke:#333,stroke-dasharray: 5 5
+
+    class task-aggregation,task-aggregate-join,task-facade-alpha done
 ```
 
 ## Context
@@ -59,7 +61,7 @@ depends_on: []
 files:
   - src/algebra/aggregation.ts
   - src/algebra/aggregation.test.ts
-status: pending
+status: done
 ```
 
 The §4.13 types and aggregators: `AggregateResult`/`GroupKey`/`AggValue`, a claim-path resolver, the simple
@@ -151,7 +153,7 @@ depends_on: [task-aggregation]
 files:
   - src/algebra/aggregate-join.ts
   - src/algebra/aggregate-join.test.ts
-status: pending
+status: done
 ```
 
 The bridge back to ranking: `wilsonLowerBound`, the reweight functions, and `α_join_aggregate` — a
@@ -234,7 +236,7 @@ files:
   - src/mneme.ts
   - src/mneme.test.ts
   - src/index.ts
-status: pending
+status: done
 ```
 
 Expose the aggregation surface on the public façade: `alpha.*` stage builders (terminal `Corpus →
