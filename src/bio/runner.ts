@@ -3,8 +3,9 @@ import type { CycleReport, EpisodeId } from "./types.js";
 
 interface CycleDriver { runCycle(episode: EpisodeId): CycleReport; }
 interface DreamDriver { dream(episode: EpisodeId, run: { modelVersion: string }): Promise<DreamReport>; }
+interface ConsolidateDriver { consolidate(episode: EpisodeId): unknown; }
 
-export function createRunner(memory: CycleDriver & Partial<DreamDriver>, episode: EpisodeId) {
+export function createRunner(memory: CycleDriver & Partial<DreamDriver> & Partial<ConsolidateDriver>, episode: EpisodeId) {
   let timer: ReturnType<typeof setInterval> | undefined;
   let dreamTimer: ReturnType<typeof setInterval> | undefined;
   return {
@@ -36,6 +37,14 @@ export function createRunner(memory: CycleDriver & Partial<DreamDriver>, episode
           opts.intervalMs,
         );
       }
+    },
+    startConsolidating(opts: { intervalMs: number }, consolidateEpisode: EpisodeId): () => void {
+      if (typeof memory.consolidate !== "function") return () => {};           // no consolidate capability → no-op
+      const h = setInterval(
+        () => { try { memory.consolidate!(consolidateEpisode); } catch { /* fail-safe: swallow throws so interval survives */ } },
+        opts.intervalMs,
+      );
+      return () => clearInterval(h);
     },
   };
 }
