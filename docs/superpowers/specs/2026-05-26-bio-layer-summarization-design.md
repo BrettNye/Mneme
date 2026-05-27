@@ -97,6 +97,7 @@ interface SummarizeReport {
 
 ## 5. Select stage (collapse guard)
 
+0. **Empty-runIds guard (MUST, before any read).** If `episode.runIds` is empty, return a zero report immediately — do **not** read. A read with an empty `runIds` array is *unfiltered* and returns the entire corpus, which would feed the whole store to the model. (This is the bug_001 lesson from the Consolidation ultrareview; Dreaming's select already guards it. The summarize pass and `getDigest` both inherit this guard.)
 1. **Gather the episode's produced claims** — `provenance.runId ∈ episode.runIds`, via the existing runId query filter (the substrate prerequisite Dreaming already shipped). This is what was *produced/recorded* in the session, not the surfaced/read set.
 2. **Collapse guard — exclude prior summaries:** drop any claim with `provenance.workflow === "summary"`. Because a summary is thereby never in the input set, **a summary can never cite a summary → no chain can form → no depth counter is needed** (simpler than Dreaming's depth cap, which exists only because validated dreams re-enter their input). Double-protected: a `SummarizeFn` that cites a summary id is rejected by the `cites ⊆ selected` check (§6). **Dreams (`workflow:"dream"`) are *not* excluded** — a digest legitimately re-packs the session's hypotheses; no loop arises (dream ≠ summary).
 3. **Token bound** — cap to `maxInputClaims` (BioPolicy knob), keeping top-N by recency-then-confidence, so the model's context can't be blown. Salience-based selection is a captured deferral (§15) — for now bio provides the bounded set and the *model* judges what is digest-worthy.
@@ -114,7 +115,7 @@ For each validated `ProposedSummary`, build a `CandidateClaim`:
 - `provenance.derivedFrom`: `{ queryExpression: "summary", inputClaims: cites, evaluationClock: now, combinationRule: "summary@<modelVersion>" }`.
 - `evidence`: cited inputs as `{ kind: "claim" }` refs (+ `rationale` if present).
 
-Emit `derive` AppendOps, apply via `gateway.apply` with `opKey = "<episode>:<summarizePass>:<i>"` (idempotency carries over). Return `SummarizeReport`.
+Emit `derive` AppendOps and apply via `gateway.apply`. **opKeys encode op identity, not a positional index** — `opKey = "<episode>:summarize:derive:<hash(sorted cites)>"`. (bug_004 lesson: a positional `…:i` key collides across passes within the idempotency window, silently dropping a later pass's genuinely-new digest; an identity key lets a re-run over *changed* inputs apply while an identical re-run still dedupes.) The `admitted` count in `SummarizeReport` is derived from the **actual** per-op apply outcomes (`AppendResult.results`), never the planned-op count, so a rejected/duplicate op is never reported as admitted (bug_007 lesson).
 
 *Acyclicity:* a digest cites only older input claims, so the evidence DAG cannot cycle by construction (same argument as Dreaming/Consolidation).
 
