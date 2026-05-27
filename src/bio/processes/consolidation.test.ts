@@ -1,11 +1,9 @@
 import { createConsolidatePass } from "./consolidation.js";
-import type { ConsolidationReport } from "./consolidation.js";
 import { createMnemeGateway } from "../gateway.js";
 import { makeBioMneme } from "../test-support.js";
 import type { MnemeGateway } from "../gateway.js";
-import type { Episode, AppendOp } from "../types.js";
+import type { Episode } from "../types.js";
 import type { Claim, CandidateClaim } from "../../core/claim.js";
-import type { ClaimId } from "../../core/ids.js";
 import { resolvePolicy } from "../policy.js";
 
 // ---------------------------------------------------------------------------

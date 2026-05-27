@@ -13,6 +13,9 @@ export interface ConsolidationReport {
   errors: string[];
 }
 
+/** Default corpus to read episode claims from when the caller does not specify one. */
+export const DEFAULT_CORPUS_ID = "bio";
+
 /**
  * Creates a consolidation pass orchestrator.
  *
@@ -23,7 +26,7 @@ export interface ConsolidationReport {
 export function createConsolidatePass(
   gateway: MnemeGateway,
   policy?: BioPolicy,
-  corpusId = "bio"
+  corpusId = DEFAULT_CORPUS_ID
 ) {
   const inflight = new Set<string>();
   const pol = resolvePolicy(policy).consolidation;

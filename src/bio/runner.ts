@@ -8,6 +8,7 @@ interface ConsolidateDriver { consolidate(episode: EpisodeId): unknown; }
 export function createRunner(memory: CycleDriver & Partial<DreamDriver> & Partial<ConsolidateDriver>, episode: EpisodeId) {
   let timer: ReturnType<typeof setInterval> | undefined;
   let dreamTimer: ReturnType<typeof setInterval> | undefined;
+  let consolidateTimer: ReturnType<typeof setInterval> | undefined;
   return {
     start(opts: { intervalMs?: number } = {}) {
       if (timer) { clearInterval(timer); timer = undefined; }   // never leak a prior interval
@@ -24,6 +25,10 @@ export function createRunner(memory: CycleDriver & Partial<DreamDriver> & Partia
         clearInterval(dreamTimer);
         dreamTimer = undefined;
       }
+      if (consolidateTimer) {
+        clearInterval(consolidateTimer);
+        consolidateTimer = undefined;
+      }
     },
     runNow(): CycleReport {
       return memory.runCycle(episode);
@@ -38,13 +43,18 @@ export function createRunner(memory: CycleDriver & Partial<DreamDriver> & Partia
         );
       }
     },
+    // Consolidation is registered like dreaming (so stop() halts it and a re-call
+    // never leaks the prior interval) AND returns a caller-owned stop fn per spec.
     startConsolidating(opts: { intervalMs: number }, consolidateEpisode: EpisodeId): () => void {
+      if (consolidateTimer) { clearInterval(consolidateTimer); consolidateTimer = undefined; } // never leak a prior interval
       if (typeof memory.consolidate !== "function") return () => {};           // no consolidate capability → no-op
+      if (!(opts.intervalMs > 0)) return () => {};                             // non-positive interval → no-op (mirror start/startDreaming)
       const h = setInterval(
         () => { try { memory.consolidate!(consolidateEpisode); } catch { /* fail-safe: swallow throws so interval survives */ } },
         opts.intervalMs,
       );
-      return () => clearInterval(h);
+      consolidateTimer = h;
+      return () => { clearInterval(h); if (consolidateTimer === h) consolidateTimer = undefined; };
     },
   };
 }

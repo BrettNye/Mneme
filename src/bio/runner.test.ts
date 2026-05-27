@@ -393,3 +393,61 @@ it("startConsolidating swallows throws from consolidate so interval survives", (
     vi.useRealTimers();
   }
 });
+
+it("runner.stop() halts the consolidation interval", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => { calls++; },
+    };
+    const runner = createRunner(memory, "ep-1");
+    runner.startConsolidating({ intervalMs: 100 }, "ep-1");
+    vi.advanceTimersByTime(100);
+    expect(calls).toBe(1);
+    runner.stop(); // stop() must cover consolidation, not just the returned stop fn
+    vi.advanceTimersByTime(1_000);
+    expect(calls).toBe(1); // no more calls after stop()
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("double startConsolidating does not double-fire — old interval is cleared", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => { calls++; },
+    };
+    const runner = createRunner(memory, "ep-1");
+    runner.startConsolidating({ intervalMs: 100 }, "ep-1");
+    runner.startConsolidating({ intervalMs: 100 }, "ep-1"); // should clear the first
+    vi.advanceTimersByTime(100);
+    expect(calls).toBe(1); // only one interval active
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startConsolidating with a non-positive interval is a no-op", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => { calls++; },
+    };
+    const runner = createRunner(memory, "ep-1");
+    const stop = runner.startConsolidating({ intervalMs: 0 }, "ep-1");
+    vi.advanceTimersByTime(1_000);
+    expect(calls).toBe(0); // nothing scheduled at intervalMs 0
+    expect(typeof stop).toBe("function");
+    stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
