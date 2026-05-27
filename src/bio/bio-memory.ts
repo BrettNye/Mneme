@@ -6,8 +6,11 @@ import { evidenceUpdate } from "./processes/evidence-update.js";
 import { compose } from "./policies/suppression.js";
 import { createDreamPass } from "./processes/dreaming.js";
 import type { DreamFn, DreamReport } from "./processes/dreaming-types.js";
+import { createSummarizePass } from "./processes/summarize.js";
+import type { SummarizeFn, SummarizeReport } from "./processes/summarize-types.js";
 import type { BioQuery, CycleReport, EpisodeId, RetrievalContext, RetrievalPolicy } from "./types.js";
 import type { ClaimId } from "../core/ids.js";
+import type { Claim } from "../core/claim.js";
 import type { Mneme } from "../mneme.js";
 import type { BioPolicy } from "./policy.js";
 import { resolvePolicy } from "./policy.js";
@@ -19,6 +22,7 @@ export interface BioMemoryOpts {
   mneme: Mneme;
   corpusId: string;
   dreamFn?: DreamFn;
+  summarizeFn?: SummarizeFn;
   policy?: BioPolicy;
 }
 
@@ -29,6 +33,10 @@ export function createBioMemory(opts: BioMemoryOpts) {
 
   const dreamPass = dreamFn
     ? createDreamPass(gateway, dreamFn, { ...pol.dreaming, corpusId: opts.corpusId })
+    : undefined;
+
+  const summarizePass = opts.summarizeFn
+    ? createSummarizePass(gateway, opts.summarizeFn, { corpusId: opts.corpusId, summarize: opts.policy?.summarize })
     : undefined;
 
   const consolidatePass = createConsolidatePass(gateway, opts.policy, opts.corpusId);
@@ -77,6 +85,19 @@ export function createBioMemory(opts: BioMemoryOpts) {
         return { promoted: 0, folded: 0, deprecated: 0, dropped: [], errors: [UNKNOWN_EPISODE_ERROR] };
       }
       return consolidatePass.consolidate(ep, opts2);
+    },
+    async summarize(
+      episode: EpisodeId,
+      run: { modelVersion: string }
+    ): Promise<SummarizeReport> {
+      const ep = episodes.get(episode);
+      if (!ep) return { proposed: 0, admitted: 0, dropped: [], errors: [UNKNOWN_EPISODE_ERROR] };
+      if (!summarizePass) return { proposed: 0, admitted: 0, dropped: [], errors: ["no summarizeFn configured"] };
+      return summarizePass.summarize(ep, run);
+    },
+    getDigest(episode: EpisodeId): Claim[] {
+      const ep = episodes.get(episode);
+      return ep && summarizePass ? summarizePass.getDigest(ep) : [];
     },
   };
 }
