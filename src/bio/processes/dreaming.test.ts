@@ -1,9 +1,9 @@
 import { createDreamPass } from "./dreaming.js";
 import { createMnemeGateway } from "../gateway.js";
-import { createSqliteAdapter } from "../../adapters/sqlite.js";
+import { makeBioMneme } from "../test-support.js";
 import type { MnemeGateway } from "../gateway.js";
 import type { Episode, AppendOp } from "../types.js";
-import type { Claim } from "../../core/claim.js";
+import type { Claim, CandidateClaim } from "../../core/claim.js";
 import type { ClaimId } from "../../core/ids.js";
 import { MAX_DREAM_DEPTH, depthOf, isUnvalidatedDream, DREAM_WORKFLOW } from "./dreaming-types.js";
 import type { DreamFn, ProposedInsight } from "./dreaming-types.js";
@@ -237,19 +237,26 @@ it("single-flight: concurrent dream call for same episode returns an error immed
 it(
   "collapse property: depth stays bounded and DreamFn never sees unvalidated dreams across repeated passes",
   async () => {
-    // Use real in-memory gateway + adapter for an honest end-to-end signal
-    const adapter = createSqliteAdapter(":memory:");
-    const gateway = createMnemeGateway(adapter);
+    // Use real Mneme-backed gateway for an honest end-to-end signal.
+    const { mneme, corpusId } = makeBioMneme();
+    const gateway = createMnemeGateway(mneme, corpusId);
 
-    // Seed with validated non-dream claims (run_id = "r1" so selectDreamInput
-    // can query them via episode.runIds = ["r1"])
+    // Seed with validated non-dream claims (runId = "r1" so selectDreamInput
+    // can query them via episode.runIds = ["r1"]).  scope must be empty {} because
+    // makeBioMneme() creates a corpus with empty scopeFields.
     const seedClaims: Claim[] = [
       makeClaim("seed-1", { recorded: 1, runId: "r1", key: "lesson.seed-a" }),
       makeClaim("seed-2", { recorded: 2, runId: "r1", key: "lesson.seed-b" }),
       makeClaim("seed-3", { recorded: 3, runId: "r1", key: "lesson.seed-c" }),
     ];
+    // Insert seeds via gateway.apply (derive ops) so Mneme manages the corpus.
     for (const c of seedClaims) {
-      adapter.insertClaim(c);
+      // CandidateClaim omits id, recorded, recordedSeq, scopeHash, valueHash.
+      const { id: _id, recorded: _rec, recordedSeq: _seq, scopeHash: _sh, valueHash: _vh, ...candidate } = c;
+      gateway.apply(
+        [{ kind: "derive", claim: candidate as CandidateClaim }],
+        (_op, i) => `seed-${c.id}-${i}`
+      );
     }
 
     // Track all DreamFn invocations so we can assert on their input
@@ -258,7 +265,7 @@ it(
 
     // Greedy DreamFn: cites claims[0] — the most-recent after selectDreamInput
     // sorts by recorded desc. Once prior dreams are promoted and re-inserted
-    // with run_id="r1" they enter the pool and can be cited, allowing depth to
+    // with runId="r1" they enter the pool and can be cited, allowing depth to
     // accumulate pass-over-pass.
     const greedyDreamFn: DreamFn = async ({ claims }) => {
       dreamFnInputSets.push([...claims]);
@@ -278,9 +285,9 @@ it(
 
     // Run MAX_DREAM_DEPTH + 2 passes.  Each pass uses a unique episode ID so
     // the idempotency key `dream:<episodeId>:<opIndex>` is fresh every pass.
-    // Between passes we "promote" newly admitted candidate dreams by
-    // re-inserting them with status="validated" and provenance.runId="r1" so
-    // that selectDreamInput (which filters run_id IN ["r1"]) picks them up on
+    // Between passes we "promote" newly admitted candidate dreams by superseding
+    // them with a new validated claim that includes provenance.runId="r1", so
+    // that selectDreamInput (which filters runId IN ["r1"]) picks them up on
     // the next pass and depth can accumulate.
     const PASSES = MAX_DREAM_DEPTH + 2; // would exceed cap if unbounded
     for (let i = 0; i < PASSES; i++) {
@@ -288,26 +295,36 @@ it(
       const report = await pass.dream(episode, { modelVersion: "test-v1" });
       expect(report.errors).toHaveLength(0);
 
-      // Promote all newly admitted candidate dream claims so they re-enter the
-      // dreamable pool next pass.  Admitted dreams have run_id=null (the
-      // dreaming-admit provenance carries no runId), so we re-insert them with
-      // provenance.runId="r1" and status="validated" directly via the adapter.
-      // INSERT OR REPLACE on the same id updates the existing row in-place.
-      const allInStore = adapter.query({ corpusId: "bio" }); // no runIds filter
+      // Read all claims (no status filter) to find newly admitted candidate dreams.
+      const allInStore = gateway.read({ corpusId });
       const candidateDreams = allInStore.filter(
         (c) => c.provenance.workflow === DREAM_WORKFLOW && c.status === "candidate"
       );
+      // Supersede each candidate dream with a validated version that carries
+      // provenance.runId="r1" so selectDreamInput finds it on the next pass.
+      // Depth tag is preserved in the superseding claim's tags array.
       for (const dream of candidateDreams) {
-        adapter.insertClaim({
-          ...dream,
-          status: "validated",
-          provenance: { ...dream.provenance, runId: "r1" },
-        });
+        const { id: _id, recorded: _rec, recordedSeq: _seq, scopeHash: _sh, valueHash: _vh, ...dreamCandidate } = dream;
+        gateway.apply(
+          [
+            {
+              kind: "supersede",
+              deprecate: dream.id,
+              with: {
+                ...(dreamCandidate as CandidateClaim),
+                status: "validated",
+                provenance: { ...dream.provenance, runId: "r1" },
+              },
+              reason: "promote dream for next pass",
+            },
+          ],
+          (_op, i) => `promote-${dream.id}-${i}`
+        );
       }
     }
 
-    // Collect all dream claims in the store (query without runIds to see all)
-    const allInStore = adapter.query({ corpusId: "bio" });
+    // Collect all dream claims in the corpus (no status or runId filter).
+    const allInStore = gateway.read({ corpusId });
     const dreamClaims = allInStore.filter((c) => c.provenance.workflow === DREAM_WORKFLOW);
 
     // (a) At least one dream has depth === MAX_DREAM_DEPTH — proves depth
