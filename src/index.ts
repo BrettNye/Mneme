@@ -42,3 +42,8 @@ export type { BioPolicy } from "./bio/policy.js";
 export { DEFAULT_BIO_POLICY } from "./bio/policy.js";
 export type { ConsolidationReport } from "./bio/processes/consolidation.js";
 export { createConsolidatePass } from "./bio/processes/consolidation.js";
+
+// Summarize public surface
+export type { SummarizeFn, ProposedSummary, SummarizeInput, SummarizeReport } from "./bio/processes/summarize-types.js";
+export { SUMMARY_WORKFLOW } from "./bio/processes/summarize-types.js";
+export { createSummarizePass } from "./bio/processes/summarize.js";
