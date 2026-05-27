@@ -10,6 +10,10 @@ export interface DreamPassOpts {
   schema?: ClaimSchema;
   corpusId?: string;
   maxInputClaims?: number;
+  /** Custom dreaming prior — defaults to DEFAULT_BIO_POLICY.dreaming.prior */
+  prior?: { alpha: number; beta: number };
+  /** Custom max dream depth — defaults to DEFAULT_BIO_POLICY.dreaming.maxDepth */
+  maxDepth?: number;
 }
 
 export function createDreamPass(
@@ -33,7 +37,11 @@ export function createDreamPass(
       }
       running.add(episode.id);
       try {
-        const selected = selectDreamInput(gateway.read, episode, opts);
+        const selected = selectDreamInput(gateway.read, episode, {
+          corpusId: opts.corpusId,
+          maxInputClaims: opts.maxInputClaims,
+          maxDepth: opts.maxDepth,
+        });
         if (selected.length === 0) {
           return { proposed: 0, admitted: 0, dropped: [], errors: [] };
         }
@@ -53,7 +61,8 @@ export function createDreamPass(
             selected,
             now(),
             run.modelVersion,
-            opts.schema
+            opts.schema,
+            opts.prior
           );
           const res = gateway.apply(
             ops,

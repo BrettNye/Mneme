@@ -290,3 +290,164 @@ it("startDreaming on a cycle-only memory (no dream method) is a no-op — throws
     vi.useRealTimers();
   }
 });
+
+// ---- startConsolidating tests ----
+
+it("startConsolidating calls memory.consolidate on each interval tick", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => { calls++; },
+    };
+    const runner = createRunner(memory, "ep-1");
+    const stop = runner.startConsolidating({ intervalMs: 10 }, "ep-1");
+    expect(calls).toBe(0);
+    vi.advanceTimersByTime(10);
+    expect(calls).toBe(1);
+    vi.advanceTimersByTime(10);
+    expect(calls).toBe(2);
+    stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startConsolidating passes the correct episode id to memory.consolidate", () => {
+  vi.useFakeTimers();
+  try {
+    const received: string[] = [];
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (episode: string) => { received.push(episode); },
+    };
+    const runner = createRunner(memory, "ep-main");
+    const stop = runner.startConsolidating({ intervalMs: 50 }, "ep-consolidate");
+    vi.advanceTimersByTime(50);
+    expect(received).toEqual(["ep-consolidate"]);
+    stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startConsolidating stop function clears the interval — no further consolidate calls after stop", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => { calls++; },
+    };
+    const runner = createRunner(memory, "ep-1");
+    const stop = runner.startConsolidating({ intervalMs: 100 }, "ep-1");
+    vi.advanceTimersByTime(100);
+    expect(calls).toBe(1);
+    stop();
+    vi.advanceTimersByTime(1_000);
+    expect(calls).toBe(1); // no more calls after stop
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startConsolidating on memory without consolidate is a no-op — returns stop function, throws nothing", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+    };
+    const runner = createRunner(memory, "ep-1");
+    let stop!: () => void;
+    expect(() => {
+      stop = runner.startConsolidating({ intervalMs: 100 }, "ep-1");
+      vi.advanceTimersByTime(1_000);
+    }).not.toThrow();
+    expect(typeof stop).toBe("function");
+    stop(); // calling stop must not throw either
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startConsolidating swallows throws from consolidate so interval survives", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => {
+        calls++;
+        throw new Error("consolidation failure");
+      },
+    };
+    const runner = createRunner(memory, "ep-1");
+    const stop = runner.startConsolidating({ intervalMs: 100 }, "ep-1");
+    vi.advanceTimersByTime(100);
+    expect(calls).toBe(1);
+    vi.advanceTimersByTime(100); // interval should survive the throw
+    expect(calls).toBe(2); // called again, proving interval was not killed
+    stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("runner.stop() halts the consolidation interval", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => { calls++; },
+    };
+    const runner = createRunner(memory, "ep-1");
+    runner.startConsolidating({ intervalMs: 100 }, "ep-1");
+    vi.advanceTimersByTime(100);
+    expect(calls).toBe(1);
+    runner.stop(); // stop() must cover consolidation, not just the returned stop fn
+    vi.advanceTimersByTime(1_000);
+    expect(calls).toBe(1); // no more calls after stop()
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("double startConsolidating does not double-fire — old interval is cleared", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => { calls++; },
+    };
+    const runner = createRunner(memory, "ep-1");
+    runner.startConsolidating({ intervalMs: 100 }, "ep-1");
+    runner.startConsolidating({ intervalMs: 100 }, "ep-1"); // should clear the first
+    vi.advanceTimersByTime(100);
+    expect(calls).toBe(1); // only one interval active
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startConsolidating with a non-positive interval is a no-op", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      consolidate: (_episode: string) => { calls++; },
+    };
+    const runner = createRunner(memory, "ep-1");
+    const stop = runner.startConsolidating({ intervalMs: 0 }, "ep-1");
+    vi.advanceTimersByTime(1_000);
+    expect(calls).toBe(0); // nothing scheduled at intervalMs 0
+    expect(typeof stop).toBe("function");
+    stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});

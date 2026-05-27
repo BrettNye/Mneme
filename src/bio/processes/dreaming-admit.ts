@@ -14,7 +14,8 @@ export function admitInsights(
   selected: Claim[],
   nowMs: number,
   modelVersion: string,
-  schema?: ClaimSchema
+  schema?: ClaimSchema,
+  prior: { alpha: number; beta: number } = DREAM_PRIOR
 ): AdmitResult {
   const byId = new Map(selected.map((c) => [String(c.id), c]));
   const ops: AppendOp[] = [];
@@ -51,8 +52,8 @@ export function admitInsights(
       value: ins.value,
       confidence: {
         distribution: "beta",
-        parameters: { alpha: DREAM_PRIOR.alpha, beta: DREAM_PRIOR.beta },
-        raw: DREAM_PRIOR.alpha / (DREAM_PRIOR.alpha + DREAM_PRIOR.beta),
+        parameters: { alpha: prior.alpha, beta: prior.beta },
+        raw: prior.alpha / (prior.alpha + prior.beta),
       },
       valid: rep.valid,
       status: "candidate",

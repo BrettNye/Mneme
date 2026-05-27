@@ -1,17 +1,19 @@
 import type { Claim, CandidateClaim } from "../../core/claim.js";
 import type { ClaimId } from "../../core/ids.js";
 import type { AppendOp, CognitiveProcess, ProcessInput } from "../types.js";
+import type { BioPolicy } from "../policy.js";
+import { DEFAULT_BIO_POLICY } from "../policy.js";
 
-const USAGE_WEIGHT = 0.5;
-const OUTCOME_WEIGHT = 2.0;
+export function evidenceUpdate(evidence?: BioPolicy["evidence"]): CognitiveProcess {
+  const usageWeight = evidence?.usageWeight ?? DEFAULT_BIO_POLICY.evidence.usageWeight;
+  const outcomeWeight = evidence?.outcomeWeight ?? DEFAULT_BIO_POLICY.evidence.outcomeWeight;
 
-// Explicit bio-layer reinforcement evidence weight for promoting a scalar belief to Beta.
-// This is a documented wave-1 choice: total pseudocount = 2 produces a weak but mean-preserving
-// prior so that a scalar claim with p=0.9 promotes to Beta(1.8, 0.2), mean = 0.9 exactly.
-// NOT a silent default — see design doc docs/superpowers/specs/2026-05-26-bio-layer-design.md.
-const SCALAR_PSEUDOCOUNT = 2;
+  // Explicit bio-layer reinforcement evidence weight for promoting a scalar belief to Beta.
+  // This is a documented wave-1 choice: total pseudocount = 2 produces a weak but mean-preserving
+  // prior so that a scalar claim with p=0.9 promotes to Beta(1.8, 0.2), mean = 0.9 exactly.
+  // NOT a silent default — see design doc docs/superpowers/specs/2026-05-26-bio-layer-design.md.
+  const scalarPseudocount = evidence?.scalarPseudocount ?? DEFAULT_BIO_POLICY.evidence.scalarPseudocount;
 
-export function evidenceUpdate(): CognitiveProcess {
   return {
     name: "evidence-update",
     run(input: ProcessInput): AppendOp[] {
@@ -26,13 +28,13 @@ export function evidenceUpdate(): CognitiveProcess {
 
       // Usage signals → weak positive (alpha only)
       for (const id of signals.usageFor(episode.id)) {
-        bump(String(id), USAGE_WEIGHT, 0);
+        bump(String(id), usageWeight, 0);
       }
 
       // Outcome signals → credit only for surfaced claims (bounded credit assignment)
       const surfaced = new Set(signals.surfacedFor(episode.id).map(String));
       for (const o of signals.outcomesFor(episode.id)) {
-        const w = (o.weight ?? 1) * OUTCOME_WEIGHT;
+        const w = (o.weight ?? 1) * outcomeWeight;
         for (const id of surfaced) {
           if (o.result === "success") {
             bump(id, w, 0);
@@ -52,7 +54,7 @@ export function evidenceUpdate(): CognitiveProcess {
         return {
           kind: "supersede",
           deprecate: c.id,
-          with: reweighted(c, d, episode.id, input.now),
+          with: reweighted(c, d, episode.id, input.now, scalarPseudocount),
           reason: "evidence-update",
         };
       });
@@ -67,9 +69,10 @@ function reweighted(
   d: { dAlpha: number; dBeta: number },
   episodeId: string,
   now: ProcessInput["now"],
+  scalarPseudocount: number,
 ): CandidateClaim {
   // Promote scalar confidence to beta preserving its mean exactly.
-  // For a scalar claim with mean p: alpha = p * SCALAR_PSEUDOCOUNT, beta = (1-p) * SCALAR_PSEUDOCOUNT
+  // For a scalar claim with mean p: alpha = p * scalarPseudocount, beta = (1-p) * scalarPseudocount
   // so that mean = alpha/(alpha+beta) = p. The scalar already represents a belief, not raw counts.
   const p =
     c.confidence.distribution === "beta"
@@ -77,8 +80,8 @@ function reweighted(
       : (() => {
           const scalarP = c.confidence.parameters.p;
           return {
-            alpha: scalarP * SCALAR_PSEUDOCOUNT,
-            beta: (1 - scalarP) * SCALAR_PSEUDOCOUNT,
+            alpha: scalarP * scalarPseudocount,
+            beta: (1 - scalarP) * scalarPseudocount,
           };
         })();
 
