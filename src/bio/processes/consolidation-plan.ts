@@ -31,10 +31,13 @@ export function planConsolidation(
   const active = claims.filter((c) => c.status !== "deprecated");
   const K = Math.max(2, pol.foldThreshold);
 
-  // Group active claims by (subject, key, scopeHash, valueHash)
+  // Group active claims by (subject, key, scopeHash, valueHash, distribution).
+  // Distribution is part of the key so a scalar and a beta claim about the SAME value
+  // never fold together — folding heterogeneous distributions through one binding
+  // produces NaN confidence (combineGroup uses claims[0]'s binding only).
   const groups = new Map<string, Claim[]>();
   for (const c of active) {
-    const key = `${c.subject}\x00${c.key}\x00${c.scopeHash}\x00${c.valueHash}`;
+    const key = `${c.subject}\x00${c.key}\x00${c.scopeHash}\x00${c.valueHash}\x00${c.confidence.distribution}`;
     const bucket = groups.get(key);
     if (bucket) {
       bucket.push(c);
@@ -51,6 +54,16 @@ export function planConsolidation(
     if (group.length < K) continue;
 
     const synth = oplusSynthesizeAs(group[0].subject, group[0].key, pol.foldRule)(corpusOf(group));
+
+    // Defensive backstop: never emit a consolidated claim with non-finite confidence.
+    // The distribution-aware group key above should already prevent this, but a corrupt
+    // input must not silently persist a NaN claim while deprecating real inputs.
+    const params = synth.confidence.parameters as Record<string, number>;
+    const finite =
+      Number.isFinite(synth.confidence.raw) &&
+      Object.values(params).every((v) => typeof v === "number" && Number.isFinite(v));
+    if (!finite) continue;
+
     const lb = lowerBound(synth.confidence, pol.lowerBoundK);
     const tier = tierFor(lb, pol.promoteThresholds);
 
@@ -115,6 +128,11 @@ function buildConsolidated(
     status: tier,
     source: "workflow",
     provenance: {
+      // Spread the representative input's provenance FIRST so the consolidated claim
+      // inherits the episode's runId (all group members were read under episode.runIds).
+      // Without this the survivor is stored run_id=null and is invisible to every
+      // episode-scoped read — it could never be re-promoted or reseed Dreaming.
+      ...rep.provenance,
       workflow: CONSOLIDATE_WORKFLOW,
       derivedFrom: {
         queryExpression: "consolidate",

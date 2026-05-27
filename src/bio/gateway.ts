@@ -22,6 +22,7 @@ export function createMnemeGateway(mneme: Mneme, corpusId: string): MnemeGateway
     apply(ops, opKey) {
       let applied = 0, skipped = 0;
       const rejected: { key: string; status: string }[] = [];
+      const results: { status: string }[] = [];
 
       for (let i = 0; i < ops.length; i++) {
         const key = opKey(ops[i], i);
@@ -45,12 +46,13 @@ export function createMnemeGateway(mneme: Mneme, corpusId: string): MnemeGateway
                 idempotencyKey: key,
               });
 
+        results.push({ status: r.status });
         if (isApplied(r.status)) applied++;
         else if (r.status === "duplicate") skipped++;
         else rejected.push({ key, status: r.status });
       }
 
-      return { applied, skipped, rejected };
+      return { applied, skipped, rejected, results };
     },
   };
 }

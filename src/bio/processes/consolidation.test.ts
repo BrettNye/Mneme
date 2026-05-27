@@ -283,13 +283,14 @@ it("rejected ops from gateway.apply surface in dropped[]", () => {
     (_op, i) => `seed-rej-${i}`
   );
 
-  // Wrap gateway to inject a rejection
+  // Wrap gateway to inject a rejection (per-op results mark them non-applied)
   const rejectingGateway: MnemeGateway = {
     read: (q) => realGateway.read(q),
     readByIds: (ids) => realGateway.readByIds(ids),
     apply: (ops, opKey) => {
       const rejected = ops.map((_op, i) => ({ key: opKey(_op, i), status: "forbidden" }));
-      return { applied: 0, skipped: 0, rejected };
+      const results = ops.map(() => ({ status: "forbidden" }));
+      return { applied: 0, skipped: 0, rejected, results };
     },
   };
 
@@ -298,4 +299,84 @@ it("rejected ops from gateway.apply surface in dropped[]", () => {
   const report = pass.consolidate(episode);
   expect(report.dropped.length).toBeGreaterThan(0);
   expect(report.errors).toHaveLength(0); // rejections go to dropped, not errors
+  // bug_007: a rejected op must NOT also be counted as a success
+  expect(report.promoted).toBe(0);
+  expect(report.folded).toBe(0);
+  expect(report.deprecated).toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// 9. Empty-runIds episode is a no-op — does NOT mutate the whole corpus (bug_001)
+// ---------------------------------------------------------------------------
+
+it("empty-runIds episode is a no-op and does not touch the corpus", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gateway = createMnemeGateway(mneme, corpusId);
+  // A high-confidence candidate that WOULD be promoted if the corpus were read unscoped
+  gateway.apply(
+    [{ kind: "derive", claim: makeCandidate({ alpha: 40, beta: 8, status: "candidate" }) }],
+    (_op, i) => `seed-noruns-${i}`
+  );
+
+  const pass = createConsolidatePass(gateway, undefined, corpusId);
+  const report = pass.consolidate(makeEpisode("ep-no-runs", [])); // empty runIds
+
+  expect(report.promoted).toBe(0);
+  expect(report.folded).toBe(0);
+  // The seeded claim must remain untouched (still candidate) — no corpus-wide mutation
+  const all = gateway.read({ corpusId });
+  expect(all.every((c) => c.status === "candidate")).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// 10. Folded survivor carries the episode runId (retrievable by runId) (bug_002)
+// ---------------------------------------------------------------------------
+
+it("folded survivor carries the episode runId so a runId-scoped read finds it", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gateway = createMnemeGateway(mneme, corpusId);
+  const K = resolvePolicy().consolidation.foldThreshold;
+  for (let i = 0; i < K; i++) {
+    gateway.apply(
+      [{ kind: "derive", claim: makeCandidate({ subject: "user.bob", key: "skill.rust", runId: "r1", alpha: 5, beta: 1 }) }],
+      (_op, j) => `seed-runid-${i}-${j}`
+    );
+  }
+  const pass = createConsolidatePass(gateway, undefined, corpusId);
+  const report = pass.consolidate(makeEpisode("ep-runid", ["r1"]));
+  expect(report.folded).toBe(1);
+
+  const byRun = gateway
+    .read({ corpusId, runIds: ["r1"] })
+    .filter((c) => c.status !== "deprecated" && c.key === "skill.rust");
+  expect(byRun).toHaveLength(1);
+  expect(byRun[0].provenance.runId).toBe("r1");
+});
+
+// ---------------------------------------------------------------------------
+// 11. A second pass with NEW agreeing claims folds again (identity opKeys) (bug_004)
+// ---------------------------------------------------------------------------
+
+it("a later pass with new agreeing claims folds again instead of colliding on positional opKeys", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gateway = createMnemeGateway(mneme, corpusId);
+  const K = resolvePolicy().consolidation.foldThreshold;
+  const seed = (tag: string, i: number) =>
+    gateway.apply(
+      [{ kind: "derive", claim: makeCandidate({ subject: "user.cara", key: "skill.go", runId: "r1", alpha: 5, beta: 1 }) }],
+      (_op, j) => `seed-${tag}-${i}-${j}`
+    );
+
+  for (let i = 0; i < K; i++) seed("a", i);
+  const pass = createConsolidatePass(gateway, undefined, corpusId);
+  const ep = makeEpisode("ep-multi", ["r1"]);
+
+  const first = pass.consolidate(ep);
+  expect(first.folded).toBe(1);
+
+  // New agreeing claims arrive within the same episode/window
+  for (let i = 0; i < K; i++) seed("b", i);
+  const second = pass.consolidate(ep);
+  expect(second.folded).toBe(1); // NOT silently deduped to 0
+  expect(second.deprecated).toBe(K + 1); // survivor1 + K new inputs
 });

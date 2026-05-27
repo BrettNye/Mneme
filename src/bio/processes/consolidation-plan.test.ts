@@ -76,6 +76,34 @@ it("does NOT fold a group of K-1 claims (below threshold)", () => {
   expect(ops.filter((o) => o.kind === "promote" && o.to === "deprecated")).toHaveLength(0);
 });
 
+// ─── bug_010: mixed confidence distributions never fold into a NaN claim ──────
+
+it("splits a same-value group by distribution so no fold produces NaN confidence", () => {
+  // A scalar-confidence variant sharing the SAME (subject, key, scopeHash, valueHash)
+  // as the beta claims. Pre-fix these grouped together and folded via claims[0]'s
+  // binding → NaN confidence. Post-fix they fold as two homogeneous groups.
+  const scalarClaim = (id: string): Claim => ({
+    ...makeClaim(id),
+    confidence: { distribution: "scalar", parameters: { p: 0.8 }, raw: 0.8 } as Claim["confidence"],
+  });
+  const group = [
+    makeClaim("b1"), makeClaim("b2"), makeClaim("b3"),       // 3 beta, same value
+    scalarClaim("s1"), scalarClaim("s2"), scalarClaim("s3"), // 3 scalar, same value
+  ];
+
+  const ops = planConsolidation(group, DEFAULT_POL, 1000 as any);
+  const derives = ops.filter((o) => o.kind === "derive") as Extract<typeof ops[number], { kind: "derive" }>[];
+
+  // Two homogeneous folds (beta group + scalar group), neither folding across distributions
+  expect(derives).toHaveLength(2);
+  // Every consolidated claim has FINITE confidence (no NaN persisted)
+  for (const d of derives) {
+    const params = d.claim.confidence.parameters as Record<string, number>;
+    expect(Number.isFinite(d.claim.confidence.raw)).toBe(true);
+    expect(Object.values(params).every((v) => Number.isFinite(v))).toBe(true);
+  }
+});
+
 // ─── fold xor promote ─────────────────────────────────────────────────────
 
 it("a claim in a fold-eligible group is never also individually promoted", () => {

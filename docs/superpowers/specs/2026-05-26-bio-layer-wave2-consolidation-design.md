@@ -160,10 +160,11 @@ Guiding principle unchanged: on any uncertainty, **write nothing**. Append-only 
 | Failure | Handling |
 |---|---|
 | `gateway.read` fails | Return `ConsolidationReport` with `errors`; apply nothing. |
-| `gateway.apply` fails | Atomic batch (carryover): nothing applied, error in report, no partial consolidation. |
+| `gateway.apply` fails mid-batch | `gateway.apply` is **per-op atomic, not one batch transaction** — a mid-batch IO throw can leave earlier ops applied. Recovery is by **idempotent retry** (op keys encode op *identity* — input-set for a fold, target+status for a promote — so a retry re-applies only what didn't land) **+ soft-deprecate** (nothing is ever lost). True batch atomicity is **deferred** (§11). The catch returns `errors` and stops. |
 | Concurrent `consolidate(episode)` | **Single-flight per episode** (mirrors Dreaming): a second concurrent pass returns immediately with an error and applies nothing. |
 | Empty / no eligible groups or promotions | `{ promoted: 0, folded: 0, … }`, no-op; never an error. |
-| Invalid op (e.g. promote a claim concurrently deprecated, or a non-forward transition) | Gateway/substrate rejects → surfaced in `report.dropped`/`errors`; batch atomicity protects the rest. |
+| **Empty `runIds`** | Guarded **before** the read (an empty-`runIds` query is unfiltered and would read the whole corpus): `consolidate` returns a zero report, mirroring Dreaming's select guard. |
+| Invalid op (e.g. promote a claim concurrently deprecated, or a non-forward transition) | Gateway/substrate rejects → surfaced in `report.dropped`; the report's success counts derive from the **actual** per-op apply outcomes (`res.results`), so a rejected op is never also counted as applied. |
 | Unknown episode | `{ … errors: ["unknown episode"] }`, consistent with `runCycle`/`dream`. |
 
 `ConsolidationReport`:
@@ -244,6 +245,7 @@ Authoritative deferral list; mirrored into the `mneme-bio-layer-scope` memory.
 - **Unified sleep-phase report** — a combined report across `consolidate` + `dream` (and surfacing each pass's `dropped`/`rejected`) for a single "what happened during sleep" view. Each pass reports independently for now.
 - **Read-time knobs intentionally NOT in `BioPolicy`** — suppression `floor` and the `decay` policy stay on `RetrievalContext` (per-query lenses, not one global setting); the signal-buffer `cap` stays a `createSignalBuffer` argument (operational limit). If a future need arises for global read-time defaults, folding them into `BioPolicy` is a candidate then — captured here so the asymmetry is a recorded decision, not an oversight.
 - **Exact replay of consolidated claims** — shares the substrate's deferred replay-re-execution engine (v1.x). Consolidation is deterministic, so this is purely the substrate-wide `exact` machinery, not consolidation-specific.
+- **True batch atomicity for the apply** — `gateway.apply` is per-op atomic, not one transaction (§8). A mid-batch IO failure leaves a partial fold recoverable by idempotent retry + soft-deprecate, but the writes aren't all-or-nothing. A real batch transaction needs the write pipeline to expose a "join an existing transaction" path (SQLite txns don't nest), which is a substrate-level change. Deferred as tracked debt; surfaced by the 2026-05-26 ultrareview of PR #1.
 
 ---
 
