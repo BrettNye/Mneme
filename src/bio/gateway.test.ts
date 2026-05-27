@@ -267,6 +267,20 @@ it("AppendResult.rejected is optional and absent consumers only need applied/ski
 });
 
 // ---------------------------------------------------------------------------
+// invalid scope → throws (scope validation active)
+// ---------------------------------------------------------------------------
+
+it("a claim with an undeclared scope field surfaces as a thrown error (scope validation active)", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const gw = createMnemeGateway(mneme, corpusId);
+  const badOp = {
+    kind: "derive" as const,
+    claim: makeCandidateClaim({ scope: { unexpected: "x" } }),
+  };
+  expect(() => gw.apply([badOp], () => "k")).toThrow();
+});
+
+// ---------------------------------------------------------------------------
 // apply aggregates: mixed ops applied/skipped/rejected counts
 // ---------------------------------------------------------------------------
 
