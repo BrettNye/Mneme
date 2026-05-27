@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-26
 **Status:** Approved design (brainstorm complete). Next step: DAG implementation plan via `writing-dag-plans`.
-**Type:** New capability in the bio layer (`src/bio/`). No substrate changes required (the runId query filter Dreaming added is reused).
+**Type:** New capability in the bio layer (`src/bio/`), plus a layer-wide tuning-config formalization (`BioPolicy`). No substrate changes required (the runId query filter Dreaming added is reused).
 
 ---
 
@@ -29,7 +29,9 @@ Without Consolidation, dreamed candidates never become eligible to reseed dreami
 - **Promotion** — advance a claim's lifecycle (`candidate → provisional → validated`) when its Beta confidence **lower bound** clears per-tier thresholds. Forward-only; the substrate enforces lifecycle direction.
 - **Corroboration folding** — fold a group of ≥ K *agreeing* claims (same `subject / key / scopeHash / valueHash`) into one consolidated claim via ⊕, and deprecate the folded inputs. Reduces redundancy in the default read view.
 
-**In scope:** the synchronous `consolidate(episode)` pass (select → plan → apply), a fully configurable `ConsolidationOpts` policy, the `derive`+`promote` op expression, the `"consolidate"` provenance marker, fail-safe + single-flight handling, optional runner scheduling, and a monotonicity (anti-runaway) property test.
+**In scope:** the synchronous `consolidate(episode)` pass (select → plan → apply), the `derive`+`promote` op expression, the `"consolidate"` provenance marker, fail-safe + single-flight handling, optional runner scheduling, and a monotonicity (anti-runaway) property test.
+
+**Also in scope — the unified `BioPolicy` (§4).** This slice formalizes bio-layer tuning into one config object so policy can be swept empirically with no code changes. Consolidation's knobs are one sub-policy of it; the same change **exposes currently-hardcoded knobs in two existing mechanisms**: the wave-1 keystone evidence weights (`usageWeight`, `outcomeWeight`, `scalarPseudocount`) and dreaming's `prior`/`maxDepth`. This is a **purely additive, behavior-preserving** refactor — every default equals today's constant, so existing wave-1 and dreaming tests stay green.
 
 **Out of scope:** see §11. Everything deferred is captured there authoritatively and mirrored into the `mneme-bio-layer-scope` memory.
 
@@ -64,34 +66,45 @@ Design properties:
 
 ---
 
-## 4. The `ConsolidationOpts` policy (configurable; defaults are tuning starting points)
+## 4. The unified `BioPolicy` (configurable; defaults are tuning starting points)
 
-All policy is data, not code, so thresholds can be tuned empirically during testing with no code changes.
+All bio tuning is data, not code, gathered into **one** config object so an empirical sweep varies a single thing. Every field is optional; every default equals the value the layer hardcodes today, so introducing `BioPolicy` changes **no** behavior until a knob is overridden.
 
 ```ts
-interface ConsolidationOpts {
-  promoteThresholds?: { provisional?: number; validated?: number }; // lower-bound gates
-  lowerBoundK?: number;   // σ below the mean for the lower bound (mean − k·σ)
-  foldRule?: string;      // ⊕ ruleId for corroboration folding
-  foldThreshold?: number; // K — minimum group size to fold
+interface BioPolicy {
+  evidence?: {              // wave-1 keystone (currently hardcoded in evidence-update.ts)
+    usageWeight?: number;       // α added per usage signal               — default 0.5
+    outcomeWeight?: number;     // α/β added per outcome (the learning rate) — default 2.0
+    scalarPseudocount?: number; // scalar→Beta promotion strength          — default 2
+  };
+  dreaming?: {              // wave-2 dreaming (prior/depth currently hardcoded in dreaming-types.ts)
+    prior?: { alpha: number; beta: number }; // fresh-dream confidence    — default { alpha: 1, beta: 3 }
+    maxDepth?: number;          // dream→dream recursion cap               — default 3
+    maxInputClaims?: number;    // select token bound (already configurable) — default 200
+  };
+  consolidation?: {         // this slice
+    promoteThresholds?: { provisional?: number; validated?: number }; // lower-bound gates — default 0.50 / 0.65
+    lowerBoundK?: number;       // σ below the mean for the lower bound (mean − k·σ) — default 1.645 (≈ one-sided 95%)
+    foldRule?: string;          // ⊕ ruleId for corroboration folding      — default RULE.WEIGHTED_AVG (see §6)
+    foldThreshold?: number;     // K — minimum group size to fold          — default 3 (clamped ≥ 2)
+  };
 }
 
-// exported defaults (the empirical starting points):
-const DEFAULT_CONSOLIDATION_OPTS = {
-  promoteThresholds: { provisional: 0.50, validated: 0.65 },
-  lowerBoundK: 1.645,                 // ≈ one-sided 95%
-  foldRule: RULE.WEIGHTED_AVG,        // safe default — see §6
-  foldThreshold: 3,
-};
+// exported as DEFAULT_BIO_POLICY (the empirical starting points); each mechanism
+// also re-exports its own resolved defaults so the constants stay greppable.
 ```
 
-Passed at construction (`createBioMemory({ … , consolidation?: ConsolidationOpts })`) and/or per call (`consolidate(episode, opts?)`), per-call overriding construction. Every field is optional and falls back to the default.
+`BioPolicy` is supplied once at `createBioMemory({ …, policy?: BioPolicy })` and threaded to each mechanism: `evidence` → `evidenceUpdate(policy.evidence)` inside the cycle, `dreaming` → the dream pass/select, `consolidation` → the consolidate pass. `consolidate(episode, opts?)` additionally accepts a per-call `consolidation` override (per-call beats construction), useful for sweeping promotion/fold knobs without rebuilding the facade.
 
-**`foldThreshold` is clamped to ≥ 2.** K = 1 would be non-terminating: folding a single claim emits `derive` (one new claim with the *same* `subject/key/scopeHash/valueHash`) + `promote(→deprecated)`, a net change of zero that re-triggers next pass forever. The effective K is `max(2, opts.foldThreshold)`; this guarantees the monotonicity bound in §7.
+**Scope of the policy — write/process knobs only.** `BioPolicy` covers the three *process* families above. **Read-time** knobs stay caller-supplied per retrieval, by deliberate design: suppression `floor` and the `decay` policy live on `RetrievalContext` because different queries legitimately want different lenses (they are not one global setting). The signal-buffer `cap` stays a `createSignalBuffer` argument (an operational limit, not a learning parameter). §11 notes these as intentionally out of `BioPolicy`.
+
+**`consolidation.foldThreshold` is clamped to ≥ 2.** K = 1 would be non-terminating: folding a single claim emits `derive` (one new claim with the *same* `subject/key/scopeHash/valueHash`) + `promote(→deprecated)`, a net change of zero that re-triggers next pass forever. The effective K is `max(2, foldThreshold)`; this guarantees the monotonicity bound in §7.
 
 ---
 
 ## 5. Promotion policy
+
+Throughout §5–§6, the knobs (`lowerBoundK`, `promoteThresholds`, `foldRule`, `foldThreshold`) are read from the **resolved consolidation policy** — `policy.consolidation` from construction, merged with any per-call `consolidate(episode, opts)` override.
 
 For each non-folded active claim:
 
@@ -179,20 +192,26 @@ Consolidation is fully **deterministic** (model-free) — a strictly better repl
 
 | Unit | Responsibility | Depends on |
 |---|---|---|
-| `ConsolidationOpts` / `ConsolidationReport` (types) | The policy config + structured output | core types |
+| `BioPolicy` + `resolvePolicy(p?)` | Unified tuning config + default-merge helper | core types |
+| `ConsolidationReport` (type) | Structured pass output | core types |
 | `lowerBound(confidence, k)` | Beta lower-bound (mean − k·σ) | `distribution/beta` (mean, variance) |
 | `tierFor(lowerBound, thresholds)` | Lower-bound → lifecycle tier | `Status`, `LIFECYCLE_ORDER` |
 | Select | Episode's active claims, fresh | gateway (read, runId filter), episode |
-| Plan (fold + promote) | Pure `(claims, opts, now) → AppendOp[]` | `oplusSynthesizeAs`, `lowerBound`/`tierFor`, core claim/provenance |
+| Plan (fold + promote) | Pure `(claims, consolidationPolicy, now) → AppendOp[]` | `oplusSynthesizeAs`, `lowerBound`/`tierFor`, core claim/provenance |
 | `consolidate(episode, opts?)` pass | Orchestrate select → plan → apply; fail-safe; single-flight | the above + gateway (apply) |
+| evidence-update / dreaming **refactor** | Source the (now-exposed) weights & prior/depth from `BioPolicy`; defaults unchanged | `BioPolicy` |
 
 ### 10.2 Wiring
 
-- **New:** `src/bio/processes/consolidation.ts` (+ `consolidation.test.ts`) — types, `lowerBound`/`tierFor`, the plan functions, and the pass.
-- **Additive edits:**
-  - `src/bio/bio-memory.ts` — accept `consolidation?: ConsolidationOpts` at construction; add synchronous `consolidate(episode, opts?): ConsolidationReport`.
+- **New:**
+  - `src/bio/processes/consolidation.ts` (+ `consolidation.test.ts`) — `ConsolidationReport`, `lowerBound`/`tierFor`, the plan functions, and the pass.
+  - `src/bio/policy.ts` (+ `policy.test.ts`) — the `BioPolicy` type, `DEFAULT_BIO_POLICY`, and `resolvePolicy(p?)` (deep-merge of partial policy onto defaults). The single home for every bio tuning constant.
+- **Additive, behavior-preserving edits (defaults = today's constants; existing tests stay green):**
+  - `src/bio/processes/evidence-update.ts` — `evidenceUpdate(evidence?: BioPolicy["evidence"])`; replace the `USAGE_WEIGHT`/`OUTCOME_WEIGHT`/`SCALAR_PSEUDOCOUNT` literals with `evidence.* ?? default`.
+  - `src/bio/processes/dreaming*.ts` — source `prior`/`maxDepth` (and existing `maxInputClaims`) from `BioPolicy["dreaming"]`; `DREAM_PRIOR`/`MAX_DREAM_DEPTH` become the exported defaults.
+  - `src/bio/bio-memory.ts` — accept `policy?: BioPolicy` at construction; thread `policy.evidence` into the cycle's `evidenceUpdate`, `policy.dreaming` into the dream pass, `policy.consolidation` into the consolidate pass. Add synchronous `consolidate(episode, opts?: { consolidation?: BioPolicy["consolidation"] }): ConsolidationReport`. (Replaces the prior `dream?: DreamPassOpts` field — its knobs now live under `policy.dreaming`.)
   - `src/bio/runner.ts` — optional thin `startConsolidating({ intervalMs })`, mirroring `startDreaming`.
-  - `src/index.ts` — export `ConsolidationOpts`, `ConsolidationReport`, defaults, and the `consolidate` surface.
+  - `src/index.ts` — export `BioPolicy`, `DEFAULT_BIO_POLICY`, `ConsolidationReport`, and the `consolidate` surface.
 - **No substrate change.** The runId query filter Dreaming added (`ExecutionPlan` + sqlite) is reused as-is.
 - **Sleep-phase ordering:** when scheduling both, run **consolidate → dream**, so dreams validated by this sleep's consolidation become eligible to reseed the same sleep's dream pass.
 - **Integration contract (shared with Dreaming):** the consumer MUST tag claims it writes during a session with the episode's `runId`; otherwise an episode has no produced claims and `consolidate(episode)` is a no-op for it.
@@ -201,6 +220,7 @@ Consolidation is fully **deterministic** (model-free) — a strictly better repl
 
 Most of the suite is pure-function testing, no model and (except the round-trip tests) no substrate.
 
+0. **`BioPolicy` / `resolvePolicy` (behavior-preservation gate):** `resolvePolicy(undefined)` deep-equals `DEFAULT_BIO_POLICY`; a partial override merges without dropping sibling defaults; `DEFAULT_BIO_POLICY` values equal the pre-refactor constants (`0.5` / `2.0` / `2`, `Beta(1,3)`, depth `3`, `200`). Plus: `evidenceUpdate()` with default policy produces byte-identical ops to the old hardcoded version, and overriding `outcomeWeight` provably changes the α/β bump. **The existing wave-1 and dreaming suites must stay green unchanged** — that is the refactor's safety contract.
 1. **`lowerBound` / `tierFor`:** thin Beta (high mean, low concentration) yields a low lower bound and does **not** promote; a concentrated Beta clears the tier; threshold and `k` are honored from opts.
 2. **Promote plan:** a claim whose lower bound earns `validated` emits one forward `promote`; a claim already at-or-above its earned tier emits nothing; deprecated claims are ignored.
 3. **Fold plan:** a group of K agreeing claims → one `derive` (`workflow:"consolidate"`, `foldRule` in `combinationRule`, `inputClaims` = group, status = `tierFor(folded)`) + K `promote(→deprecated)`; a group of K−1 is **not** folded; `foldRule` is configurable (assert `weighted_avg` vs `evidence_pooled` produce different folded confidence).
@@ -222,6 +242,7 @@ Authoritative deferral list; mirrored into the `mneme-bio-layer-scope` memory.
 - **Observation-level dedup before pooling (§5.6 MUST)** — folding under `evidence_pooled` double-counts shared underlying observations. Until this lands, `weighted_avg` is the safe default and `evidence_pooled` is opt-in. When it lands, `evidence_pooled` becomes the natural default. (Same gap already tracked in the v1 roadmap.)
 - **Exact Beta-quantile lower bound** — this slice uses the `mean − k·σ` normal approximation. A proper inverse-incomplete-beta quantile (more accurate for skewed Betas) is a later numeric refinement; it would slot behind the same `lowerBound` interface with no policy change.
 - **Unified sleep-phase report** — a combined report across `consolidate` + `dream` (and surfacing each pass's `dropped`/`rejected`) for a single "what happened during sleep" view. Each pass reports independently for now.
+- **Read-time knobs intentionally NOT in `BioPolicy`** — suppression `floor` and the `decay` policy stay on `RetrievalContext` (per-query lenses, not one global setting); the signal-buffer `cap` stays a `createSignalBuffer` argument (operational limit). If a future need arises for global read-time defaults, folding them into `BioPolicy` is a candidate then — captured here so the asymmetry is a recorded decision, not an oversight.
 - **Exact replay of consolidated claims** — shares the substrate's deferred replay-re-execution engine (v1.x). Consolidation is deterministic, so this is purely the substrate-wide `exact` machinery, not consolidation-specific.
 
 ---
