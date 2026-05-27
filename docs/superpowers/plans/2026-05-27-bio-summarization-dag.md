@@ -5,14 +5,14 @@ created: 2026-05-27
 
 ```mermaid
 flowchart TD
-    task-policy-summarize["task-policy-summarize: BioPolicy.summarize<br/>files: src/bio/policy.ts"]
-    task-summarize-types["task-summarize-types: SummarizeFn + types<br/>files: src/bio/processes/summarize-types.ts"]
-    task-summarize-select["task-summarize-select: select + collapse guard<br/>files: src/bio/processes/summarize-select.ts"]
-    task-summarize-admit["task-summarize-admit: admit (marked derive ops)<br/>files: src/bio/processes/summarize-admit.ts"]
-    task-summarize-pass["task-summarize-pass: pass + getDigest<br/>files: src/bio/processes/summarize.ts"]
-    task-bio-memory-summarize["task-bio-memory-summarize: facade wiring<br/>files: src/bio/bio-memory.ts"]
-    task-index-summarize["task-index-summarize: barrel exports<br/>files: src/index.ts"]
-    task-runner-summarize["task-runner-summarize: startSummarizing<br/>files: src/bio/runner.ts"]
+    task-policy-summarize["task-policy-summarize: BioPolicy.summarize<br/>files: src/bio/policy.ts"]:::done
+    task-summarize-types["task-summarize-types: SummarizeFn + types<br/>files: src/bio/processes/summarize-types.ts"]:::done
+    task-summarize-select["task-summarize-select: select + collapse guard<br/>files: src/bio/processes/summarize-select.ts"]:::done
+    task-summarize-admit["task-summarize-admit: admit (marked derive ops)<br/>files: src/bio/processes/summarize-admit.ts"]:::done
+    task-summarize-pass["task-summarize-pass: pass + getDigest<br/>files: src/bio/processes/summarize.ts"]:::done
+    task-bio-memory-summarize["task-bio-memory-summarize: facade wiring<br/>files: src/bio/bio-memory.ts"]:::done
+    task-index-summarize["task-index-summarize: barrel exports<br/>files: src/index.ts"]:::done
+    task-runner-summarize["task-runner-summarize: startSummarizing<br/>files: src/bio/runner.ts"]:::done
 
     task-policy-summarize --> task-summarize-select
     task-summarize-types --> task-summarize-select
@@ -58,7 +58,7 @@ depends_on: []
 files:
   - src/bio/policy.ts
   - src/bio/policy.test.ts
-status: pending
+status: done
 ```
 
 Add a `summarize` sub-policy to `BioPolicy` (spec §13): the fixed-low digest prior and the select token bound. Purely additive — existing `evidence`/`dreaming`/`consolidation` knobs and their tests are unaffected.
@@ -112,7 +112,7 @@ depends_on: []
 files:
   - src/bio/processes/summarize-types.ts
   - src/bio/processes/summarize-types.test.ts
-status: pending
+status: done
 ```
 
 The consumer-implemented port + structured I/O (spec §4), plus the `"summary"` marker constant and an `isSummary` predicate used by Select and `getDigest`. Mirrors `dreaming-types.ts`.
@@ -167,7 +167,7 @@ depends_on: [task-policy-summarize, task-summarize-types]
 files:
   - src/bio/processes/summarize-select.ts
   - src/bio/processes/summarize-select.test.ts
-status: pending
+status: done
 ```
 
 Build the collapse-safe, token-bounded input set (spec §5). Guards empty `runIds` before reading, excludes prior summaries (the complete collapse guard — no depth counter), and caps to `maxInputClaims` by recency-then-confidence. Mirrors `dreaming-select.ts`.
@@ -232,7 +232,7 @@ depends_on: [task-policy-summarize, task-summarize-types]
 files:
   - src/bio/processes/summarize-admit.ts
   - src/bio/processes/summarize-admit.test.ts
-status: pending
+status: done
 ```
 
 Materialize validated `ProposedSummary[]` into marked, runId-tagged `derive` ops (spec §6). Validates `cites ⊆ selected`, assigns the fixed-low `SUMMARY_PRIOR`, sets the `"summary"` marker + episode `runId`, and records provenance. Drops invalid proposals. Mirrors `dreaming-admit.ts`.
@@ -311,7 +311,7 @@ depends_on: [task-summarize-select, task-summarize-admit]
 files:
   - src/bio/processes/summarize.ts
   - src/bio/processes/summarize.test.ts
-status: pending
+status: done
 ```
 
 The async orchestrator (spec §3, §7) + the marker-based retrieval (§7). `createSummarizePass(gateway, summarizeFn, opts?)` returns `{ summarize(episode, run), getDigest(episode) }`. Single-flight per episode, fail-safe, **identity opKeys**, `admitted` derived from actual apply outcomes.
@@ -414,7 +414,7 @@ depends_on: [task-policy-summarize, task-summarize-types, task-summarize-pass]
 files:
   - src/bio/bio-memory.ts
   - src/bio/bio-memory.test.ts
-status: pending
+status: done
 ```
 
 Facade wiring (spec §13): `createBioMemory` accepts an optional `summarizeFn`; expose `async summarize(episode, { modelVersion })` and `getDigest(episode)` delegating to the pass. Threads `policy.summarize`. Additive — existing construction and methods unchanged.
@@ -468,7 +468,7 @@ depends_on: [task-bio-memory-summarize]
 files:
   - src/bio/runner.ts
   - src/bio/runner.test.ts
-status: pending
+status: done
 ```
 
 Optional sleep-time scheduling (spec §11), mirroring `startDreaming` (async) + `startConsolidating` (timer registration). Calls `memory.summarize` on an interval, guards a missing method, registers a `summarizeTimer` so `runner.stop()` halts it, guards `intervalMs > 0`, and swallows rejections (fail-safe).
@@ -517,7 +517,7 @@ id: task-index-summarize
 depends_on: [task-summarize-types, task-summarize-pass]
 files:
   - src/index.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
