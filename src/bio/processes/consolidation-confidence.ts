@@ -2,15 +2,19 @@ import type { Status } from "../../core/claim.js";
 import type { Confidence } from "../../core/confidence.js";
 import { bindingFor } from "../../distribution/registry.js";
 
+/** The three tiers that promotion climbs: candidate → provisional → validated. */
+export type PromoteTier = "candidate" | "provisional" | "validated";
+
 // Local promotion-tier ranking. The substrate's LIFECYCLE_ORDER (src/write/pipeline.ts)
 // is NOT exported and includes "deprecated" (a fold/terminal concern); promotion only
 // climbs candidate < provisional < validated.
-export const PROMOTE_TIERS: Status[] = ["candidate", "provisional", "validated"];
+export const PROMOTE_TIERS: PromoteTier[] = ["candidate", "provisional", "validated"];
 
 /**
  * Compute the Beta lower bound via the `mean − k·σ` normal approximation.
  * For scalar distributions (variance = 0), returns the mean directly.
- * Result is clamped to [0, 1].
+ * Result is clamped to a minimum of 0 (a lower bound above 1 is harmless —
+ * it will be dominated by every threshold).
  */
 export function lowerBound(confidence: Confidence, k: number): number {
   const b = bindingFor(confidence.distribution);
@@ -23,11 +27,11 @@ export function lowerBound(confidence: Confidence, k: number): number {
  * Map a lower-bound value to the appropriate promotion tier using inclusive
  * threshold boundaries (>=).
  */
-export function tierFor(lb: number, thresholds: { provisional: number; validated: number }): Status {
+export function tierFor(lb: number, thresholds: { provisional: number; validated: number }): PromoteTier {
   if (lb >= thresholds.validated) return "validated";
   if (lb >= thresholds.provisional) return "provisional";
   return "candidate";
 }
 
 /** Returns the ordinal rank of a promotion tier (candidate=0, provisional=1, validated=2). */
-export const rankOf = (s: Status): number => PROMOTE_TIERS.indexOf(s);
+export const rankOf = (s: PromoteTier): number => PROMOTE_TIERS.indexOf(s);

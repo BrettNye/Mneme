@@ -86,4 +86,9 @@ describe("rankOf and PROMOTE_TIERS", () => {
     expect(rankOf("provisional")).toBe(1);
     expect(rankOf("validated")).toBe(2);
   });
+
+  it("rankOf ordering: candidate < provisional < validated", () => {
+    expect(rankOf("candidate")).toBeLessThan(rankOf("provisional"));
+    expect(rankOf("provisional")).toBeLessThan(rankOf("validated"));
+  });
 });
