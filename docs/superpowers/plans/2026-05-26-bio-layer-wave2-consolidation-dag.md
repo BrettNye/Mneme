@@ -5,15 +5,15 @@ created: 2026-05-26
 
 ```mermaid
 flowchart TD
-    task-policy["task-policy: BioPolicy<br/>files: src/bio/policy.ts"]
-    task-consolidation-confidence["task-consolidation-confidence: lowerBound/tierFor<br/>files: src/bio/processes/consolidation-confidence.ts"]
-    task-evidence-refactor["task-evidence-refactor: evidence weights from policy<br/>files: src/bio/processes/evidence-update.ts"]
-    task-dreaming-refactor["task-dreaming-refactor: dreaming knobs from policy<br/>files: src/bio/processes/dreaming-types.ts +4 more"]
-    task-consolidation-plan["task-consolidation-plan: fold/promote planner<br/>files: src/bio/processes/consolidation-plan.ts"]
-    task-consolidation-pass["task-consolidation-pass: consolidate pass<br/>files: src/bio/processes/consolidation.ts"]
-    task-bio-memory["task-bio-memory: wire into facade<br/>files: src/bio/bio-memory.ts"]
-    task-index["task-index: export surface<br/>files: src/index.ts"]
-    task-runner["task-runner: startConsolidating<br/>files: src/bio/runner.ts"]
+    task-policy["task-policy: BioPolicy<br/>files: src/bio/policy.ts"]:::done
+    task-consolidation-confidence["task-consolidation-confidence: lowerBound/tierFor<br/>files: src/bio/processes/consolidation-confidence.ts"]:::done
+    task-evidence-refactor["task-evidence-refactor: evidence weights from policy<br/>files: src/bio/processes/evidence-update.ts"]:::done
+    task-dreaming-refactor["task-dreaming-refactor: dreaming knobs from policy<br/>files: src/bio/processes/dreaming-types.ts +4 more"]:::done
+    task-consolidation-plan["task-consolidation-plan: fold/promote planner<br/>files: src/bio/processes/consolidation-plan.ts"]:::done
+    task-consolidation-pass["task-consolidation-pass: consolidate pass<br/>files: src/bio/processes/consolidation.ts"]:::done
+    task-bio-memory["task-bio-memory: wire into facade<br/>files: src/bio/bio-memory.ts"]:::done
+    task-index["task-index: export surface<br/>files: src/index.ts"]:::done
+    task-runner["task-runner: startConsolidating<br/>files: src/bio/runner.ts"]:::done
 
     task-policy --> task-evidence-refactor
     task-policy --> task-dreaming-refactor
@@ -61,7 +61,7 @@ depends_on: []
 files:
   - src/bio/policy.ts
   - src/bio/policy.test.ts
-status: pending
+status: done
 ```
 
 The single home for every bio write/process tuning knob (spec §4). Defines the `BioPolicy` type, the canonical `DEFAULT_BIO_POLICY` values (equal to today's hardcoded constants), and `resolvePolicy(p?)` which deep-merges a partial policy onto the defaults. No imports from any bio mechanism — dependency flows mechanisms → policy only.
@@ -148,7 +148,7 @@ depends_on: []
 files:
   - src/bio/processes/consolidation-confidence.ts
   - src/bio/processes/consolidation-confidence.test.ts
-status: pending
+status: done
 ```
 
 Pure, policy-agnostic confidence math (spec §5). `lowerBound(confidence, k)` returns the Beta lower bound via the `mean − k·σ` normal approximation (no quantile exists in the substrate); `tierFor(lowerBound, thresholds)` maps it to a promotion tier. Takes primitive args (a `number` k, a `{provisional, validated}` thresholds object) so it has no dependency on `BioPolicy`.
@@ -210,7 +210,7 @@ depends_on: [task-policy, task-consolidation-confidence]
 files:
   - src/bio/processes/consolidation-plan.ts
   - src/bio/processes/consolidation-plan.test.ts
-status: pending
+status: done
 ```
 
 The pure planning core (spec §5–§6): given the episode's active claims and the resolved consolidation policy, emit `AppendOp[]`. Groups claims by `(subject, key, scopeHash, valueHash)`; groups of size ≥ `max(2, foldThreshold)` are folded (one `derive` of the ⊕-combined claim at its earned tier + a `promote(→deprecated)` per input); every other active claim is a promotion candidate (`promote` only on a strict forward tier advance). Fold xor promote — a claim is never both.
@@ -295,7 +295,7 @@ depends_on: [task-policy, task-consolidation-plan]
 files:
   - src/bio/processes/consolidation.ts
   - src/bio/processes/consolidation.test.ts
-status: pending
+status: done
 ```
 
 The effectful orchestrator (spec §3, §7, §8): `createConsolidatePass(gateway, policy?)` returns `{ consolidate(episode, opts?) }`. It reads the episode's claims by runId (fresh, post-reinforcement), calls `planConsolidation`, applies the ops in one atomic batch via `gateway.apply`, and returns a `ConsolidationReport`. Fail-safe (write nothing on any error) and single-flight per episode.
@@ -374,7 +374,7 @@ depends_on: [task-policy]
 files:
   - src/bio/processes/evidence-update.ts
   - src/bio/processes/evidence-update.test.ts
-status: pending
+status: done
 ```
 
 Behavior-preserving refactor (spec §2, §4): replace the hardcoded `USAGE_WEIGHT`/`OUTCOME_WEIGHT`/`SCALAR_PSEUDOCOUNT` literals in `evidence-update.ts` with values sourced from an optional `BioPolicy["evidence"]` argument, falling back to `DEFAULT_BIO_POLICY.evidence`. `evidenceUpdate()` with no argument must produce byte-identical ops to today.
@@ -433,7 +433,7 @@ files:
   - src/bio/processes/dreaming-admit.ts
   - src/bio/processes/dreaming.ts
   - src/bio/processes/dreaming-policy.test.ts
-status: pending
+status: done
 ```
 
 Behavior-preserving refactor (spec §2, §4): thread `prior`/`maxDepth`/`maxInputClaims` from `BioPolicy["dreaming"]` through the dream pass instead of reading module constants directly. `DREAM_PRIOR`/`MAX_DREAM_DEPTH` remain exported (4 test files + the barrel assert/re-export them) but are re-derived from `DEFAULT_BIO_POLICY.dreaming` so there is a single source of truth and zero drift. All existing dreaming test files stay unchanged and green.
@@ -477,7 +477,7 @@ depends_on: [task-policy, task-consolidation-pass, task-evidence-refactor, task-
 files:
   - src/bio/bio-memory.ts
   - src/bio/bio-memory.test.ts
-status: pending
+status: done
 ```
 
 Facade wiring with one new method (spec §4, §10.2): `createBioMemory` accepts `policy?: BioPolicy` (replacing the old `dream?: DreamPassOpts` field — its knobs now live under `policy.dreaming`), threads `policy.evidence` into the cycle's `evidenceUpdate`, `policy.dreaming` into the dream pass, and `policy.consolidation` into a new consolidate pass; and exposes synchronous `consolidate(episode, opts?)`.
@@ -538,7 +538,7 @@ depends_on: [task-bio-memory]
 files:
   - src/bio/runner.ts
   - src/bio/runner.test.ts
-status: pending
+status: done
 ```
 
 Optional sleep-time scheduling (spec §10.2), mirroring `startDreaming`: a thin `startConsolidating({ intervalMs })` that calls `memory.consolidate` on an interval and guards a missing `consolidate` method (no-op if the facade lacks it). Owns no consolidation logic.
@@ -585,7 +585,7 @@ id: task-index
 depends_on: [task-policy, task-consolidation-pass]
 files:
   - src/index.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
