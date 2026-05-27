@@ -12,9 +12,9 @@ it("a partial override keeps sibling defaults", () => {
 });
 
 it("a dreaming.prior partial merges with default beta", () => {
-  const r = resolvePolicy({ dreaming: { prior: { alpha: 2, beta: 3 } } });
+  const r = resolvePolicy({ dreaming: { prior: { alpha: 2 } } });
   expect(r.dreaming.prior.alpha).toBe(2);
-  expect(r.dreaming.prior.beta).toBe(3); // default beta preserved via merge
+  expect(r.dreaming.prior.beta).toBe(3); // default beta preserved via merge (not supplied in input)
 });
 
 it("DEFAULT_BIO_POLICY has the expected pre-refactor constant values", () => {

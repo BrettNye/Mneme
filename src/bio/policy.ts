@@ -2,7 +2,7 @@ import { RULE } from "../distribution/rules.js";
 
 export interface BioPolicy {
   evidence?: { usageWeight?: number; outcomeWeight?: number; scalarPseudocount?: number };
-  dreaming?: { prior?: { alpha: number; beta: number }; maxDepth?: number; maxInputClaims?: number };
+  dreaming?: { prior?: { alpha?: number; beta?: number }; maxDepth?: number; maxInputClaims?: number };
   consolidation?: {
     promoteThresholds?: { provisional?: number; validated?: number };
     lowerBoundK?: number;
