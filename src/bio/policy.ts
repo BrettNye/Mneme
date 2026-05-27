@@ -9,6 +9,7 @@ export interface BioPolicy {
     foldRule?: string;
     foldThreshold?: number;
   };
+  summarize?: { prior?: { alpha?: number; beta?: number }; maxInputClaims?: number };
 }
 
 export const DEFAULT_BIO_POLICY = {
@@ -20,6 +21,7 @@ export const DEFAULT_BIO_POLICY = {
     foldRule: RULE.WEIGHTED_AVG,
     foldThreshold: 3,
   },
+  summarize: { prior: { alpha: 1, beta: 3 }, maxInputClaims: 200 },
 } as const;
 
 // Deep-merge each sub-policy so a partial override never drops sibling defaults.
@@ -32,6 +34,7 @@ export function resolvePolicy(p?: BioPolicy): {
     foldRule: string;
     foldThreshold: number;
   };
+  summarize: { prior: { alpha: number; beta: number }; maxInputClaims: number };
 } {
   return {
     evidence: { ...DEFAULT_BIO_POLICY.evidence, ...p?.evidence },
@@ -47,6 +50,11 @@ export function resolvePolicy(p?: BioPolicy): {
         ...DEFAULT_BIO_POLICY.consolidation.promoteThresholds,
         ...p?.consolidation?.promoteThresholds,
       },
+    },
+    summarize: {
+      ...DEFAULT_BIO_POLICY.summarize,
+      ...p?.summarize,
+      prior: { ...DEFAULT_BIO_POLICY.summarize.prior, ...p?.summarize?.prior },
     },
   };
 }
