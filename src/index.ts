@@ -36,3 +36,9 @@ export type {
 export type { DreamFn, DreamInput, ProposedInsight, DreamReport } from "./bio/processes/dreaming-types.js";
 export type { DreamPassOpts } from "./bio/processes/dreaming.js";
 export { createDreamPass } from "./bio/processes/dreaming.js";
+
+// Policy + consolidation public surface
+export type { BioPolicy } from "./bio/policy.js";
+export { DEFAULT_BIO_POLICY } from "./bio/policy.js";
+export type { ConsolidationReport } from "./bio/processes/consolidation.js";
+export { createConsolidatePass } from "./bio/processes/consolidation.js";
