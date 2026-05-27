@@ -343,3 +343,94 @@ it("returns empty array when no signals match any known claims", () => {
   );
   expect(ops).toHaveLength(0);
 });
+
+it("overriding outcomeWeight changes the emitted evidence bump", () => {
+  // Helper: extract alpha from the first supersede op
+  function alphaOf(ops: ReturnType<ReturnType<typeof evidenceUpdate>["run"]>): number {
+    const op = ops[0];
+    if (op.kind === "supersede" && op.with.confidence.distribution === "beta") {
+      return op.with.confidence.parameters.alpha;
+    }
+    throw new Error("unexpected op shape");
+  }
+
+  const claim = makeClaim("c1", 1, 1);
+  const input = makeInput({
+    usageIds: [],
+    surfacedIds: ["c1"],
+    outcomes: [{ result: "success", weight: 1 }],
+    claims: [claim],
+  });
+
+  const defOps = evidenceUpdate().run(input);
+  const hotOps = evidenceUpdate({ outcomeWeight: 10 }).run(input);
+
+  // same seeded success outcome → hot's superseded claim gains strictly more alpha than def's
+  expect(alphaOf(hotOps)).toBeGreaterThan(alphaOf(defOps));
+});
+
+it("overriding usageWeight changes the emitted usage bump", () => {
+  function alphaOf(ops: ReturnType<ReturnType<typeof evidenceUpdate>["run"]>): number {
+    const op = ops[0];
+    if (op.kind === "supersede" && op.with.confidence.distribution === "beta") {
+      return op.with.confidence.parameters.alpha;
+    }
+    throw new Error("unexpected op shape");
+  }
+
+  const claim = makeClaim("c1", 1, 1);
+  const input = makeInput({
+    usageIds: ["c1"],
+    surfacedIds: [],
+    outcomes: [],
+    claims: [claim],
+  });
+
+  const defOps = evidenceUpdate().run(input);
+  const hotOps = evidenceUpdate({ usageWeight: 5 }).run(input);
+
+  expect(alphaOf(hotOps)).toBeGreaterThan(alphaOf(defOps));
+});
+
+it("overriding scalarPseudocount changes the beta promotion parameters", () => {
+  const claimId = "sc3" as unknown as ClaimId;
+  const scalarClaim: Claim = {
+    id: claimId,
+    profile: "p1" as Claim["profile"],
+    workspace: "w1" as Claim["workspace"],
+    subject: "test.e1",
+    key: "test.skill.go",
+    scope: { kind: "global" },
+    scopeHash: "sh3",
+    value: { kind: "scalar", v: 0.8 },
+    valueHash: "vh3",
+    confidence: { distribution: "scalar", parameters: { p: 0.8 }, raw: 0.8 },
+    valid: { from: 0, to: Infinity },
+    recorded: 1000 as any,
+    recordedSeq: 1,
+    status: "provisional",
+    source: "heuristic",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "v1",
+  };
+
+  const input = makeInput({ usageIds: ["sc3"], surfacedIds: [], outcomes: [], claims: [scalarClaim] });
+
+  const defOps = evidenceUpdate().run(input);
+  const bigOps = evidenceUpdate({ scalarPseudocount: 10 }).run(input);
+
+  // With bigger pseudocount, the initial alpha for p=0.8 is 0.8*10=8 vs 0.8*2=1.6
+  // So the final alpha should be strictly larger
+  const defOp = defOps[0];
+  const bigOp = bigOps[0];
+  if (
+    defOp.kind === "supersede" && defOp.with.confidence.distribution === "beta" &&
+    bigOp.kind === "supersede" && bigOp.with.confidence.distribution === "beta"
+  ) {
+    expect(bigOp.with.confidence.parameters.alpha).toBeGreaterThan(defOp.with.confidence.parameters.alpha);
+  } else {
+    throw new Error("unexpected op shape");
+  }
+});
