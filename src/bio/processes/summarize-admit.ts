@@ -1,5 +1,6 @@
 import type { Claim, CandidateClaim } from "../../core/claim.js";
 import type { Instant } from "../../core/time.js";
+import { subjectOf } from "../../core/key.js";
 import type { Episode, AppendOp } from "../types.js";
 import { SUMMARY_WORKFLOW, type ProposedSummary } from "./summarize-types.js";
 import { DEFAULT_BIO_POLICY } from "../policy.js";
@@ -16,7 +17,16 @@ export function admitSummaries(
   now: Instant,
   opts: AdmitOpts = {}
 ): { ops: AppendOp[]; dropped: { key?: string; reason: string }[] } {
+  // Guard: episode must have at least one runId
+  if (episode.runIds.length === 0) {
+    return {
+      ops: [],
+      dropped: proposals.map((p) => ({ key: String(p.key), reason: "episode has no runIds" })),
+    };
+  }
+
   const selectedIds = new Set(selected.map((c) => String(c.id)));
+  const byId = new Map(selected.map((c) => [String(c.id), c]));
   const prior = opts.prior ?? DEFAULT_BIO_POLICY.summarize.prior;
   const runId = episode.runIds[0];
   const modelVersion = opts.modelVersion ?? "unknown";
@@ -29,7 +39,16 @@ export function admitSummaries(
       continue;
     }
 
-    ops.push({ kind: "derive", claim: buildDigest(p, runId, prior, now, modelVersion, selected) });
+    // Validate: key must be parseable by subjectOf
+    let subject: string;
+    try {
+      subject = subjectOf(p.key);
+    } catch {
+      dropped.push({ key: String(p.key), reason: "invalid key" });
+      continue;
+    }
+
+    ops.push({ kind: "derive", claim: buildDigest(p, subject, runId, prior, now, modelVersion, byId) });
   }
 
   return { ops, dropped };
@@ -37,20 +56,20 @@ export function admitSummaries(
 
 function buildDigest(
   p: ProposedSummary,
+  subject: string,
   runId: string,
   prior: { alpha: number; beta: number },
   now: Instant,
   modelVersion: string,
-  selected: Claim[]
+  byId: Map<string, Claim>
 ): CandidateClaim {
   // Use the first cited claim as the representative for profile/workspace/valid/schema
-  const byId = new Map(selected.map((c) => [String(c.id), c]));
   const rep = byId.get(String(p.cites[0]));
 
   return {
     profile: rep?.profile ?? ("" as any),
     workspace: rep?.workspace ?? ("" as any),
-    subject: p.key as any,
+    subject,
     key: p.key,
     scope: p.scope ?? {},
     value: p.value,

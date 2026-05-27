@@ -8,6 +8,7 @@ it("admits a valid proposal as a marked, runId-tagged derive and drops unknown c
   const bad = { key: "bad", value: "…", cites: ["nope"] } as any;
   const { ops, dropped } = admitSummaries([good, bad], selected, ep, 1000 as any, { modelVersion: "m1" });
   expect(ops).toHaveLength(1);
+  expect((ops[0] as any).kind).toBe("derive");
   const claim = (ops[0] as any).claim;
   expect(claim.provenance.workflow).toBe(SUMMARY_WORKFLOW);
   expect(claim.provenance.runId).toBe("r1");
@@ -69,4 +70,27 @@ it("uses unknown modelVersion when none provided", () => {
   const { ops } = admitSummaries([proposal], selected, ep, 0 as any);
   const claim = (ops[0] as any).claim;
   expect(claim.provenance.derivedFrom.combinationRule).toBe("summary@unknown");
+});
+
+it("drops proposals with a malformed key (no dot-segment) with reason 'invalid key'", () => {
+  const selected = [{ id: "d" }] as any[];
+  const ep = { id: "e7", runIds: ["r7"], startedAt: 0 } as any;
+  const malformed = { key: "INVALID_KEY_NO_DOT", value: "text", cites: ["d"] } as any;
+  const { ops, dropped } = admitSummaries([malformed], selected, ep, 0 as any);
+  expect(ops).toHaveLength(0);
+  expect(dropped).toHaveLength(1);
+  expect(dropped[0].reason).toBe("invalid key");
+  expect(dropped[0].key).toBe("INVALID_KEY_NO_DOT");
+});
+
+it("drops all proposals when episode.runIds is empty", () => {
+  const selected = [{ id: "e" }] as any[];
+  const ep = { id: "e8", runIds: [], startedAt: 0 } as any;
+  const p1 = { key: "topic.summary", value: "text", cites: ["e"] } as any;
+  const p2 = { key: "another.summary", value: "text2", cites: ["e"] } as any;
+  const { ops, dropped } = admitSummaries([p1, p2], selected, ep, 0 as any);
+  expect(ops).toHaveLength(0);
+  expect(dropped).toHaveLength(2);
+  expect(dropped[0].reason).toBe("episode has no runIds");
+  expect(dropped[1].reason).toBe("episode has no runIds");
 });
