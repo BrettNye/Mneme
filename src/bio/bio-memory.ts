@@ -1,4 +1,4 @@
-import { createMnemeGateway, type MnemeGateway } from "./gateway.js";
+import { createMnemeGateway } from "./gateway.js";
 import { createEpisodeRegistry } from "./episode.js";
 import { createSignalBuffer } from "./signals.js";
 import { createCycle } from "./cycle.js";
@@ -8,37 +8,21 @@ import { createDreamPass, type DreamPassOpts } from "./processes/dreaming.js";
 import type { DreamFn, DreamReport } from "./processes/dreaming-types.js";
 import type { BioQuery, CycleReport, EpisodeId, RetrievalContext, RetrievalPolicy } from "./types.js";
 import type { ClaimId } from "../core/ids.js";
+import type { Mneme } from "../mneme.js";
 
 const UNKNOWN_EPISODE_ERROR = "unknown episode";
 
 export interface BioMemoryOpts {
-  gateway?: MnemeGateway;
+  mneme: Mneme;
+  corpusId: string;
   dreamFn?: DreamFn;
   dream?: DreamPassOpts;
 }
 
-function isGateway(arg: MnemeGateway | BioMemoryOpts): arg is MnemeGateway {
-  return typeof (arg as MnemeGateway).read === "function";
-}
-
-export function createBioMemory(
-  gatewayOrOpts?: MnemeGateway | BioMemoryOpts
-) {
-  let gateway: MnemeGateway;
-  let dreamFn: DreamFn | undefined;
-  let dreamOpts: DreamPassOpts | undefined;
-
-  if (!gatewayOrOpts) {
-    gateway = createMnemeGateway();
-  } else if (isGateway(gatewayOrOpts)) {
-    // Existing callers: createBioMemory(gateway)
-    gateway = gatewayOrOpts;
-  } else {
-    // New callers: createBioMemory({ dreamFn, gateway?, dream? })
-    gateway = gatewayOrOpts.gateway ?? createMnemeGateway();
-    dreamFn = gatewayOrOpts.dreamFn;
-    dreamOpts = gatewayOrOpts.dream;
-  }
+export function createBioMemory(opts: BioMemoryOpts) {
+  const gateway = createMnemeGateway(opts.mneme, opts.corpusId);
+  const dreamFn = opts.dreamFn;
+  const dreamOpts = opts.dream;
 
   const dreamPass = dreamFn ? createDreamPass(gateway, dreamFn, dreamOpts) : undefined;
 
