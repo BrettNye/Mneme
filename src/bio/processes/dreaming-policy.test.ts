@@ -1,4 +1,6 @@
 import { createDreamPass } from "./dreaming.js";
+import { MAX_DREAM_INPUT_CLAIMS } from "./dreaming-types.js";
+import { DEFAULT_BIO_POLICY } from "../policy.js";
 import { createMnemeGateway } from "../gateway.js";
 import { makeBioMneme } from "../test-support.js";
 import type { MnemeGateway } from "../gateway.js";
@@ -190,4 +192,12 @@ it("createDreamPass with no dreaming policy uses default prior (alpha:1, beta:3)
   expect(capturedClaim).not.toBeNull();
   expect(capturedClaim.confidence.parameters.alpha).toBe(1);
   expect(capturedClaim.confidence.parameters.beta).toBe(3);
+});
+
+// ---------------------------------------------------------------------------
+// MAX_DREAM_INPUT_CLAIMS is re-derived from DEFAULT_BIO_POLICY (single source of truth)
+// ---------------------------------------------------------------------------
+
+it("MAX_DREAM_INPUT_CLAIMS equals DEFAULT_BIO_POLICY.dreaming.maxInputClaims", () => {
+  expect(MAX_DREAM_INPUT_CLAIMS).toBe(DEFAULT_BIO_POLICY.dreaming.maxInputClaims);
 });

@@ -1,6 +1,6 @@
 import type { Claim } from "../../core/claim.js";
 import type { Episode, BioQuery } from "../types.js";
-import { MAX_DREAM_DEPTH, depthOf, isUnvalidatedDream } from "./dreaming-types.js";
+import { MAX_DREAM_DEPTH, MAX_DREAM_INPUT_CLAIMS, depthOf, isUnvalidatedDream } from "./dreaming-types.js";
 
 export interface SelectOpts { corpusId?: string; maxInputClaims?: number; maxDepth?: number; }
 
@@ -19,5 +19,5 @@ export function selectDreamInput(
     (a, b) => b.recorded - a.recorded ||
       (b.confidence.raw ?? 0) - (a.confidence.raw ?? 0)
   );
-  return ranked.slice(0, opts.maxInputClaims ?? 200);
+  return ranked.slice(0, opts.maxInputClaims ?? MAX_DREAM_INPUT_CLAIMS);
 }

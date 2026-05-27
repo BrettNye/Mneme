@@ -16,6 +16,7 @@ export const DREAM_PRIOR: { alpha: number; beta: number } = {
   beta: _dreamingDefaults.prior.beta,
 };
 export const MAX_DREAM_DEPTH: number = _dreamingDefaults.maxDepth;
+export const MAX_DREAM_INPUT_CLAIMS: number = _dreamingDefaults.maxInputClaims;
 
 export type DreamFn = (input: DreamInput) => Promise<ProposedInsight[]>;
 export interface DreamInput { episode: Episode; claims: Claim[]; maxInsights?: number; }
