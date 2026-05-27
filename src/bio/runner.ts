@@ -4,11 +4,13 @@ import type { CycleReport, EpisodeId } from "./types.js";
 interface CycleDriver { runCycle(episode: EpisodeId): CycleReport; }
 interface DreamDriver { dream(episode: EpisodeId, run: { modelVersion: string }): Promise<DreamReport>; }
 interface ConsolidateDriver { consolidate(episode: EpisodeId): unknown; }
+interface SummarizeDriver { summarize(episode: EpisodeId, run: { modelVersion: string }): Promise<unknown>; }
 
-export function createRunner(memory: CycleDriver & Partial<DreamDriver> & Partial<ConsolidateDriver>, episode: EpisodeId) {
+export function createRunner(memory: CycleDriver & Partial<DreamDriver> & Partial<ConsolidateDriver> & Partial<SummarizeDriver>, episode: EpisodeId) {
   let timer: ReturnType<typeof setInterval> | undefined;
   let dreamTimer: ReturnType<typeof setInterval> | undefined;
   let consolidateTimer: ReturnType<typeof setInterval> | undefined;
+  let summarizeTimer: ReturnType<typeof setInterval> | undefined;
   return {
     start(opts: { intervalMs?: number } = {}) {
       if (timer) { clearInterval(timer); timer = undefined; }   // never leak a prior interval
@@ -28,6 +30,10 @@ export function createRunner(memory: CycleDriver & Partial<DreamDriver> & Partia
       if (consolidateTimer) {
         clearInterval(consolidateTimer);
         consolidateTimer = undefined;
+      }
+      if (summarizeTimer) {
+        clearInterval(summarizeTimer);
+        summarizeTimer = undefined;
       }
     },
     runNow(): CycleReport {
@@ -55,6 +61,15 @@ export function createRunner(memory: CycleDriver & Partial<DreamDriver> & Partia
       );
       consolidateTimer = h;
       return () => { clearInterval(h); if (consolidateTimer === h) consolidateTimer = undefined; };
+    },
+    startSummarizing(opts: { intervalMs: number; episode: EpisodeId; modelVersion: string }): void {
+      if (summarizeTimer) { clearInterval(summarizeTimer); summarizeTimer = undefined; } // never leak a prior interval
+      if (typeof memory.summarize !== "function") return;                               // no summarize capability → no-op
+      if (!(opts.intervalMs > 0)) return;                                               // non-positive interval → no-op
+      summarizeTimer = setInterval(
+        () => { memory.summarize!(opts.episode, { modelVersion: opts.modelVersion }).catch(() => {}); }, // fail-safe
+        opts.intervalMs,
+      );
     },
   };
 }
