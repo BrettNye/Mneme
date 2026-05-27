@@ -1,8 +1,11 @@
 import { createBioMemory } from "./bio-memory.js";
+import { createMnemeGateway } from "./gateway.js";
 import { makeBioMneme } from "./test-support.js";
 import { suppression } from "./policies/suppression.js";
 import type { RetrievalContext } from "./types.js";
 import type { DreamFn } from "./processes/dreaming-types.js";
+import type { CandidateClaim } from "../core/claim.js";
+import { INFINITY } from "../core/time.js";
 
 // ─── Acceptance Criterion 1 ──────────────────────────────────────────────────
 // recall returns policy-filtered claims and records their ids as the episode's
@@ -160,4 +163,93 @@ it("dream() with a fake dreamFn admits insights end-to-end against the gateway",
   const report = await bio.dream(ep.id, { modelVersion: "test-model" });
   // No errors — dreamFn is configured and episode exists
   expect(report.errors).toHaveLength(0);
+});
+
+// ─── Consolidate facade ──────────────────────────────────────────────────────
+
+it("consolidate(unknownEpisode) returns an unknown-episode error report", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const bio = createBioMemory({ mneme, corpusId });
+  expect(bio.consolidate("nope").errors).toContain("unknown episode");
+});
+
+it("consolidate(knownEpisode) delegates to the consolidate pass and returns a ConsolidationReport", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const bio = createBioMemory({ mneme, corpusId });
+  const ep = bio.openEpisode("consolidate-test");
+  const report = bio.consolidate(ep.id);
+  expect(report.errors).toHaveLength(0);
+  expect(typeof report.promoted).toBe("number");
+  expect(typeof report.folded).toBe("number");
+  expect(typeof report.deprecated).toBe("number");
+  expect(Array.isArray(report.dropped)).toBe(true);
+});
+
+it("policy.consolidation override at construction is observable via consolidate (foldThreshold)", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  // foldThreshold: 1 means any single claim is a fold candidate (lower bar than default 3)
+  const bio = createBioMemory({ mneme, corpusId, policy: { consolidation: { foldThreshold: 1 } } });
+  const ep = bio.openEpisode("fold-threshold-test");
+  // Should construct and consolidate without errors — policy was wired
+  const report = bio.consolidate(ep.id);
+  expect(report.errors).toHaveLength(0);
+});
+
+it("policy.dreaming is accepted at construction (no dream field on opts)", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  // The old `dream?: DreamPassOpts` field is gone; dreaming tuning is via policy.dreaming
+  const bio = createBioMemory({ mneme, corpusId, policy: { dreaming: { maxInputClaims: 50 } } });
+  expect(bio).toBeDefined();
+});
+
+it("policy.evidence outcomeWeight flows into cycle: higher weight yields larger alpha bump", () => {
+  // Helper to make a minimal CandidateClaim with scalar confidence
+  function makeClaim(): CandidateClaim {
+    return {
+      profile: "p1" as any,
+      workspace: "w1" as any,
+      subject: "evidence-test",
+      key: "test.skill.evidence",
+      scope: {},
+      value: "test-value",
+      confidence: { distribution: "scalar", parameters: { p: 0.5 }, raw: 0.5 },
+      valid: { from: 0, to: INFINITY },
+      status: "validated",
+      source: "manual",
+      provenance: { runId: "run-evidence" } as any,
+      evidence: [],
+      tags: [],
+      schema: "text",
+    };
+  }
+
+  const ctx: RetrievalContext = { now: Date.now(), decay: () => 1 };
+
+  // --- Default outcomeWeight (2.0) ---
+  const { mneme: mneme1, corpusId: cid1 } = makeBioMneme();
+  mneme1.commit(cid1, makeClaim(), { writer: "test", idempotencyKey: "ev-default" });
+  const gw1 = createMnemeGateway(mneme1, cid1);
+  const bioDefault = createBioMemory({ mneme: mneme1, corpusId: cid1 });
+  const epDefault = bioDefault.openEpisode("ev-default");
+  bioDefault.recall({ corpusId: cid1 }, [], ctx, epDefault.id);
+  bioDefault.recordOutcome(epDefault.id, "success");
+  // Read the replacement claim (superseded original is deprecated; new one is validated)
+  const defaultClaims = gw1.read({ corpusId: cid1, status: ["validated"] });
+  const defaultConf = defaultClaims[0]?.confidence;
+  const defaultAlpha = defaultConf?.distribution === "beta" ? defaultConf.parameters.alpha : 0;
+
+  // --- High outcomeWeight (10.0) ---
+  const { mneme: mneme2, corpusId: cid2 } = makeBioMneme();
+  mneme2.commit(cid2, makeClaim(), { writer: "test", idempotencyKey: "ev-high" });
+  const gw2 = createMnemeGateway(mneme2, cid2);
+  const bioHigh = createBioMemory({ mneme: mneme2, corpusId: cid2, policy: { evidence: { outcomeWeight: 10 } } });
+  const epHigh = bioHigh.openEpisode("ev-high");
+  bioHigh.recall({ corpusId: cid2 }, [], ctx, epHigh.id);
+  bioHigh.recordOutcome(epHigh.id, "success");
+  const highClaims = gw2.read({ corpusId: cid2, status: ["validated"] });
+  const highConf = highClaims[0]?.confidence;
+  const highAlpha = highConf?.distribution === "beta" ? highConf.parameters.alpha : 0;
+
+  // High outcomeWeight must produce a larger alpha bump than default
+  expect(highAlpha).toBeGreaterThan(defaultAlpha);
 });

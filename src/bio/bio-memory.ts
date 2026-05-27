@@ -4,11 +4,14 @@ import { createSignalBuffer } from "./signals.js";
 import { createCycle } from "./cycle.js";
 import { evidenceUpdate } from "./processes/evidence-update.js";
 import { compose } from "./policies/suppression.js";
-import { createDreamPass, type DreamPassOpts } from "./processes/dreaming.js";
+import { createDreamPass } from "./processes/dreaming.js";
 import type { DreamFn, DreamReport } from "./processes/dreaming-types.js";
 import type { BioQuery, CycleReport, EpisodeId, RetrievalContext, RetrievalPolicy } from "./types.js";
 import type { ClaimId } from "../core/ids.js";
 import type { Mneme } from "../mneme.js";
+import type { BioPolicy } from "./policy.js";
+import { resolvePolicy } from "./policy.js";
+import { createConsolidatePass, type ConsolidationReport } from "./processes/consolidation.js";
 
 const UNKNOWN_EPISODE_ERROR = "unknown episode";
 
@@ -16,19 +19,23 @@ export interface BioMemoryOpts {
   mneme: Mneme;
   corpusId: string;
   dreamFn?: DreamFn;
-  dream?: DreamPassOpts;
+  policy?: BioPolicy;
 }
 
 export function createBioMemory(opts: BioMemoryOpts) {
+  const pol = resolvePolicy(opts.policy);
   const gateway = createMnemeGateway(opts.mneme, opts.corpusId);
   const dreamFn = opts.dreamFn;
-  const dreamOpts = opts.dream;
 
-  const dreamPass = dreamFn ? createDreamPass(gateway, dreamFn, dreamOpts) : undefined;
+  const dreamPass = dreamFn
+    ? createDreamPass(gateway, dreamFn, { ...pol.dreaming, corpusId: opts.corpusId })
+    : undefined;
+
+  const consolidatePass = createConsolidatePass(gateway, opts.policy, opts.corpusId);
 
   const episodes = createEpisodeRegistry();
   const buffer = createSignalBuffer();
-  const cycle = createCycle(gateway, [evidenceUpdate()]);
+  const cycle = createCycle(gateway, [evidenceUpdate(pol.evidence)]);
   return {
     openEpisode: episodes.openEpisode.bind(episodes),
     closeEpisode: episodes.closeEpisode.bind(episodes),
@@ -60,6 +67,16 @@ export function createBioMemory(opts: BioMemoryOpts) {
       if (!ep) return { proposed: 0, admitted: 0, dropped: [], errors: [UNKNOWN_EPISODE_ERROR] };
       if (!dreamPass) return { proposed: 0, admitted: 0, dropped: [], errors: ["no dreamFn configured"] };
       return dreamPass.dream(ep, run);
+    },
+    consolidate(
+      episode: EpisodeId,
+      opts2?: { consolidation?: BioPolicy["consolidation"] }
+    ): ConsolidationReport {
+      const ep = episodes.get(episode);
+      if (!ep) {
+        return { promoted: 0, folded: 0, deprecated: 0, dropped: [], errors: [UNKNOWN_EPISODE_ERROR] };
+      }
+      return consolidatePass.consolidate(ep, opts2);
     },
   };
 }
