@@ -1,8 +1,7 @@
 import { createSummarizePass } from "./summarize.js";
 import { createMnemeGateway } from "../gateway.js";
 import { makeBioMneme } from "../test-support.js";
-import type { MnemeGateway } from "../gateway.js";
-import type { Episode, AppendOp } from "../types.js";
+import type { Episode } from "../types.js";
 import type { CandidateClaim } from "../../core/claim.js";
 
 // ---------------------------------------------------------------------------
@@ -53,10 +52,9 @@ it("admits a digest, retrievable via getDigest, and is idempotent on re-run", as
   );
   expect(seedResult.applied).toBe(1);
 
-  // Read to get the actual seeded claim's id
+  // Confirm the seed landed; the fakeFn cites the live claim id directly from its input.
   const seeded = gateway.read({ corpusId, runIds: ["r1"] } as any);
   expect(seeded).toHaveLength(1);
-  const claimId = seeded[0].id;
 
   const fakeFn = async ({ claims }: any) => [
     { key: "session.digest", value: { kind: "text", v: "gist" }, cites: [claims[0].id] },
@@ -198,7 +196,7 @@ it("single-flight: re-entrant summarize returns in-flight error and applies noth
 it("empty selected set (all claims are summaries) skips the model call", async () => {
   const { mneme, corpusId } = makeBioMneme();
   const gateway = createMnemeGateway(mneme, corpusId);
-  // Don't seed any claims — read will return empty
+  // Don't seed any claims — selectSummarizeInput returns empty, so the model is never called
   let modelCalled = false;
   const fakeFn = async () => { modelCalled = true; return []; };
   const pass = createSummarizePass(gateway, fakeFn, { corpusId });

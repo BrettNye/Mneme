@@ -455,22 +455,17 @@ it("startConsolidating with a non-positive interval is a no-op", () => {
 // ---- startSummarizing tests ----
 
 const makeSummarizeMemory = () => {
-  let cycleCalls = 0;
   let summarizeCalls = 0;
   const summarizeEpisodes: string[] = [];
   const summarizeVersions: string[] = [];
   return {
-    runCycle: (_episode: string): CycleReport => {
-      cycleCalls++;
-      return { opsApplied: cycleCalls, claimsSuperseded: 0, errors: [] };
-    },
+    runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
     summarize: async (episode: string, run: { modelVersion: string }): Promise<unknown> => {
       summarizeCalls++;
       summarizeEpisodes.push(episode);
       summarizeVersions.push(run.modelVersion);
       return { proposed: 0, admitted: 0, dropped: [], errors: [] };
     },
-    get cycleCalls() { return cycleCalls; },
     get summarizeCalls() { return summarizeCalls; },
     get summarizeEpisodes() { return summarizeEpisodes; },
     get summarizeVersions() { return summarizeVersions; },

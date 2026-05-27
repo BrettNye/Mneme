@@ -8,8 +8,6 @@ import { isSummary, type SummarizeFn, type SummarizeReport } from "./summarize-t
 import { selectSummarizeInput } from "./summarize-select.js";
 import { admitSummaries } from "./summarize-admit.js";
 
-const APPLIED = new Set(["committed", "superseded", "promoted"]);
-
 export function createSummarizePass(
   gateway: MnemeGateway,
   summarizeFn: SummarizeFn,
@@ -40,10 +38,9 @@ export function createSummarizePass(
         });
         if (ops.length === 0) return { ...empty, proposed: proposals.length, dropped };
         const res = gateway.apply(ops, (op, i) => opKeyFor(episode.id, op, i));
-        const admitted = res.results
-          ? res.results.filter((r) => APPLIED.has(r.status)).length
-          : ops.length;
-        return { proposed: proposals.length, admitted, dropped, errors: [] };
+        // summarize emits only `derive` ops, so res.applied is exactly the count of
+        // digests that actually persisted (rejected/duplicate ops are not counted).
+        return { proposed: proposals.length, admitted: res.applied, dropped, errors: [] };
       } catch (e) {
         return { ...empty, errors: [String(e)] };
       } finally {

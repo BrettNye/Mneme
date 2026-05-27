@@ -36,7 +36,7 @@ export function createBioMemory(opts: BioMemoryOpts) {
     : undefined;
 
   const summarizePass = opts.summarizeFn
-    ? createSummarizePass(gateway, opts.summarizeFn, { corpusId: opts.corpusId, summarize: opts.policy?.summarize })
+    ? createSummarizePass(gateway, opts.summarizeFn, { corpusId: opts.corpusId, summarize: pol.summarize })
     : undefined;
 
   const consolidatePass = createConsolidatePass(gateway, opts.policy, opts.corpusId);
