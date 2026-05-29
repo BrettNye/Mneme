@@ -279,13 +279,13 @@ it("returns mismatch with recomputed claim when a contributing claim is perturbe
 });
 
 it("returns failed when queryExpression encodes an unsupported op (UnsupportedExprOp from compile)", () => {
-  // "resolve" is in parseExpr's known ops but compile() throws UnsupportedExprOp for it
+  // "aggregate" is in parseExpr's known ops but compile() throws UnsupportedExprOp for it
   const adapter = makeAdapter();
   const catalog = makeCatalog(["c"]);
 
   const qe = JSON.stringify({
-    op: "resolve",
-    policy: "resolveKeepBoth",
+    op: "aggregate",
+    fn: "count",
     src: { op: "leaf", corpusId: "c" },
   });
 
