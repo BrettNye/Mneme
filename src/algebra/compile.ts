@@ -12,7 +12,9 @@ import { tauValid, tauRecorded, tauKnown } from "./temporal.js";
 import { delta } from "./decay.js";
 import { pi } from "./projection.js";
 import { kappa } from "./composition.js";
-import { oplusSynthesizeAs } from "./combination.js";
+import { oplusDedupe, oplusSynthesizeAs } from "./combination.js";
+import { pairsOf, clustersOf } from "./contradiction.js";
+import { resolutionRegistry } from "./registries.js";
 import type { Corpus } from "./types.js";
 
 export class UnsupportedExprOp extends Error {
@@ -29,7 +31,7 @@ export class UnsupportedExprOp extends Error {
  * Pure structural transform — no EvalContext is read at compile time;
  * the context is threaded later by the unchanged evaluate().
  *
- * Unsupported in v1: combine, resolve, aggregate (throw UnsupportedExprOp).
+ * Unsupported in v1: aggregate (throws UnsupportedExprOp — read-time terminal, §4.13).
  * Clock-pinned: delta and tau mode:"now" use ctx.evaluationClock at evaluate
  * time, ensuring deterministic replay re-execution.
  */
@@ -96,10 +98,22 @@ export function compile(node: ExprNode): Stage<any, any>[] {
         },
       ];
 
-    case "combine":
-    case "resolve":
+    case "combine": // ⊕_dedupe (§4.9): collapse same-(subject,key,scope) claims via the rule
+      return [...compile(node.src), liftOp(oplusDedupe(node.rule, node.params))];
+
+    case "resolve": {
+      const { policy, threshold, rule: resolveRule } = node;
+      return [...compile(node.src), (c: Corpus) => {
+        const { fn, input } = resolutionRegistry(policy); // throws MissingRule on unknown at evaluate time
+        const apply = fn as (g: unknown, rule?: string) => (c: Corpus) => Corpus;
+        const groups = input === "pairs" ? pairsOf(c, threshold) : clustersOf(c, threshold);
+        return apply(groups, resolveRule)(c);
+      }];
+    }
+
     case "aggregate":
-      throw new UnsupportedExprOp(node.op);
+      // read-time terminal (AggregateResult, §4.13) — not a replayable claim query
+      throw new UnsupportedExprOp("aggregate");
 
     default: {
       const _exhaustive: never = node;

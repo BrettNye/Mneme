@@ -16,9 +16,10 @@ export type ExprNode =
   | { op: "rho"; fn: string; query: Value; src: ExprNode }
   | { op: "gamma"; depth: number; src: ExprNode }
   | { op: "kappa"; fmt: Format; maxTokens: number; dedupThreshold?: number; src: ExprNode }
+  /** combine is ⊕_dedupe (spec §4.9) — combine same-(subject,key,scope) claims via a rule. */
   | { op: "combine"; rule: string; params?: Value; src: ExprNode }
   | { op: "synthesize"; subject: string; key: string; rule: string; params?: Value; src: ExprNode }
-  | { op: "resolve"; policy: string; rule?: string; src: ExprNode }
+  | { op: "resolve"; policy: string; threshold: number; rule?: string; src: ExprNode }
   | { op: "aggregate"; fn: string; reweight?: string; where?: Predicate; groupBy?: string; src: ExprNode };
 
 export const leaf = (corpusId: string): ExprNode =>
@@ -56,6 +57,8 @@ export const kappa = (
     ? { op: "kappa", fmt, maxTokens, dedupThreshold, src }
     : { op: "kappa", fmt, maxTokens, src };
 
+export const DEFAULT_RESOLVE_THRESHOLD = 0.5;
+
 export const combine = (rule: string, src: ExprNode, params?: Value): ExprNode =>
   params !== undefined ? { op: "combine", rule, params, src } : { op: "combine", rule, src };
 
@@ -70,8 +73,15 @@ export const synthesize = (
     ? { op: "synthesize", subject, key, rule, params, src }
     : { op: "synthesize", subject, key, rule, src };
 
-export const resolve = (policy: string, src: ExprNode, rule?: string): ExprNode =>
-  rule !== undefined ? { op: "resolve", policy, rule, src } : { op: "resolve", policy, src };
+export const resolve = (
+  policy: string,
+  src: ExprNode,
+  rule?: string,
+  threshold: number = DEFAULT_RESOLVE_THRESHOLD,
+): ExprNode =>
+  rule !== undefined
+    ? { op: "resolve", policy, threshold, rule, src }
+    : { op: "resolve", policy, threshold, src };
 
 export const aggregate = (
   fn: string,

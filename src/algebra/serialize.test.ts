@@ -151,3 +151,14 @@ it("round-trips combine with null params value", () => {
   const n = combine("rule", leaf("c"), null);
   expect(parseExpr(serializeExpr(n))).toEqual(n);
 });
+
+// -- resolve threshold --
+
+it("round-trips a resolve node with threshold", () => {
+  const n = resolve("resolveKeepBoth", leaf("c"), undefined, 0.3);
+  expect(serializeExpr(parseExpr(serializeExpr(n)))).toBe(serializeExpr(n));
+});
+
+it("rejects a resolve node missing threshold", () => {
+  expect(() => parseExpr('{"op":"resolve","policy":"resolveKeepBoth","src":{"op":"leaf","corpusId":"c"}}')).toThrow();
+});
