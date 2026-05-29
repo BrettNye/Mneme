@@ -5,13 +5,13 @@ created: 2026-05-29
 
 ```mermaid
 flowchart TD
-    task-predicate-flatten["task-predicate-flatten: flatten value preds<br/>files: src/algebra/predicate.ts"]
-    task-value-routing["task-value-routing: capability routing<br/>files: src/algebra/value-routing.ts +1 more"]
-    task-sqlite-matrix["task-sqlite-matrix: honest SQLite matrix<br/>files: src/adapters/sqlite.ts"]
-    task-staging-buffer["task-staging-buffer: in-memory staging buffer<br/>files: src/write/staging.ts"]
-    task-mneme-routing["task-mneme-routing: wire routing into query<br/>files: src/mneme.ts"]
-    task-mneme-staging["task-mneme-staging: staged-promote façade<br/>files: src/mneme.ts"]
-    task-spec-reconcile["task-spec-reconcile: reconcile §10/§10.2/§7.1<br/>files: mneme-spec-v0.2-consolidated.md"]
+    task-predicate-flatten["task-predicate-flatten: flatten value preds<br/>files: src/algebra/predicate.ts"]:::done
+    task-value-routing["task-value-routing: capability routing<br/>files: src/algebra/value-routing.ts +1 more"]:::done
+    task-sqlite-matrix["task-sqlite-matrix: honest SQLite matrix<br/>files: src/adapters/sqlite.ts"]:::done
+    task-staging-buffer["task-staging-buffer: in-memory staging buffer<br/>files: src/write/staging.ts"]:::done
+    task-mneme-routing["task-mneme-routing: wire routing into query<br/>files: src/mneme.ts"]:::done
+    task-mneme-staging["task-mneme-staging: staged-promote façade<br/>files: src/mneme.ts"]:::done
+    task-spec-reconcile["task-spec-reconcile: reconcile §10/§10.2/§7.1<br/>files: mneme-spec-v0.2-consolidated.md"]:::done
 
     task-predicate-flatten --> task-value-routing
     task-value-routing --> task-mneme-routing
@@ -42,7 +42,7 @@ id: task-predicate-flatten
 depends_on: []
 files:
   - src/algebra/predicate.ts
-status: pending
+status: done
 ```
 
 Make `ValuePredicate` expressible inside a `σ` predicate by flattening it into the `Predicate` union, with a single `VALUE_PREDICATE_KIND` map driving both the `isValuePredicate` guard and `predicateKindOf` (DRY — the op set is never re-listed). `matches()` delegates value ops to the existing `matchesValue`. Prerequisite for `task-value-routing`.
@@ -114,7 +114,7 @@ depends_on: [task-predicate-flatten]
 files:
   - src/algebra/value-routing.ts
   - src/algebra/expression.ts
-status: pending
+status: done
 ```
 
 The §10.2 capability layer (option A): walk a predicate's value predicates, classify each by the adapter's declared `valuePredicateSupport`, **throw** on `unsupported`, **warn** on `fallback_in_memory` over a working-set threshold, proceed otherwise. Also extends `EvalContext` (`expression.ts`) with the `onWarning` delivery channel + threshold that this module's warnings flow through — the routing feature's non-façade infrastructure.
@@ -205,7 +205,7 @@ id: task-sqlite-matrix
 depends_on: []
 files:
   - src/adapters/sqlite.ts
-status: pending
+status: done
 ```
 
 Make the reference SQLite adapter's declared `valuePredicateSupport` match its actual load-all-then-filter execution: every value-predicate kind is `fallback_in_memory`, not `native_unindexed`. This aligns the matrix with reality and activates the §10.2 warn path for SQLite (design §2).
@@ -251,7 +251,7 @@ id: task-staging-buffer
 depends_on: []
 files:
   - src/write/staging.ts
-status: pending
+status: done
 ```
 
 A non-durable, per-instance staging store for the §7.1 staged-promote mode. Owns the buffer mechanics (emit → unique stagingId, take, takeAll, list, discard) so the façade (`task-mneme-staging`) is thin wiring. Separates the staging concern from `mneme.ts` (SoC).
@@ -331,7 +331,7 @@ id: task-mneme-routing
 depends_on: [task-value-routing]
 files:
   - src/mneme.ts
-status: pending
+status: done
 ```
 
 Make the public `sigma` builder capability-aware: at evaluation entry it runs `routeValuePredicates` against the adapter's capabilities over the incoming corpus, then filters as before. Thread `onWarning` + `fallbackWarnThreshold` from `query(...)` opts into the `EvalContext`, defaulting `onWarning` to `console.warn` (never silently swallowed, per §10.2).
@@ -390,7 +390,7 @@ id: task-mneme-staging
 depends_on: [task-staging-buffer, task-mneme-routing]
 files:
   - src/mneme.ts
-status: pending
+status: done
 ```
 
 Expose §7.1 staged-promote on the `Mneme` interface, delegating to a `StagingBuffer` held in the `createMneme` closure. `depends_on task-mneme-routing` because both modify `src/mneme.ts` (serialize) and on `task-staging-buffer` for the `StagingBuffer` contract.
@@ -450,7 +450,7 @@ id: task-spec-reconcile
 depends_on: []
 files:
   - mneme-spec-v0.2-consolidated.md
-status: pending
+status: done
 ```
 
 Documentation task. Reconcile the normative spec with the reference implementation per the design's "spec serves the impl" decision: bless the closure-`transaction` idiom in §10, make the §10.2 SQLite matrix honest, and document immediate-promote + staged-promote in §7.1. The fenced blocks below show the prose edits (before → after); the gate is `verify-spec.sh`.
