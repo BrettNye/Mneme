@@ -17,7 +17,7 @@ export interface EvalContext {
   usedEmbeddingModelVersions?: Record<string, string>;
   /** Optional delivery channel for query warnings (e.g., fallback_in_memory over threshold). */
   onWarning?: (w: QueryWarning) => void;
-  /** Working-set size above which fallback_in_memory predicates emit a warning. Default: 10_000. */
+  /** Working-set size above which fallback_in_memory predicates emit a warning. When unset, the query/sigma layer applies its default (10_000); EvalContext itself enforces no default. */
   fallbackWarnThreshold?: number;
 }
 

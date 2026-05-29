@@ -248,6 +248,7 @@ describe("routeValuePredicates — fallback_in_memory warnings", () => {
       onWarning: (w) => warnings.push(w),
     });
     expect(warnings).toHaveLength(2);
+    expect(warnings.find(w => w.predicateKind === "structural_pattern")?.path).toBeUndefined();
   });
 });
 
