@@ -22,6 +22,7 @@ function makeClaim(overrides: Partial<Claim> = {}): Claim {
     source: "manual",
     provenance: {} as any,
     evidence: [],
+    audience: {},
     tags: ["important"],
     schema: "default",
     ...overrides,

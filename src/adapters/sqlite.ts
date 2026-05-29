@@ -37,6 +37,7 @@ interface ClaimRow {
   source: string;
   provenance_json: string;
   evidence_json: string;
+  audience_json: string;
   tags_json: string;
   schema: string;
   run_id: string | null;
@@ -85,6 +86,7 @@ function toRow(c: Claim): ClaimRow {
     source: c.source,
     provenance_json: JSON.stringify(c.provenance),
     evidence_json: JSON.stringify(c.evidence),
+    audience_json: JSON.stringify(c.audience ?? {}),
     tags_json: JSON.stringify(c.tags),
     schema: c.schema,
     run_id: c.provenance.runId ?? null,
@@ -118,6 +120,7 @@ function fromRow(row: ClaimRow): Claim {
     source: row.source as Source,
     provenance: JSON.parse(row.provenance_json) as Provenance,
     evidence: JSON.parse(row.evidence_json) as EvidenceRef[],
+    audience: row.audience_json ? JSON.parse(row.audience_json) : {},
     tags: JSON.parse(row.tags_json) as string[],
     schema: row.schema,
   };
@@ -149,6 +152,7 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       source TEXT,
       provenance_json TEXT,
       evidence_json TEXT,
+      audience_json TEXT,
       tags_json TEXT,
       schema TEXT,
       run_id TEXT
@@ -183,13 +187,13 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       id, profile, workspace, subject, key, scope_hash, scope_json,
       value_json, value_hash, conf_distribution, conf_params, conf_raw,
       conf_effective, valid_from, valid_to, recorded, recorded_seq,
-      status, source, provenance_json, evidence_json, tags_json, schema,
+      status, source, provenance_json, evidence_json, audience_json, tags_json, schema,
       run_id
     ) VALUES (
       @id, @profile, @workspace, @subject, @key, @scope_hash, @scope_json,
       @value_json, @value_hash, @conf_distribution, @conf_params, @conf_raw,
       @conf_effective, @valid_from, @valid_to, @recorded, @recorded_seq,
-      @status, @source, @provenance_json, @evidence_json, @tags_json, @schema,
+      @status, @source, @provenance_json, @evidence_json, @audience_json, @tags_json, @schema,
       @run_id
     )
   `);

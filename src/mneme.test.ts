@@ -938,3 +938,38 @@ describe("façade: override / join / commitBatch / catalog ops", () => {
     expect(() => m.deleteCorpus("workspace:canopy")).toThrow();
   });
 });
+
+describe("audience field (§2.1)", () => {
+  const aud = (audience?: { personas?: string[] }) => ({
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject: "person",
+    key: "person.name",
+    scope: {},
+    value: "Alice",
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+    ...(audience ? { audience } : {}),
+  });
+
+  it("defaults audience to {} when the writer omits it, and round-trips through the adapter", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const r = m.commit("workspace:canopy", aud(), { writer: "w" });
+    const claim = m.readByIds("workspace:canopy", [r.id as any])[0];
+    expect(claim.audience).toEqual({});
+  });
+
+  it("carries a writer-provided audience through commit and read-back", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const r = m.commit("workspace:canopy", aud({ personas: ["reviewer", "architect"] }), { writer: "w" });
+    const claim = m.readByIds("workspace:canopy", [r.id as any])[0];
+    expect(claim.audience).toEqual({ personas: ["reviewer", "architect"] });
+  });
+});

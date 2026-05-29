@@ -6,6 +6,7 @@ import type { Scope } from "./scope.js";
 import type { Confidence } from "./confidence.js";
 import type { EvidenceRef } from "./evidence.js";
 import type { Provenance } from "./provenance.js";
+import type { Audience } from "./audience.js";
 
 export type Status = "candidate" | "provisional" | "validated" | "deprecated";
 export type Source = "manual" | "verification" | "workflow" | "heuristic" | "llm" | "imported";
@@ -28,8 +29,11 @@ export interface Claim {
   source: Source;
   provenance: Provenance;
   evidence: EvidenceRef[];
+  audience: Audience;
   tags: string[];
   schema: string;
 }
 
-export type CandidateClaim = Omit<Claim, "id" | "recorded" | "recordedSeq" | "scopeHash" | "valueHash" | "status"> & { status?: Status };
+export type CandidateClaim =
+  Omit<Claim, "id" | "recorded" | "recordedSeq" | "scopeHash" | "valueHash" | "status" | "audience">
+  & { status?: Status; audience?: Audience };

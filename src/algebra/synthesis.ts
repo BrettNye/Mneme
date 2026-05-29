@@ -90,6 +90,7 @@ export const resolveSynthesizeBelief =
         status: "validated",
         source: "workflow",
         evidence: allEvidence,
+        audience: {},
         tags: [],
         schema: favoredClaims[0].schema ?? "",
         profile: favoredClaims[0].profile,

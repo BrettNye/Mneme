@@ -2,6 +2,7 @@ import type { CandidateClaim, Claim, Status } from "../core/claim.js";
 import { newClaimId, type ClaimId } from "../core/ids.js";
 import { scopeHash } from "../core/scope.js";
 import { valueHash } from "../core/value.js";
+import { INFINITY } from "../core/time.js";
 import { validateScope, type ClaimSchema } from "../catalog/schema.js";
 import { enforce } from "./contradiction.js";
 import { checkIdempotent, recordIdempotent, idempotencyScope } from "./idempotency.js";
@@ -85,6 +86,43 @@ export class Promoter {
     });
   }
 
+  /**
+   * Build the `contradiction` artifact claim for the accept_but_mark policy (§7.3).
+   * Records the conflicting pair's ids as its value; a scalar-certain, validated,
+   * verification-sourced claim under the reserved `contradiction` subject so it is
+   * directly queryable. Inserted alongside the accepted claim, not run through enforce().
+   */
+  private contradictionArtifact(
+    accepted: Claim,
+    conflictId: string,
+    recorded: number,
+    seq: number
+  ): Claim {
+    const value = { leftId: accepted.id, rightId: conflictId } as Claim["value"];
+    return {
+      id: newClaimId(),
+      profile: accepted.profile,
+      workspace: accepted.workspace,
+      subject: "contradiction" as Claim["subject"],
+      key: "contradiction.mark" as Claim["key"],
+      scope: accepted.scope,
+      scopeHash: accepted.scopeHash,
+      value,
+      valueHash: valueHash(value),
+      confidence: { distribution: "scalar", parameters: { p: 1 }, raw: 1 },
+      valid: { from: recorded, to: INFINITY },
+      recorded,
+      recordedSeq: seq,
+      status: "validated",
+      source: "verification",
+      provenance: {},
+      evidence: [],
+      audience: {},
+      tags: [],
+      schema: "contradiction-mark-v1",
+    };
+  }
+
   commit(
     candidate: CandidateClaim,
     opts: {
@@ -107,6 +145,7 @@ export class Promoter {
       recorded: 0,       // placeholder — will be overwritten after accept
       recordedSeq: 0,    // placeholder — will be overwritten after accept
       status: candidate.status ?? "validated",
+      audience: candidate.audience ?? {},   // persona-targeting hints default to none (§2.1)
     } as Claim;
 
     const outcome = enforce(candidateForEnforce, opts.policy, this.adapter);
@@ -128,6 +167,12 @@ export class Promoter {
 
         outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as ClaimId));
         this.adapter.insertClaim(claim);
+
+        // accept_but_mark (§7.3): both claims live; write a separate `contradiction`
+        // claim recording the conflicting pair so it is queryable for later review.
+        if (outcome.markArtifact && outcome.conflictId) {
+          this.adapter.insertClaim(this.contradictionArtifact(claim, outcome.conflictId, recorded, seq));
+        }
 
         const event: ClaimEvent = {
           op: "commit",
@@ -214,6 +259,7 @@ export class Promoter {
           recorded,
           recordedSeq: seq,
           status: replacement.status ?? "validated",
+          audience: replacement.audience ?? {},
         };
 
         // Best-effort soft-deprecate (missing id → no-op for store, but call is made)

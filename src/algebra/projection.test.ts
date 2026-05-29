@@ -19,6 +19,7 @@ const sampleClaim = {
   source: "manual" as any,
   provenance: {} as any,
   evidence: [],
+  audience: {},
   tags: [],
   schema: "s",
 };

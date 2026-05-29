@@ -53,6 +53,7 @@ const makeClaim = (
     source: "manual",
     provenance: { method: "manual" } as any,
     evidence: [],
+    audience: {},
     tags: overrides.tags ?? [],
     schema: "test",
   } as Claim);
