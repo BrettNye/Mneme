@@ -97,4 +97,38 @@ describe("cli run", () => {
     log.mockRestore();
     err.mockRestore();
   });
+
+  it("query with no corpus returns 1 with usage message", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await run(["query"])).toBe(1);
+    const msg = err.mock.calls.flat().join("\n");
+    expect(msg).toContain("query requires");
+    err.mockRestore();
+  });
+
+  it("import with no file returns 1 with usage message", async () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "imp.db");
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await run(["import", "c", "--db", db])).toBe(1);
+    const msg = err.mock.calls.flat().join("\n");
+    expect(msg).toContain("import requires");
+    err.mockRestore();
+  });
+
+  it("commit with no corpus returns 1 with usage message", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await run(["commit"])).toBe(1);
+    const msg = err.mock.calls.flat().join("\n");
+    expect(msg).toContain("commit requires");
+    err.mockRestore();
+  });
+
+  it("inspect with no claimId returns 1 with usage message", async () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "ins.db");
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await run(["inspect", "c", "--db", db])).toBe(1);
+    const msg = err.mock.calls.flat().join("\n");
+    expect(msg).toContain("inspect");
+    err.mockRestore();
+  });
 });

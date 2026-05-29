@@ -24,8 +24,54 @@ export async function run(argv: string[]): Promise<number> {
     },
   });
 
-  const session = openSession({ dbPath: values.db, writer: values.writer });
   const [cmd, sub, ...rest] = positionals;
+
+  // Handle unknown commands and help BEFORE opening a session.
+  if (!cmd || cmd === "help" || cmd === "--help" || values.help) {
+    console.error(USAGE);
+    return 1;
+  }
+
+  const knownCommands = ["query", "import", "corpus", "commit", "inspect", "replay"];
+  if (!knownCommands.includes(cmd)) {
+    console.error(`unknown command: ${cmd}\n${USAGE}`);
+    return 1;
+  }
+
+  // Validate required positionals BEFORE opening a session where possible.
+  if (cmd === "query" && !sub) {
+    console.error("query requires <corpusId> and a DSL expression");
+    return 1;
+  }
+
+  if (cmd === "import") {
+    if (!sub) {
+      console.error("import requires <corpusId>");
+      return 1;
+    }
+    if (!rest[0]) {
+      console.error("import requires <file>");
+      return 1;
+    }
+  }
+
+  if (cmd === "commit" && !sub) {
+    console.error("commit requires a <corpusId>");
+    return 1;
+  }
+
+  if (cmd === "inspect" && (!sub || !rest[0])) {
+    console.error("inspect requires <corpusId> <claimId>");
+    return 1;
+  }
+
+  if (cmd === "replay" && (!sub || !rest[0])) {
+    console.error("replay requires <corpusId> <claimId>");
+    return 1;
+  }
+
+  // Open the session only for valid commands that need it.
+  const session = openSession({ dbPath: values.db, writer: values.writer });
 
   try {
     switch (cmd) {
@@ -81,7 +127,9 @@ export async function run(argv: string[]): Promise<number> {
       }
 
       default:
-        console.error(`unknown command: ${cmd ?? "(none)"}\n${USAGE}`);
+        // This branch is unreachable due to the knownCommands check above,
+        // but TypeScript requires it for exhaustiveness.
+        console.error(`unknown command: ${cmd}\n${USAGE}`);
         return 1;
     }
   } catch (err) {
