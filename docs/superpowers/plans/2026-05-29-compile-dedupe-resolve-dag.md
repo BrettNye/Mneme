@@ -5,11 +5,11 @@ created: 2026-05-29
 
 ```mermaid
 flowchart TD
-    task-resolve-threshold["task-resolve-threshold: resolve.threshold<br/>files: src/algebra/ast.ts +1 more"]
-    task-resolution-registry["task-resolution-registry: registry {fn,input}<br/>files: src/algebra/registries.ts +1 more"]
-    task-serialize-resolve["task-serialize-resolve: serialize threshold<br/>files: src/algebra/serialize.ts +1 more"]
-    task-compile-arms["task-compile-arms: combine+resolve+aggregate<br/>files: src/algebra/compile.ts +1 more"]
-    task-replay-test-fixup["task-replay-test-fixup: repoint unsupported-op test<br/>files: src/write/replay.test.ts"]
+    task-resolve-threshold["task-resolve-threshold: resolve.threshold<br/>files: src/algebra/ast.ts +1 more"]:::done
+    task-resolution-registry["task-resolution-registry: registry {fn,input}<br/>files: src/algebra/registries.ts +1 more"]:::done
+    task-serialize-resolve["task-serialize-resolve: serialize threshold<br/>files: src/algebra/serialize.ts +1 more"]:::running
+    task-compile-arms["task-compile-arms: combine+resolve+aggregate<br/>files: src/algebra/compile.ts +1 more"]:::running
+    task-replay-test-fixup["task-replay-test-fixup: repoint unsupported-op test<br/>files: src/write/replay.test.ts"]:::done
 
     task-resolve-threshold --> task-serialize-resolve
     task-resolve-threshold --> task-compile-arms
@@ -56,7 +56,7 @@ depends_on: []
 files:
   - src/algebra/ast.ts
   - src/algebra/ast.test.ts
-status: pending
+status: done
 ```
 
 Add a recorded `threshold: number` to the `resolve` ExprNode so the contradiction
@@ -112,7 +112,7 @@ depends_on: []
 files:
   - src/algebra/registries.ts
   - src/algebra/registries.test.ts
-status: pending
+status: done
 ```
 
 Change `resolutionRegistry(name)` to return `{ fn, input: "pairs" | "clusters" }` so `compile`
@@ -172,7 +172,7 @@ depends_on: [task-resolve-threshold]
 files:
   - src/algebra/serialize.ts
   - src/algebra/serialize.test.ts
-status: pending
+status: done
 ```
 
 Teach `parseExpr` that a `resolve` node requires `threshold`, so a serialized resolve query
@@ -216,7 +216,7 @@ depends_on: [task-resolve-threshold, task-resolution-registry]
 files:
   - src/algebra/compile.ts
   - src/algebra/compile.test.ts
-status: pending
+status: done
 ```
 
 Implement the `combine` arm (→ `oplusDedupe`) and the `resolve` arm (pairs/clusters + threshold
@@ -286,7 +286,7 @@ id: task-replay-test-fixup
 depends_on: [task-compile-arms, task-serialize-resolve]
 files:
   - src/write/replay.test.ts
-status: pending
+status: done
 ```
 
 `replay.test.ts` has a test that uses `resolve` as the example op that `compile` rejects.
