@@ -283,12 +283,10 @@ it("idempotency keys are independent per (scope, key) pair", () => {
   expect(a.getIdempotencyRecord("scope2", "key1")?.result).toBe("r3");
 });
 
-it("capabilities returns all predicateKinds as native_unindexed", () => {
-  const a = createSqliteAdapter();
-  const caps = a.capabilities();
-  const kinds = ["equality", "range", "set_membership", "regex", "structural_pattern", "null_check"] as const;
-  for (const kind of kinds) {
-    expect(caps.valuePredicateSupport[kind]).toBe("native_unindexed");
+it("declares every value-predicate kind as fallback_in_memory", () => {
+  const caps = createSqliteAdapter().capabilities();
+  for (const kind of ["equality","range","set_membership","regex","structural_pattern","null_check"] as const) {
+    expect(caps.valuePredicateSupport[kind]).toBe("fallback_in_memory");
   }
 });
 
