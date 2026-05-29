@@ -352,6 +352,7 @@ DerivationProvenance {
   corpusState            : LogicalTimestamp             -- corpus state at evaluation
   combinationRule        : string                       -- rule used (if synthesis)
   inputClaims            : Set<ClaimId>                 -- contributing claims
+  inputHashes            : Map<ClaimId, ContentHash>    -- content hash of each input at derivation time (App H.3)
   similarityVersions     : Map<SimilarityFunctionId, Version>  -- versions of similarity fns used
   embeddingModelVersions : Map<EmbeddingModelId, Version>      -- versions of embedding models used
   evaluationClock        : Instant                      -- pinned eval time for time-dependent operators
@@ -363,6 +364,8 @@ Derivation provenance makes derived claims *reproducible*: a consumer can re-run
 `similarityVersions` records the version of every similarity function used in the query; `embeddingModelVersions` records the version of every embedding model used (e.g., when `ρ_cosine` is invoked, the embedding model's version identifier is captured). `evaluationClock` pins the time at which time-dependent operators (decay, `τ_now`) are evaluated, eliminating "decay drift" during replay — re-evaluation uses the pinned clock, not the current clock.
 
 These three fields are mandatory for any derived write whose query references similarity-based operators, and recording them is *irreversible at write time*: a derivation committed without them cannot retroactively gain them. Implementations MUST begin recording version information immediately, even before the broader replay-verification machinery is built (see §7).
+
+`inputHashes` records the content hash of each input claim at the moment of derivation, keyed by claim id. Like the version fields it is *irreversible at write time* and MUST be recorded immediately — it is the banked prerequisite of Appendix H.3 that lets a future erasure profile (Appendix H) offer integrity-verifiable replay after an input has been erased. A derivation committed without input hashes is permanently limited to acknowledgment-only reproducibility for any input that is later erased; this is why the field is mandatory now rather than deferred with the erasure profile itself.
 
 ### 2.8 EvidenceRef
 
