@@ -10,3 +10,6 @@ mneme.db.corpora.json
 *.mneme.db
 *.mneme.db-shm
 *.mneme.db-wal
+
+# Benchmark raw/converted datasets (downloaded on demand, not tracked)
+bench/datasets/
