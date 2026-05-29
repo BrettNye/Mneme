@@ -76,7 +76,7 @@ function claimsEquivalent(a: Claim, b: Claim, eps = 1e-9): boolean {
   if (ca.distribution === "scalar" && cb.distribution === "scalar") {
     return Math.abs(ca.parameters.p - cb.parameters.p) <= eps;
   }
-  return false;
+  throw new Error(`claimsEquivalent: unhandled confidence distribution "${ca.distribution}"`);
 }
 
 /**
@@ -93,6 +93,11 @@ function claimsEquivalent(a: Claim, b: Claim, eps = 1e-9): boolean {
 export function replayStatus(
   claim: Claim,
   adapter: StorageAdapter,
+  /**
+   * Optional catalog for corpus resolution during re-execution.
+   * Re-execution requires a catalog; omitting it will cause the leaf stage to throw,
+   * which surfaces as status "failed" via the catch block.
+   */
   catalog?: Catalog,
 ): ReplayResult {
   const d = claim.provenance?.derivedFrom;
@@ -146,6 +151,10 @@ export function replayStatus(
       evaluationClock: d.evaluationClock,
     });
     const rep = recomputed.claims[recomputed.claims.length - 1];
+    // Empty corpus: the derivation no longer reproduces any claim → definite mismatch
+    if (rep === undefined) {
+      return { status: "mismatch", result: undefined, missingDependencies: [] };
+    }
     return claimsEquivalent(rep, claim)
       ? { status: "exact", result: rep, missingDependencies: [] }
       : { status: "mismatch", result: rep, missingDependencies: [] };

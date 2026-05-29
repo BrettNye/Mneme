@@ -216,7 +216,9 @@ it("returns exact when re-execution reproduces the recorded claim value+confiden
   const expr = leaf("c");
   const qe = serializeExpr(expr);
 
-  // Recorded claim has same value+confidence as inputClaim → claimsEquivalent = true
+  // Recorded claim has same value+confidence as inputClaim → claimsEquivalent = true.
+  // recordedClaim is intentionally NOT in corpus "c" (no _corpusId set) so it doesn't
+  // pollute re-execution: only inputClaim feeds the recomputed corpus.
   const recordedClaim = makeClaim("recorded-exact-1", inputClaim.value, {
     confidence: inputClaim.confidence,
     provenance: {
@@ -344,6 +346,37 @@ it("returns unavailable_models with kind:rule when evaluate throws MissingRule",
   } finally {
     spy.mockRestore();
   }
+});
+
+it("returns mismatch (not failed) when re-execution produces an empty corpus", () => {
+  // A leaf("c") expression over corpus "c" that has no claims → empty corpus
+  // The recorded claim cannot be reproduced: status should be "mismatch", not "failed"
+  const adapter = makeAdapter();
+  const catalog = makeCatalog(["c"]);
+
+  // corpus "c" is intentionally empty — no claims with _corpusId === "c" in adapter
+
+  const expr = leaf("c");
+  const qe = serializeExpr(expr);
+
+  const recordedClaim = makeClaim("recorded-empty-corpus-1", "was here", {
+    provenance: {
+      derivedFrom: {
+        queryExpression: qe,
+        evaluationClock: 7,
+        inputClaims: [],
+        similarityVersions: {},
+        embeddingModelVersions: {},
+        corpusState: 1,
+      },
+    },
+  } as any);
+  // recordedClaim is NOT inserted into the adapter so it doesn't pollute corpus "c" re-execution
+
+  const result = replayStatus(recordedClaim, adapter, catalog);
+  expect(result.status).toBe("mismatch");
+  expect(result.result).toBeUndefined();
+  expect(result.missingDependencies).toHaveLength(0);
 });
 
 it("uses evaluationClock from provenance (not wall-clock) for re-execution", () => {
