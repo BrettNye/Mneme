@@ -1,5 +1,8 @@
 import type { Corpus } from "../algebra/types.js";
-import { evaluate, type EvalContext, type Stage } from "../algebra/expression.js";
+import { evaluate, type EvalContext } from "../algebra/expression.js";
+import { compile } from "../algebra/compile.js";
+import { serializeExpr } from "../algebra/serialize.js";
+import type { ExprNode } from "../algebra/ast.js";
 import type { Claim, CandidateClaim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
 import type { StorageAdapter } from "../adapters/adapter.js";
@@ -23,7 +26,7 @@ export interface DeriveOptions {
 export function deriveClaimFrom(
   adapter: StorageAdapter,
   catalog: Catalog,
-  pipeline: Stage<any, any>[],
+  expr: ExprNode,
   opts: DeriveOptions
 ): CandidateClaim {
   const clock: number = opts.evaluationClock ?? Date.now();
@@ -35,7 +38,7 @@ export function deriveClaimFrom(
     usedEmbeddingModelVersions: {},
   };
 
-  const result = evaluate<Corpus>(pipeline, ctx);
+  const result = evaluate<Corpus>(compile(expr), ctx);
 
   if (result.claims.length === 0) {
     throw new Error("deriveClaimFrom: pipeline produced no claims; cannot derive a representative");
@@ -64,8 +67,8 @@ export function deriveClaimFrom(
     schema: rep.schema ?? "",
     provenance: {
       derivedFrom: {
-        queryExpression: "",
-        corpusState: 0,
+        queryExpression: serializeExpr(expr),
+        corpusState: adapter.maxRecordedSeq(),
         combinationRule: opts.combination,
         inputClaims,
         similarityVersions: { ...ctx.usedSimilarityVersions },
