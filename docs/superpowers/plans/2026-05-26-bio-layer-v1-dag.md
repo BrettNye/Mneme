@@ -62,7 +62,7 @@ id: task-bio-types
 depends_on: []
 files:
   - src/bio/types.ts
-status: pending
+status: done
 ```
 
 Defines every shared bio-layer contract symbol in one module so all consumers depend on a single definer (no drift between parallel implementers). Per spec §3–§8.
@@ -135,7 +135,7 @@ depends_on: [task-bio-types]
 files:
   - src/bio/gateway.ts
   - src/bio/gateway.test.ts
-status: pending
+status: done
 ```
 
 The single write path. `read` passes through to the Mneme adapter; `apply` translates `AppendOp`s into adapter calls with idempotency dedup. Exposes no mutate/delete method, enforcing append-only structurally (spec §1.1, §4). Hosts the centerpiece invariant property test.
@@ -217,7 +217,7 @@ depends_on: [task-bio-types]
 files:
   - src/bio/episode.ts
   - src/bio/episode.test.ts
-status: pending
+status: done
 ```
 
 Manages session/episode boundaries that wave-2 dreaming/consolidation will operate on; in wave 1 it scopes reads and signal attribution. Per spec §5.
@@ -277,7 +277,7 @@ depends_on: [task-bio-types]
 files:
   - src/bio/signals.ts
   - src/bio/signals.test.ts
-status: pending
+status: done
 ```
 
 Buffers usage and outcome signals plus the per-episode surfaced-claim set (the basis for bounded credit assignment), and flushes them per cycle. Implements the read-only `SignalView` contract. Per spec §7.3, §8.1, §10 (buffer cap).
@@ -348,7 +348,7 @@ depends_on: [task-bio-types]
 files:
   - src/bio/policies/suppression.ts
   - src/bio/policies/suppression.test.ts
-status: pending
+status: done
 ```
 
 A pure read-side policy that drops claims whose effective (decayed) confidence is below a floor — without deleting them. Includes a `compose` helper for policy chaining. Per spec §6.
@@ -408,7 +408,7 @@ depends_on: [task-bio-types]
 files:
   - src/bio/processes/evidence-update.ts
   - src/bio/processes/evidence-update.test.ts
-status: pending
+status: done
 ```
 
 The single write-side process realizing both wave-1 write mechanisms as one append-evidence pathway: usage signals add weak positive evidence, outcome signals add stronger directed evidence (positive on success, disbelief on failure) to the **surfaced** claim set only. Emits one batched `supersede` per affected claim with `derivedFrom` provenance. Per spec §7.
@@ -489,7 +489,7 @@ depends_on: [task-bio-types, task-bio-gateway, task-bio-signals]
 files:
   - src/bio/cycle.ts
   - src/bio/cycle.test.ts
-status: pending
+status: done
 ```
 
 Runs an ordered list of injected processes, collects their `AppendOp`s, applies them as one atomic batch through the gateway, then flushes consumed signals. Single-flight: refuses to run concurrently. Per spec §8.2, §10.
@@ -557,7 +557,7 @@ depends_on: [task-bio-gateway, task-bio-episode, task-bio-signals, task-bio-cycl
 files:
   - src/bio/bio-memory.ts
   - src/bio/bio-memory.test.ts
-status: pending
+status: done
 ```
 
 The library entry point. Wires gateway + episode registry + signal buffer + cycle (with the evidence-update process) + suppression. `recall` reads, records the surfaced set, and applies policies; `recordUsage` buffers; `recordOutcome` buffers and fires an inline scoped cycle. Per spec §8.1.
@@ -627,7 +627,7 @@ depends_on: [task-bio-facade]
 files:
   - src/bio/runner.ts
   - src/bio/runner.test.ts
-status: pending
+status: done
 ```
 
 A logic-less scheduler that drives `BioMemory.runCycle` on an optional interval and on explicit `runNow`. Owns no cognition. Per spec §9 (v1: one trigger + run-now; no daemon/idle/cron/event bus).
@@ -678,7 +678,7 @@ id: task-bio-export
 depends_on: [task-bio-facade, task-bio-runner]
 files:
   - src/index.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 

@@ -52,7 +52,7 @@ files:
   - src/adapters/adapter.ts
   - src/adapters/sqlite.ts
   - src/adapters/sqlite.test.ts
-status: pending
+status: done
 ```
 
 Add an optional `runIds` filter to the query plan so claims can be fetched by their `provenance.runId` efficiently (indexed), not by an O(corpus) in-memory scan. Additive and optional — existing consumers of `ExecutionPlan` are unaffected.
@@ -101,7 +101,7 @@ depends_on: []
 files:
   - src/bio/processes/dreaming-types.ts
   - src/bio/processes/dreaming-types.test.ts
-status: pending
+status: done
 ```
 
 The shared contract for Dreaming: the injected `DreamFn` port, the structured I/O types, and the bio-owned constants/helpers (`DREAM_WORKFLOW`, `MAX_DREAM_DEPTH`, `DREAM_PRIOR`, depth tag read/write, unvalidated-dream predicate) that `select` and `admit` both consume. Per spec §4/§5/§6.
@@ -162,7 +162,7 @@ depends_on: [task-dreaming-contract, task-runid-filter]
 files:
   - src/bio/processes/dreaming-select.ts
   - src/bio/processes/dreaming-select.test.ts
-status: pending
+status: done
 ```
 
 Read-side, safety-critical: build the collapse-safe, bounded input set bio hands the model. Gather the episode's produced claims by runId, drop unvalidated dreams (primary collapse guard), drop over-depth claims (backstop), and token-bound to top-N. Per spec §5.
@@ -227,7 +227,7 @@ depends_on: [task-dreaming-contract]
 files:
   - src/bio/processes/dreaming-admit.ts
   - src/bio/processes/dreaming-admit.test.ts
-status: pending
+status: done
 ```
 
 Write-side: turn validated `ProposedInsight`s into marked, low-trust `derive` AppendOps. Validate `cites ⊆ selected` and the key; compute depth; build a `candidate` / `source:"llm"` / `workflow:"dream"` claim with `DREAM_PRIOR`, `derivedFrom` provenance, evidence claim-refs, and a depth tag; `validateScope` if a schema is supplied. Per spec §6.
@@ -306,7 +306,7 @@ depends_on: [task-dreaming-select, task-dreaming-admit]
 files:
   - src/bio/processes/dreaming.ts
   - src/bio/processes/dreaming.test.ts
-status: pending
+status: done
 ```
 
 The async orchestrator: select → await `DreamFn` → admit → `gateway.apply`, fail-safe and single-flight per episode, returning a `DreamReport`. Hosts the wave-2 centerpiece: the collapse property test. Per spec §3/§7/§9.
@@ -380,7 +380,7 @@ depends_on: [task-dreaming-pass]
 files:
   - src/bio/bio-memory.ts
   - src/bio/bio-memory.test.ts
-status: pending
+status: done
 ```
 
 Wire Dreaming into `BioMemory`: accept an optional `dreamFn` (and dream opts) at construction, and add `async dream(episode, { modelVersion })` delegating to the dream pass. Additive to the wave-1 facade; absent `dreamFn` makes `dream()` a no-op error. Per spec §3/§11.
@@ -428,7 +428,7 @@ depends_on: [task-dreaming-facade]
 files:
   - src/bio/runner.ts
   - src/bio/runner.test.ts
-status: pending
+status: done
 ```
 
 Add an optional `startDreaming({ intervalMs })` to the runner that periodically invokes `memory.dream(episode, …)` for sleep-time scheduling. Logic-less (scheduling only), mirroring the wave-1 runner; the library works without it. Per spec §3/§11.
@@ -483,7 +483,7 @@ id: task-dreaming-export
 depends_on: [task-dreaming-facade, task-dreaming-runner]
 files:
   - src/index.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 

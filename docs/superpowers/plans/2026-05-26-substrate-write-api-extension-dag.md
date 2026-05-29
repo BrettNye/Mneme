@@ -39,7 +39,7 @@ files:
   - src/adapters/sqlite.ts
   - src/adapters/sqlite.test.ts
   - src/adapters/adapter.test.ts
-status: pending
+status: done
 ```
 
 Add the four write primitives the shared write core needs — `transaction`, `maxRecordedSeq`, `appendEvent`, `readEvents` — plus the `ClaimEvent` type and an append-only `claim_events` table. Per design spec §3/§7.
@@ -113,7 +113,7 @@ depends_on: [task-adapter-write-prims]
 files:
   - src/write/pipeline.ts
   - src/write/pipeline.test.ts
-status: pending
+status: done
 ```
 
 Refactor `Promoter` onto a shared atomic `write` core and add `supersede`/`promote`. The core wraps each op in `adapter.transaction`, derives `recordedSeq` from `maxRecordedSeq()+1`, appends a `ClaimEvent`, and records idempotency — all inside the transaction. Per design spec §3/§4/§6/§7.
@@ -172,7 +172,7 @@ depends_on: [task-promoter-write]
 files:
   - src/mneme.ts
   - src/mneme.test.ts
-status: pending
+status: done
 ```
 
 Expose `supersede`/`promote` on the `Mneme` interface, delegating to the cached `promoterFor(corpusId)`, and pass `corpusId` into the `Promoter` constructor. Additive — `commit`/`query`/`createCorpus` unchanged. Per design spec §5.

@@ -46,7 +46,7 @@ depends_on: []
 files:
   - src/mneme.ts
   - src/mneme.test.ts
-status: pending
+status: done
 ```
 
 Add thin, existence-checked `read`/`readByIds` to `Mneme` so the Mneme-backed gateway can read via `ExecutionPlan` (incl. the `runIds` filter) without touching the adapter directly. Per spec §4.
@@ -89,7 +89,7 @@ depends_on: []
 files:
   - src/bio/test-support.ts
   - src/bio/test-support.test.ts
-status: pending
+status: done
 ```
 
 A single shared helper that builds a `Mneme` with a permissive registered corpus, so the gateway/facade/dreaming tests construct their Mneme-backed dependencies one DRY way instead of duplicating `createMneme`+`createCorpus`+schema setup. Owns the construction the cascade forces.
@@ -143,7 +143,7 @@ files:
   - src/bio/types.ts
   - src/bio/gateway.ts
   - src/bio/gateway.test.ts
-status: pending
+status: done
 ```
 
 Rewrite `createMnemeGateway` to be Mneme-backed (`createMnemeGateway(mneme, corpusId)`), mapping `AppendOp` → `mneme.commit/supersede/promote`; remove `materialize` + the gateway's own idempotency; add an optional `rejected` channel to `AppendResult`. Interface unchanged. Per spec §3/§5/§6.
@@ -217,7 +217,7 @@ depends_on: [task-bio-gateway, task-bio-test-support]
 files:
   - src/bio/bio-memory.ts
   - src/bio/bio-memory.test.ts
-status: pending
+status: done
 ```
 
 Shift `createBioMemory` construction to `{ mneme, corpusId, dreamFn?, dream? }`, building the Mneme-backed gateway internally. The facade's `recall`/`record*`/`runCycle`/`dream` logic is unchanged. Per spec §7.
@@ -263,7 +263,7 @@ id: task-bio-dreaming-test-fix
 depends_on: [task-bio-gateway, task-bio-test-support]
 files:
   - src/bio/processes/dreaming.test.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
