@@ -451,3 +451,126 @@ it("startConsolidating with a non-positive interval is a no-op", () => {
     vi.useRealTimers();
   }
 });
+
+// ---- startSummarizing tests ----
+
+const makeSummarizeMemory = () => {
+  let summarizeCalls = 0;
+  const summarizeEpisodes: string[] = [];
+  const summarizeVersions: string[] = [];
+  return {
+    runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+    summarize: async (episode: string, run: { modelVersion: string }): Promise<unknown> => {
+      summarizeCalls++;
+      summarizeEpisodes.push(episode);
+      summarizeVersions.push(run.modelVersion);
+      return { proposed: 0, admitted: 0, dropped: [], errors: [] };
+    },
+    get summarizeCalls() { return summarizeCalls; },
+    get summarizeEpisodes() { return summarizeEpisodes; },
+    get summarizeVersions() { return summarizeVersions; },
+  };
+};
+
+it("startSummarizing calls memory.summarize per tick and stop() halts it", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeSummarizeMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.startSummarizing({ intervalMs: 200, episode: "ep-1", modelVersion: "gpt-4" });
+    expect(memory.summarizeCalls).toBe(0);
+    vi.advanceTimersByTime(200);
+    expect(memory.summarizeCalls).toBe(1);
+    vi.advanceTimersByTime(200);
+    expect(memory.summarizeCalls).toBe(2);
+    runner.stop();
+    vi.advanceTimersByTime(1_000);
+    expect(memory.summarizeCalls).toBe(2); // no more calls after stop
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startSummarizing passes the correct episode and modelVersion to memory.summarize", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeSummarizeMemory();
+    const runner = createRunner(memory, "ep-main");
+    runner.startSummarizing({ intervalMs: 100, episode: "ep-summarize", modelVersion: "claude-3" });
+    vi.advanceTimersByTime(100);
+    expect(memory.summarizeEpisodes).toEqual(["ep-summarize"]);
+    expect(memory.summarizeVersions).toEqual(["claude-3"]);
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("double startSummarizing does not double-fire — old summarize interval is cleared", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeSummarizeMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.startSummarizing({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" });
+    runner.startSummarizing({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" }); // should clear first
+    vi.advanceTimersByTime(100);
+    expect(memory.summarizeCalls).toBe(1); // only one interval active
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startSummarizing with intervalMs<=0 is a no-op — nothing scheduled", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = makeSummarizeMemory();
+    const runner = createRunner(memory, "ep-1");
+    runner.startSummarizing({ intervalMs: 0, episode: "ep-1", modelVersion: "gpt-4" });
+    vi.advanceTimersByTime(10_000);
+    expect(memory.summarizeCalls).toBe(0);
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startSummarizing on memory without summarize method is a no-op — throws nothing, schedules nothing", () => {
+  vi.useFakeTimers();
+  try {
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+    };
+    const runner = createRunner(memory, "ep-1");
+    expect(() => {
+      runner.startSummarizing({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" });
+      vi.advanceTimersByTime(1_000);
+    }).not.toThrow();
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("startSummarizing swallows rejected summarize promise — interval survives the rejection", () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const memory = {
+      runCycle: (_episode: string): CycleReport => ({ opsApplied: 0, claimsSuperseded: 0, errors: [] }),
+      summarize: async (_episode: string, _run: { modelVersion: string }): Promise<unknown> => {
+        calls++;
+        return Promise.reject(new Error("summarize failure"));
+      },
+    };
+    const runner = createRunner(memory, "ep-1");
+    runner.startSummarizing({ intervalMs: 100, episode: "ep-1", modelVersion: "gpt-4" });
+    vi.advanceTimersByTime(100);
+    expect(calls).toBe(1);
+    vi.advanceTimersByTime(100); // interval should survive the rejection
+    expect(calls).toBe(2); // called again, proving interval was not killed
+    runner.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});

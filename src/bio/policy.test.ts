@@ -31,3 +31,10 @@ it("DEFAULT_BIO_POLICY has the expected pre-refactor constant values", () => {
   expect(DEFAULT_BIO_POLICY.consolidation.foldRule).toBe("rule_weighted_avg");
   expect(DEFAULT_BIO_POLICY.consolidation.foldThreshold).toBe(3);
 });
+
+it("resolves summarize defaults and merges a partial prior", () => {
+  expect(resolvePolicy().summarize).toEqual(DEFAULT_BIO_POLICY.summarize);
+  const r = resolvePolicy({ summarize: { prior: { alpha: 5 } } });
+  expect(r.summarize.prior).toEqual({ alpha: 5, beta: 3 }); // beta kept from default
+  expect(r.summarize.maxInputClaims).toBe(200);             // sibling kept
+});

@@ -202,6 +202,50 @@ it("policy.dreaming is accepted at construction (no dream field on opts)", () =>
   expect(bio).toBeDefined();
 });
 
+// ─── Summarize facade ────────────────────────────────────────────────────────
+
+it("summarize(unknownEpisode) returns an unknown-episode error report", async () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const bio = createBioMemory({ mneme, corpusId, summarizeFn: async () => [] });
+  expect((await bio.summarize("nope", { modelVersion: "m1" })).errors).toContain("unknown episode");
+});
+
+it("summarize() with no summarizeFn configured returns a clear error and applies nothing", async () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const bio = createBioMemory({ mneme, corpusId });
+  const ep = bio.openEpisode("s1");
+  const report = await bio.summarize(ep.id, { modelVersion: "m1" });
+  expect(report.errors).toContain("no summarizeFn configured");
+  expect(report.proposed).toBe(0);
+  expect(report.admitted).toBe(0);
+});
+
+it("getDigest(unknownEpisode) returns empty array", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const bio = createBioMemory({ mneme, corpusId, summarizeFn: async () => [] });
+  expect(bio.getDigest("nope")).toEqual([]);
+});
+
+it("getDigest(unknownEpisode) returns empty array when no summarizeFn", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const bio = createBioMemory({ mneme, corpusId });
+  expect(bio.getDigest("nope")).toEqual([]);
+});
+
+it("summarize() with a fake summarizeFn runs end-to-end without errors", async () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const bio = createBioMemory({ mneme, corpusId, summarizeFn: async () => [] });
+  const ep = bio.openEpisode("summarize-test");
+  const report = await bio.summarize(ep.id, { modelVersion: "test-model" });
+  expect(report.errors).toHaveLength(0);
+});
+
+it("policy.summarize is accepted at construction and threads into the pass", () => {
+  const { mneme, corpusId } = makeBioMneme();
+  const bio = createBioMemory({ mneme, corpusId, policy: { summarize: { maxInputClaims: 50 } } });
+  expect(bio).toBeDefined();
+});
+
 it("policy.evidence outcomeWeight flows into cycle: higher weight yields larger alpha bump", () => {
   // Helper to make a minimal CandidateClaim with scalar confidence
   function makeClaim(): CandidateClaim {
