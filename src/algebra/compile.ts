@@ -67,10 +67,15 @@ export function compile(node: ExprNode): Stage<any, any>[] {
         // Clock-pinning: read ctx.evaluationClock at evaluate time, not wall-clock
         return [
           ...compile(node.src),
-          (c: Corpus, ctx: EvalContext) => tauKnown(ctx.evaluationClock!)(c),
+          (c: Corpus, ctx: EvalContext) => {
+            const clk = ctx.evaluationClock;
+            if (clk === undefined) throw new Error("tau mode:now requires ctx.evaluationClock");
+            return tauKnown(clk)(c);
+          },
         ];
       }
-      const t = node.t!;
+      const t = node.t;
+      if (t === undefined) throw new Error(`tau mode:${node.mode} requires t`);
       const fn =
         node.mode === "valid"
           ? tauValid(t)
@@ -84,12 +89,21 @@ export function compile(node: ExprNode): Stage<any, any>[] {
       // Clock-pinning: read ctx.evaluationClock at evaluate time, not compile time
       return [
         ...compile(node.src),
-        (c: Corpus, ctx: EvalContext) => delta(node.policy, ctx.evaluationClock!)(c),
+        (c: Corpus, ctx: EvalContext) => {
+          const clk = ctx.evaluationClock;
+          if (clk === undefined) throw new Error("delta requires ctx.evaluationClock");
+          return delta(node.policy, clk)(c);
+        },
       ];
 
     case "combine":
     case "resolve":
     case "aggregate":
       throw new UnsupportedExprOp(node.op);
+
+    default: {
+      const _exhaustive: never = node;
+      throw new UnsupportedExprOp((node as { op: string }).op);
+    }
   }
 }

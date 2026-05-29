@@ -257,9 +257,27 @@ it("tau mode:now with evaluationClock before recorded excludes the claim", () =>
   expect(out.claims).toHaveLength(0);
 });
 
+it("tau mode:now throws a descriptive Error when evaluated with ctx that has no evaluationClock", () => {
+  const claim = makeClaim("s", "v", 1000);
+  claim.valid = { from: 0, to: 10000 };
+
+  const node = tau("now", leaf("c"));
+  const stages = compile(node);
+
+  const ctxNoClk: EvalContext = {
+    adapter: { query: () => [claim] } as any,
+    catalog: { getCorpus: () => ({}) } as any,
+    // evaluationClock deliberately absent
+  };
+
+  expect(() => evaluate<Corpus>(stages, ctxNoClk)).toThrow(
+    "tau mode:now requires ctx.evaluationClock"
+  );
+});
+
 // ---------- delta ----------
 
-it("delta uses ctx.evaluationClock at evaluate time (not compile time)", () => {
+it("delta evaluation is idempotent: same evaluationClock produces same effective confidence", () => {
   const recorded = 1000;
   const claim = makeClaim("s", "v", recorded);
   claim.confidence = { distribution: "scalar", parameters: { p: 0.9 }, raw: 0.9 };
@@ -288,6 +306,23 @@ it("delta uses ctx.evaluationClock at evaluate time (not compile time)", () => {
 
   // Same evaluationClock => same effective confidence
   expect(out1.claims[0].confidence.effective).toBe(out2.claims[0].confidence.effective);
+});
+
+it("delta throws a descriptive Error when evaluated with ctx that has no evaluationClock", () => {
+  const claim = makeClaim("s", "v", 1000);
+  const policy: import("../catalog/corpus.js").DecayPolicy = { kind: "exponential", halfLifeDays: 1 };
+  const node = delta(policy, leaf("c"));
+  const stages = compile(node);
+
+  const ctxNoClk: EvalContext = {
+    adapter: { query: () => [claim] } as any,
+    catalog: { getCorpus: () => ({}) } as any,
+    // evaluationClock deliberately absent
+  };
+
+  expect(() => evaluate<Corpus>(stages, ctxNoClk)).toThrow(
+    "delta requires ctx.evaluationClock"
+  );
 });
 
 it("delta with different evaluationClock values produces different decay results", () => {
@@ -407,19 +442,18 @@ it("UnsupportedExprOp carries the offending op field", () => {
 
 // ---------- compile does not read EvalContext at compile time ----------
 
-it("compile does not invoke the ctx object during compilation", () => {
-  // If compile reads ctx, this spy would be called. It should never be called.
-  const ctxSpy = new Proxy({} as EvalContext, {
-    get(_target, prop) {
-      throw new Error(`compile must not access ctx.${String(prop)} at compile time`);
-    },
-  });
-
-  // Should not throw — compile reads no context
+it("compile returns a Stage array without accessing EvalContext during the call", () => {
+  // compile() itself must be a pure structural transform — no ctx access at call time.
+  // The stages it returns DO access ctx at evaluate time (tested separately above).
   expect(() => compile(sigma({ op: "subjectEq", value: "x" }, leaf("c")))).not.toThrow();
   expect(() => compile(delta({ kind: "none" }, leaf("c")))).not.toThrow();
   expect(() => compile(tau("now", leaf("c")))).not.toThrow();
 
-  // ctxSpy is unused — its existence proves the intent
-  void ctxSpy;
+  // All three return Stage arrays (not undefined/errors), confirming compile is pure.
+  const s1 = compile(sigma({ op: "subjectEq", value: "x" }, leaf("c")));
+  const s2 = compile(delta({ kind: "none" }, leaf("c")));
+  const s3 = compile(tau("now", leaf("c")));
+  expect(s1).toHaveLength(2);
+  expect(s2).toHaveLength(2);
+  expect(s3).toHaveLength(2);
 });
