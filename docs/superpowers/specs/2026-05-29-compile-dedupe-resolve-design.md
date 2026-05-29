@@ -13,7 +13,7 @@ currently rejects with `UnsupportedExprOp`. Today `combine`, `resolve`, and `agg
 throw. This slice implements the two that are genuine, pipeline-fitting spec operators and
 formalizes the third as an intentional boundary:
 
-- **`dedupe`** (`⊕_dedupe`, spec §4.9) — implement.
+- **`combine`** (implemented as `⊕_dedupe`, spec §4.9) — implement (compile-only).
 - **`resolve`** (`⊥` resolution, spec §4.8) — implement.
 - **`aggregate`** (`α`, spec §4.13) — keep serializable; `compile` throws a documented error.
 
@@ -34,20 +34,23 @@ formalizes the third as an intentional boundary:
   produces a claim, so no derived claim ever carries an aggregate query — leaving `aggregate`
   non-compilable-for-replay is spec-consistent.
 
-## 3. `dedupe` (rename of `combine`) — implement
+## 3. `combine` — implement as `⊕_dedupe` (no rename)
 
-`⊕_dedupe` is rule-parameterized and `Corpus → Corpus`. The current `combine` node
-(`{ op: "combine"; rule; params?; src }`) already carries exactly the right fields; it is
-renamed to `dedupe` for spec fidelity.
+`⊕_dedupe` is rule-parameterized and `Corpus → Corpus`. The existing `combine` node
+(`{ op: "combine"; rule; params?; src }`) already carries exactly the right fields and maps
+directly to `oplusDedupe(ruleId, params?)`. **We keep the op named `combine`** and document
+`combine ≡ ⊕_dedupe`.
 
-- **AST (`ast.ts`):** rename the variant and constructor `combine` → `dedupe`:
-  `{ op: "dedupe"; rule: string; params?: Value; src: ExprNode }`, constructor
-  `dedupe(rule, src, params?)`.
-- **compile (`compile.ts`):** `case "dedupe": return [...compile(node.src), liftOp(oplusDedupe(node.rule, node.params))];`
-- **serialize (`serialize.ts`):** replace `"combine"` with `"dedupe"` in `KNOWN_OPS` and
-  `REQUIRED_FIELDS` (`["rule", "src"]`).
-- **index (`index.ts`):** rename the exported constructor `combine` → `dedupe`. (Breaking
-  change to an unused export — no consumers exist.)
+Rationale for *not* renaming to `dedupe`: a rename would cascade across `ast.ts`, `compile.ts`,
+`serialize.ts`, and `index.ts` simultaneously (the op-string is referenced in all four), which
+breaks per-task-green commits and file-disjoint parallelism, and is a breaking change to the
+public `combine` export — all for a purely cosmetic spec-name match. Keeping the name makes
+this a **single-line `compile.ts` change** with no `ast`/`serialize`/`index` churn.
+
+- **compile (`compile.ts`):** `case "combine": return [...compile(node.src), liftOp(oplusDedupe(node.rule, node.params))];`
+- **ast (`ast.ts`):** unchanged for combine — add a doc comment noting `combine ≡ ⊕_dedupe`.
+- **serialize (`serialize.ts`):** unchanged for combine (already in `KNOWN_OPS`/`REQUIRED_FIELDS`).
+- **index (`index.ts`):** unchanged — `combine` stays exported.
 
 `oplusDedupe` rejects deprecated rules internally (`assertNotDeprecatedRule`), so a bad rule
 throws at evaluate time → mapped to `failed` by replay (unchanged behavior).
@@ -104,27 +107,26 @@ case "aggregate":
 
 | File | Change |
 |------|--------|
-| `src/algebra/ast.ts` | rename `combine`→`dedupe`; add `threshold` to `resolve` (+ `DEFAULT_RESOLVE_THRESHOLD`). |
+| `src/algebra/ast.ts` | add `threshold: number` to the `resolve` node (+ `DEFAULT_RESOLVE_THRESHOLD`); doc comment `combine ≡ ⊕_dedupe`. (No combine rename.) |
 | `src/algebra/registries.ts` | `resolutionRegistry` returns `{ fn, input }`; declare input-kind for all six policies. |
-| `src/algebra/compile.ts` | add `dedupe` + `resolve` arms; `aggregate` documented throw; keep `never` guard. |
-| `src/algebra/serialize.ts` | `KNOWN_OPS`/`REQUIRED_FIELDS`: `combine`→`dedupe`, add `resolve.threshold`. |
-| `src/index.ts` | rename exported `combine`→`dedupe`. |
+| `src/algebra/compile.ts` | implement `combine` arm (→ `oplusDedupe`) + `resolve` arm; `aggregate` documented throw; keep `never` guard. |
+| `src/algebra/serialize.ts` | `REQUIRED_FIELDS["resolve"]` gains `threshold`. (combine unchanged.) |
 | test files for each of the above. |
+
+`src/index.ts` is **not** modified (`combine` stays exported).
 
 ## 7. Testing
 
 - `registries.test.ts`: `resolutionRegistry` returns `{ fn, input }` with the correct `input`
   for each of the six policies; unknown name still throws `MissingRule`.
-- `compile.test.ts`: `dedupe` compiles to `liftOp(oplusDedupe(...))` and evaluates equal to a
+- `compile.test.ts`: `combine` compiles to `liftOp(oplusDedupe(...))` and evaluates equal to a
   hand-built dedupe pipeline; each `resolve` policy compiles, uses `pairsOf` vs `clustersOf` per
   its kind, threads `threshold`, and evaluates equal to the hand-built resolution; `aggregate`
-  throws `UnsupportedExprOp`; `combine` op no longer exists (the union has no `combine`).
-- `serialize.test.ts`: `dedupe` and `resolve` (with `threshold`) round-trip; `aggregate` still
-  round-trips; an old `{op:"combine"}` string now fails `parseExpr` (unknown op).
+  throws `UnsupportedExprOp`.
+- `serialize.test.ts`: `resolve` (with `threshold`) round-trips; `combine` and `aggregate` still
+  round-trip.
 - `mneme.test.ts` (stretch, only if the empirical audit confirms it): derive a claim via a
   `resolve(synthesizeBelief)` query and replay it to `exact`.
-- `index.test.ts`: `dedupe` is exported as a value; `combine` is not.
-
 Real in-memory adapter, no mocks. Full suite green; `tsc --noEmit` clean.
 
 **Pre-implementation audit.** Before writing the implementation plan, empirically verify
@@ -136,13 +138,13 @@ any assumption fails.
 
 ## 8. Acceptance criteria
 
-- `compile` handles `dedupe` (→ `oplusDedupe`) and all six `resolve` policies (correct
+- `compile` handles `combine` (→ `oplusDedupe`) and all six `resolve` policies (correct
   `pairs`/`clusters` input, `threshold` threaded), evaluating identically to hand-built
   pipelines.
 - `aggregate` throws a documented `UnsupportedExprOp`; serialization of `aggregate` still
   round-trips.
-- The `resolve` node records `threshold` (always serialized); `dedupe` replaces `combine`
-  across ast/serialize/compile/index.
+- The `resolve` node records `threshold` (always serialized). `combine` keeps its name and is
+  documented as `⊕_dedupe`; no rename, no `index.ts` change.
 - `resolutionRegistry` exposes per-policy input-kind metadata.
 - Full suite green; `tsc --noEmit` clean.
 
