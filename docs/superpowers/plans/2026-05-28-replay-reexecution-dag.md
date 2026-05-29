@@ -5,13 +5,13 @@ created: 2026-05-28
 
 ```mermaid
 flowchart TD
-    task-ast["task-ast: ExprNode ADT<br/>files: src/algebra/ast.ts +1 more"]
-    task-registries["task-registries: rule registries<br/>files: src/algebra/registries.ts +1 more"]
-    task-serialize["task-serialize: serialize/parse<br/>files: src/algebra/serialize.ts +1 more"]
-    task-compile["task-compile: compile to Stage[]<br/>files: src/algebra/compile.ts +1 more"]
-    task-derive["task-derive: record AST in derive<br/>files: src/write/derive.ts +1 more"]
-    task-replay["task-replay: re-execute + mismatch<br/>files: src/write/replay.ts +1 more"]
-    task-export["task-export: barrel exports<br/>files: src/index.ts +1 more"]
+    task-ast["task-ast: ExprNode ADT<br/>files: src/algebra/ast.ts +1 more"]:::done
+    task-registries["task-registries: rule registries<br/>files: src/algebra/registries.ts +1 more"]:::done
+    task-serialize["task-serialize: serialize/parse<br/>files: src/algebra/serialize.ts +1 more"]:::done
+    task-compile["task-compile: compile to Stage[]<br/>files: src/algebra/compile.ts +1 more"]:::done
+    task-derive["task-derive: record AST in derive<br/>files: src/write/derive.ts +1 more"]:::done
+    task-replay["task-replay: re-execute + mismatch<br/>files: src/write/replay.ts +1 more"]:::done
+    task-export["task-export: barrel exports<br/>files: src/index.ts +1 more"]:::done
 
     task-ast --> task-serialize
     task-ast --> task-compile
@@ -64,7 +64,7 @@ depends_on: []
 files:
   - src/algebra/ast.ts
   - src/algebra/ast.test.ts
-status: pending
+status: done
 ```
 
 The serializable algebra AST: a discriminated union `ExprNode` covering the full operator
@@ -131,7 +131,7 @@ depends_on: []
 files:
   - src/algebra/registries.ts
   - src/algebra/registries.test.ts
-status: pending
+status: done
 ```
 
 Name→function registries for the operator families currently exposed only as bare consts, so
@@ -197,7 +197,7 @@ depends_on: [task-ast]
 files:
   - src/algebra/serialize.ts
   - src/algebra/serialize.test.ts
-status: pending
+status: done
 ```
 
 Canonical serialization for `ExprNode`: `serializeExpr` produces a stable JSON string
@@ -254,59 +254,103 @@ depends_on: [task-ast, task-registries]
 files:
   - src/algebra/compile.ts
   - src/algebra/compile.test.ts
-status: pending
+status: done
 ```
 
 `compile(node): Stage[]` — the interpreter that walks the `src` chain to a flat, leaf-first
 stage list, mapping each `ExprNode` to its existing operator closure (design §6). Pure
 structural transform; no `EvalContext` at compile time (the context is threaded later by the
-unchanged `evaluate`). Registry-name params are resolved here, throwing `MissingRule` on
-unknown name.
+unchanged `evaluate`).
+
+**Scope (compile v1).** Nine variants compile to existing operators:
+`leaf, sigma, tau, delta, pi, rho, gamma, kappa, synthesize`. The remaining three —
+`combine, resolve, aggregate` — do not map cleanly onto the current operator surface
+(`combine` has no public bare-rule operator; `resolve` policies need clustering + have
+heterogeneous arities; `aggregate` returns `AggregateResult`, not `Corpus`). compile v1
+throws a typed `UnsupportedExprOp` for those three. Serialization (`task-serialize`) already
+covers all 12, so provenance is never lossy; enriching the AST so the three compile too is a
+tracked follow-up slice.
+
+**Clock-pinning (load-bearing).** `delta` and `tau` with `mode:"now"` MUST read
+`ctx.evaluationClock` at evaluate time (not wall-clock), so replay re-execution is
+deterministic. Their compiled stages are ctx-aware closures, not `liftOp` wrappers.
 
 ## Implementation
 
 ```typescript
 // src/algebra/compile.ts
 import type { ExprNode } from "./ast.js";
-import { type Stage, leaf as leafStage, liftOp, gammaStage } from "./expression.js";
+import { type Stage, type EvalContext, leaf as leafStage, liftOp, gammaStage } from "./expression.js";
 import { sigma } from "./selection.js";
 import { rho } from "./similarity.js";
-import { resolutionRegistry } from "./registries.js";
+import { tauValid, tauRecorded, tauKnown } from "./temporal.js";
+import { delta } from "./decay.js";
+import { pi } from "./projection.js";
+import { kappa } from "./composition.js";
+import { oplusSynthesizeAs } from "./combination.js";
+
+export class UnsupportedExprOp extends Error {
+  constructor(public readonly op: string) { super(`compile v1 does not support op: ${op}`); }
+}
 
 export function compile(node: ExprNode): Stage<any, any>[] {
   switch (node.op) {
     case "leaf":  return [leafStage(node.corpusId)];
     case "sigma": return [...compile(node.src), liftOp(sigma(node.pred))];
+    case "pi":    return [...compile(node.src), liftOp(pi(node.fields))];
     case "rho":   return [...compile(node.src), liftOp(rho(node.fn, node.query))];
     case "gamma": return [...compile(node.src), gammaStage(node.depth)];
-    case "resolve": {
-      const policy = resolutionRegistry(node.policy);
-      return [...compile(node.src), liftOp((c: any) => (policy as any)(/* clusters/rule per resolver arity */)(c))];
+    case "kappa": return [...compile(node.src), liftOp(kappa(node.fmt, node.maxTokens, node.dedupThreshold))];
+    case "synthesize":
+      return [...compile(node.src), liftOp(oplusSynthesizeAs(node.subject, node.key, node.rule, node.params))];
+    case "tau": {
+      if (node.mode === "now")
+        return [...compile(node.src), (c: any, ctx: EvalContext) => tauKnown(ctx.evaluationClock!)(c)];
+      const t = node.t!;
+      const fn = node.mode === "valid" ? tauValid(t) : node.mode === "recorded" ? tauRecorded(t) : tauKnown(t);
+      return [...compile(node.src), liftOp(fn)];
     }
-    // ...one arm per variant: tau, delta, pi, kappa, combine, synthesize, aggregate
+    case "delta":
+      // ctx-aware: pin nowMs to the evaluation clock so replay is deterministic
+      return [...compile(node.src), (c: any, ctx: EvalContext) => delta(node.policy, ctx.evaluationClock!)(c)];
+    case "combine":
+    case "resolve":
+    case "aggregate":
+      throw new UnsupportedExprOp(node.op);
   }
 }
 ```
 
 ```typescript
 // src/algebra/compile.test.ts
-import { compile } from "./compile.js";
-import { sigma, leaf } from "./ast.js";
-import { MissingRule } from "./registries.js";
+import { compile, UnsupportedExprOp } from "./compile.js";
+import { evaluate } from "./expression.js";
+import { sigma, leaf, delta } from "./ast.js";
 
-it("flattens leaf-first and resolves registry names", () => {
+it("flattens leaf-first and the compiled pipeline matches the hand-built one", () => {
   const stages = compile(sigma({ op: "keyEq", value: "k" }, leaf("c")));
   expect(stages).toHaveLength(2);
-  expect(() => compile({ op: "resolve", policy: "nope", src: leaf("c") })).toThrow(MissingRule);
+  // evaluate the compiled pipeline against a seeded adapter/catalog and compare to the
+  // result of running the equivalent hand-built [leafStage, liftOp(sigma(pred))] pipeline.
+});
+
+it("pins delta to ctx.evaluationClock (deterministic across wall-clock)", () => {
+  // compile a delta node, evaluate twice with the same evaluationClock, assert identical output.
+});
+
+it("throws UnsupportedExprOp for combine/resolve/aggregate", () => {
+  expect(() => compile({ op: "combine", rule: "r", src: leaf("c") })).toThrow(UnsupportedExprOp);
+  expect(() => compile({ op: "resolve", policy: "resolveKeepBoth", src: leaf("c") })).toThrow(UnsupportedExprOp);
 });
 ```
 
 ## Acceptance criteria
 
-- Each of the 12 node variants compiles to the expected stage(s), in leaf-first order.
-- A compiled pipeline evaluates (via the existing `evaluate`) to the same result as the hand-built closure pipeline for at least one representative chain (e.g. σ→δ→resolve).
-- Unknown registry name (`resolve`/`aggregate` with a bad rule) throws `MissingRule`.
-- `compile` reads no `EvalContext`; the clock is still applied at evaluate time.
+- The nine supported variants (`leaf, sigma, tau, delta, pi, rho, gamma, kappa, synthesize`) each compile to the expected stage(s), leaf-first.
+- `combine`, `resolve`, and `aggregate` each throw `UnsupportedExprOp` carrying the offending `op`.
+- A compiled pipeline evaluates (via the existing `evaluate`) to the same result as the equivalent hand-built closure pipeline for at least one representative Corpus→Corpus chain (e.g. σ→δ→π over a seeded corpus).
+- `delta` and `tau` `mode:"now"` use `ctx.evaluationClock` at evaluate time: evaluating the same compiled pipeline twice with the same `evaluationClock` yields identical output regardless of wall-clock.
+- `compile` itself reads no `EvalContext` (it only constructs stages); the clock is applied when `evaluate` runs the stages.
 
 Test file: `src/algebra/compile.test.ts`.
 
@@ -318,7 +362,7 @@ depends_on: [task-compile, task-serialize]
 files:
   - src/write/derive.ts
   - src/write/derive.test.ts
-status: pending
+status: done
 ```
 
 Change `deriveClaimFrom` to take an `ExprNode` instead of a `Stage[]`, compile it internally,
@@ -376,7 +420,7 @@ depends_on: [task-compile, task-serialize]
 files:
   - src/write/replay.ts
   - src/write/replay.test.ts
-status: pending
+status: done
 ```
 
 Extend `replayStatus` to actually re-execute: parse `queryExpression`, compile, evaluate under
@@ -459,7 +503,7 @@ depends_on: [task-ast, task-serialize, task-replay]
 files:
   - src/index.ts
   - src/index.test.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
