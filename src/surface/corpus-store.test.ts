@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadCorpora, saveCorpora } from "./corpus-store.js";
@@ -24,7 +24,7 @@ describe("corpus-store", () => {
     expect(existsSync(`${db}.corpora.json`)).toBe(true);
   });
 
-  it("atomic write: round-trip still works (write goes via .tmp then rename)", () => {
+  it("atomic write: round-trip still works and .tmp file is not left behind", () => {
     const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "atomic.db");
     const defs: CorpusDef[] = [
       { id: "a", displayName: "Alpha" } as CorpusDef,
@@ -34,5 +34,13 @@ describe("corpus-store", () => {
     const loaded = loadCorpora(db);
     expect(loaded.map((d) => d.id)).toEqual(["a", "b"]);
     expect(loaded.map((d) => d.displayName)).toEqual(["Alpha", "Beta"]);
+    expect(existsSync(`${db}.corpora.json.tmp`)).toBe(false);
+  });
+
+  it("loadCorpora throws a descriptive error when sidecar contains invalid JSON", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "corrupt.db");
+    const sidecarPath = `${db}.corpora.json`;
+    writeFileSync(sidecarPath, "this is not valid json {{{{", "utf8");
+    expect(() => loadCorpora(db)).toThrow(sidecarPath);
   });
 });
