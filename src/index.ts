@@ -65,11 +65,11 @@ export {
   resolve,
   aggregate,
 } from "./algebra/ast.js";
-export type { ExprNode, Field } from "./algebra/ast.js";
+export type { ExprNode } from "./algebra/ast.js";
 
 // Replay re-execution engine — serialization
 export { serializeExpr, parseExpr } from "./algebra/serialize.js";
 
 // Replay re-execution engine — replay
 export { replayStatus } from "./write/replay.js";
-export type { ReplayStatus, ReplayResult, MissingDependency } from "./write/replay.js";
+export type { ReplayStatus, ReplayResult } from "./write/replay.js";
