@@ -8,7 +8,12 @@ import { tauValid, tauRecorded, tauKnown } from "./temporal.js";
 import { rho as rhoOp } from "./similarity.js";
 import { kappa as kappaOp } from "./composition.js";
 import { gammaStage } from "./expression.js";
-import { oplusSynthesizeAs } from "./combination.js";
+import { oplusDedupe, oplusSynthesizeAs } from "./combination.js";
+import { pairsOf, clustersOf } from "./contradiction.js";
+import { resolutionRegistry, MissingRule } from "./registries.js";
+import { resolveKeepBoth } from "./resolution.js";
+import { resolveDeprecateMinority } from "./resolution.js";
+import { corpusOf } from "./types.js";
 import {
   leaf,
   sigma,
@@ -397,40 +402,180 @@ it("compiled σ→δ→π pipeline evaluates to same result as equivalent hand-b
   expect(compiled.claims[0].value).toBe(handBuilt.claims[0].value);
 });
 
-// ---------- unsupported ops throw UnsupportedExprOp ----------
+// ---------- combine compiles to oplusDedupe ----------
 
-it("throws UnsupportedExprOp for combine", () => {
-  expect(() => compile(combine("r", leaf("c")))).toThrow(UnsupportedExprOp);
-  expect(() => compile(combine("r", leaf("c")))).toThrow("combine");
+// Two claims with same (subject, key, scopeHash) but different values; oplusDedupe folds them.
+// We use "rule_evidence_pooled" with beta distribution.
+const makeBetaClaim = (
+  id: string,
+  subject: string,
+  key: string,
+  scopeHash: string,
+  valueHash: string,
+  alpha: number,
+  beta: number,
+) =>
+  ({
+    id,
+    profile: "p" as any,
+    workspace: "w" as any,
+    subject,
+    key,
+    scope: {},
+    scopeHash,
+    value: valueHash,
+    valueHash,
+    confidence: { distribution: "beta", parameters: { alpha, beta }, raw: alpha / (alpha + beta) },
+    valid: { from: 0, to: Number.MAX_SAFE_INTEGER },
+    recorded: 1000,
+    recordedSeq: 1,
+    status: "validated" as const,
+    source: "manual" as const,
+    provenance: {} as any,
+    evidence: [],
+    tags: [],
+    schema: "v1",
+  }) as any;
+
+it("compiles combine to a dedupe pipeline equal to oplusDedupe over a seeded corpus", () => {
+  // Two claims with same triple (subject, key, scopeHash) — oplusDedupe folds them into one.
+  const c1 = makeBetaClaim("id-1", "subj", "key", "sh", "vh-A", 9, 1);
+  const c2 = makeBetaClaim("id-2", "subj", "key", "sh", "vh-A", 3, 7);
+
+  const ctx = makeCtx([c1, c2]);
+  const rule = "rule_evidence_pooled";
+
+  const compiled = evaluate<Corpus>(compile(combine(rule, leaf("c"))), ctx);
+
+  // Hand-built: leaf then oplusDedupe
+  const handBuilt = evaluate<Corpus>(
+    [leafStage("c"), liftOp(oplusDedupe(rule))],
+    ctx,
+  );
+
+  expect(compiled.claims).toHaveLength(1);
+  expect(compiled.claims[0].confidence.parameters).toStrictEqual(
+    handBuilt.claims[0].confidence.parameters,
+  );
+  expect(compiled.claims[0].confidence.raw).toBeCloseTo(
+    handBuilt.claims[0].confidence.raw,
+    10,
+  );
 });
 
-it("throws UnsupportedExprOp for resolve", () => {
-  expect(() => compile(resolve("resolveKeepBoth", leaf("c")))).toThrow(UnsupportedExprOp);
-  expect(() => compile(resolve("resolveKeepBoth", leaf("c")))).toThrow("resolve");
+it("compiles combine with params and produces the same result as hand-built oplusDedupe(rule, params)", () => {
+  const c1 = makeBetaClaim("id-1", "s", "k", "sh", "vh-A", 7, 3);
+  const c2 = makeBetaClaim("id-2", "s", "k", "sh", "vh-A", 5, 5);
+
+  const ctx = makeCtx([c1, c2]);
+  const rule = "rule_evidence_pooled";
+  const params = undefined;
+
+  const compiled = evaluate<Corpus>(compile(combine(rule, leaf("c"), params)), ctx);
+  const handBuilt = evaluate<Corpus>(
+    [leafStage("c"), liftOp(oplusDedupe(rule, params))],
+    ctx,
+  );
+
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  expect(compiled.claims[0].confidence.raw).toBeCloseTo(
+    handBuilt.claims[0].confidence.raw,
+    10,
+  );
 });
+
+// ---------- resolve compiles using pairsOf / clustersOf + threshold ----------
+
+// Make two contradicting claims: same (subject, key, scopeHash) but different valueHash.
+const makeConflictingPair = () => {
+  const hi = makeBetaClaim("id-hi", "subj", "key", "sh", "vh-HI", 9, 1);
+  const lo = makeBetaClaim("id-lo", "subj", "key", "sh", "vh-LO", 1, 9);
+  return { hi, lo };
+};
+
+it("compiles resolve(resolveKeepBoth) [pairs] and evaluates equal to hand-built fn(pairsOf(...))", () => {
+  const { hi, lo } = makeConflictingPair();
+  const ctx = makeCtx([hi, lo]);
+  const threshold = 0.0; // both claims have effective > 0, so both pass the filter
+
+  const compiled = evaluate<Corpus>(
+    compile(resolve("resolveKeepBoth", leaf("c"), undefined, threshold)),
+    ctx,
+  );
+
+  const corpus = corpusOf([hi, lo]);
+  const { fn, input } = resolutionRegistry("resolveKeepBoth");
+  expect(input).toBe("pairs");
+  const groups = pairsOf(corpus, threshold);
+  const handBuilt = (fn as any)(groups)(corpus);
+
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  expect(compiled.claims.map((c: any) => c.id).sort()).toStrictEqual(
+    handBuilt.claims.map((c: any) => c.id).sort(),
+  );
+});
+
+it("compiles resolve(resolveDeprecateMinority) [clusters] and evaluates equal to hand-built fn(clustersOf(...))", () => {
+  const { hi, lo } = makeConflictingPair();
+  const ctx = makeCtx([hi, lo]);
+  const threshold = 0.0;
+
+  const compiled = evaluate<Corpus>(
+    compile(resolve("resolveDeprecateMinority", leaf("c"), undefined, threshold)),
+    ctx,
+  );
+
+  const corpus = corpusOf([hi, lo]);
+  const { fn, input } = resolutionRegistry("resolveDeprecateMinority");
+  expect(input).toBe("clusters");
+  const groups = clustersOf(corpus, threshold);
+  const handBuilt = (fn as any)(groups)(corpus);
+
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  // hi has higher confidence so lo should be deprecated
+  const hiOut = compiled.claims.find((c: any) => c.id === "id-hi");
+  const hiHandBuilt = handBuilt.claims.find((c: any) => c.id === "id-hi");
+  expect(hiOut?.status).toBe(hiHandBuilt?.status);
+  const loOut = compiled.claims.find((c: any) => c.id === "id-lo");
+  const loHandBuilt = handBuilt.claims.find((c: any) => c.id === "id-lo");
+  expect(loOut?.status).toBe(loHandBuilt?.status);
+});
+
+it("compiled resolve threads node.threshold to pairsOf / clustersOf (high threshold excludes claims)", () => {
+  // With threshold=0.95, hi (0.9 raw) is excluded => no contradictions detected => corpus unchanged
+  const { hi, lo } = makeConflictingPair();
+  const ctx = makeCtx([hi, lo]);
+  const highThreshold = 0.95; // both claims have raw < 0.95 => excluded from contradiction detection
+
+  const compiled = evaluate<Corpus>(
+    compile(resolve("resolveKeepBoth", leaf("c"), undefined, highThreshold)),
+    ctx,
+  );
+
+  // With such a high threshold, no claims pass the filter in pairsOf => no pairs => corpus unchanged
+  const corpus = corpusOf([hi, lo]);
+  const { fn } = resolutionRegistry("resolveKeepBoth");
+  const groups = pairsOf(corpus, highThreshold);
+  const handBuilt = (fn as any)(groups)(corpus);
+
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+});
+
+it("unknown resolve policy throws MissingRule at evaluate time", () => {
+  const ctx = makeCtx([]);
+  // Compile doesn't throw; MissingRule is thrown during evaluate (resolutionRegistry lookup)
+  const stages = compile(resolve("nonExistentPolicy", leaf("c"), undefined, 0.5));
+  expect(() => evaluate(stages, ctx)).toThrow(MissingRule);
+});
+
+// ---------- aggregate throws UnsupportedExprOp ----------
 
 it("throws UnsupportedExprOp for aggregate", () => {
   expect(() => compile(aggregate("count", leaf("c")))).toThrow(UnsupportedExprOp);
   expect(() => compile(aggregate("count", leaf("c")))).toThrow("aggregate");
 });
 
-it("UnsupportedExprOp carries the offending op field", () => {
-  try {
-    compile(combine("r", leaf("c")));
-    expect.fail("should have thrown");
-  } catch (e) {
-    expect(e).toBeInstanceOf(UnsupportedExprOp);
-    expect((e as UnsupportedExprOp).op).toBe("combine");
-  }
-
-  try {
-    compile(resolve("resolveKeepBoth", leaf("c")));
-    expect.fail("should have thrown");
-  } catch (e) {
-    expect(e).toBeInstanceOf(UnsupportedExprOp);
-    expect((e as UnsupportedExprOp).op).toBe("resolve");
-  }
-
+it("UnsupportedExprOp carries the offending op field for aggregate", () => {
   try {
     compile(aggregate("count", leaf("c")));
     expect.fail("should have thrown");
