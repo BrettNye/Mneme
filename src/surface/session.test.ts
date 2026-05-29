@@ -140,4 +140,15 @@ describe("openSession", () => {
     const result = s.q("c10", "") as { claims: unknown[] };
     expect(result.claims).toHaveLength(2);
   });
+
+  it("threads a reject_on_contradiction policy into the corpus default", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "c11", subjects: [], contradictionPolicy: { kind: "reject_on_contradiction" } });
+    const first = s.write("c11", { subject: "host:a", key: "status", value: "healthy" });
+    expect(first.status).toBe("committed");
+    // Same (subject,key,scope) with a different value contradicts the first.
+    const second = s.write("c11", { subject: "host:a", key: "status", value: "degraded" });
+    expect(second.status).toBe("rejected");
+  });
 });

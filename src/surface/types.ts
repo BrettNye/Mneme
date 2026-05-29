@@ -5,6 +5,7 @@ import type { Scope } from "../core/scope.js";
 import type { Interval } from "../core/time.js";
 import type { Corpus, RankedCorpus, ComposedContext } from "../algebra/types.js";
 import type { AggregateResult } from "../algebra/aggregation.js";
+import type { ContradictionPolicy } from "../catalog/corpus.js";
 import type { Mneme } from "../mneme.js";
 
 /** Boilerplate-free write input; the session fills the rest of CandidateClaim. */
@@ -37,6 +38,8 @@ export interface CorpusSpec {
   subjects?: string[];
   scopeFields?: Record<string, unknown>;
   schemaVersion?: string;
+  /** Corpus default contradiction policy. Defaults to `{ kind: "always_accept" }`. */
+  contradictionPolicy?: ContradictionPolicy;
 }
 
 export interface SessionOptions {

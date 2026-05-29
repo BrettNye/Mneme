@@ -103,7 +103,7 @@ export function openSession(opts: SessionOptions = {}): Session {
         defaults: {
           decayPolicy: { kind: "none" },
           confidenceThreshold: 0,
-          contradictionPolicy: { kind: "always_accept" },
+          contradictionPolicy: spec.contradictionPolicy ?? { kind: "always_accept" },
           defaultStatus: ["validated"],
         },
         requiredTiers: [{ kind: "core" }],
