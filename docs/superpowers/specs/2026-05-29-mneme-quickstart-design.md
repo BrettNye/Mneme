@@ -1,10 +1,12 @@
 ---
-title: Mneme Getting-Started + Quickstart
+title: Mneme Getting-Started + Quickstart (Epistemic Core)
 created: 2026-05-29
 status: design
 ---
 
-# Mneme Getting-Started + Quickstart — Design
+# Mneme Getting-Started + Quickstart (Epistemic Core) — Design
+
+> Deliverable 1 of 2. The bio-layer quickstart is a committed sibling (§10), specced separately.
 
 ## 1. Goal
 
@@ -14,6 +16,10 @@ working snippet that exercises the features that make it distinctive — not jus
 
 Non-goals: no new product surface (no CLI, no service, no MCP). Documentation + one example
 file only. (A standalone app on Mneme was explicitly deferred.)
+
+This is **deliverable 1 of 2**: the epistemic-core quickstart. A **bio-layer quickstart** is a
+committed sibling deliverable (its own scenario, spec, and example), to be brainstormed after
+this slice ships. The two are kept separate so each stays focused.
 
 ## 2. Audience & scope
 
@@ -31,36 +37,41 @@ gets its own doc later.
 
 ## 3. Scenario
 
-A **coding assistant's memory about a user.** The assistant learns facts about a user,
-one fact is contradicted and superseded, confidence is Beta-typed, and relevance decays.
-This domain naturally exercises every differentiator without contrivance.
+**Service / host status monitoring** (non-AI). An ops system records what it knows about
+hosts from health checks. A host's status is contradicted and superseded when fresh probes
+disagree, confidence is Beta-typed (it reflects how many probes agreed), and a stale status
+loses effective confidence over time. This domain exercises every differentiator without
+contrivance and is immediately legible to a developer.
 
-Concretely:
-- `subject: "user"`, `key: "pref.language"`, `value: "Python"` — committed with high Beta
-  confidence.
-- Later the user switches: `value: "Rust"` — committed via `supersede`, deprecating the old
-  claim.
-- A second fact (`key: "pref.editor"`) is committed earlier in time, then queried under a
-  decay policy at a later pinned clock to show effective-confidence drop.
+Concretely (corpus `infra:prod`):
+- `subject: "host:web-01"`, `key: "status"`, `value: "healthy"` — committed with Beta
+  confidence `{ alpha: 8, beta: 1 }` (8 of 9 recent probes healthy).
+- Fresh probes disagree: `value: "degraded"`, `{ alpha: 5, beta: 4 }` — committed via
+  `supersede`, deprecating the old status claim.
+- A second host (`subject: "host:web-02"`, `key: "status"`) is committed, then queried under
+  a decay policy at a later pinned clock to show its effective confidence dropping as the
+  reading goes stale.
 
 ## 4. Narrative (the teaching arc)
 
 1. **Construct.** `createSqliteAdapter(":memory:")` → `createMneme({ adapter, availableTiers:
    [{ kind: "core" }] })` → `mneme.createCorpus(corpusDef)`. One paragraph on corpus = a
    namespaced claim store with a schema + defaults.
-2. **Commit a claim.** `mneme.commit(corpusId, candidate, { writer })`. Short explainer:
-   `confidence` is a Beta distribution `{ alpha, beta }` — Mneme tracks *how much evidence*
-   backs a belief, not just a point probability.
+2. **Commit a claim.** `mneme.commit(corpusId, candidate, { writer })` — record `host:web-01`
+   `status = "healthy"`. Short explainer: `confidence` is a Beta distribution
+   `{ alpha, beta }` — Mneme tracks *how much evidence* backs a belief (how many probes
+   agreed), not just a point probability.
 3. **Query it back.** `mneme.query(corpusId, pipe(leaf(corpusId), rho.jaccard(queryText),
-   kappa.markdown(maxTokens)))` → a token-bounded `ComposedContext` ready to drop into an LLM
-   prompt. Shows the algebra pipeline (select-rank-compose).
-4. **Contradiction → resolve.** `mneme.supersede(corpusId, oldId, replacement, { writer })`.
-   The old claim becomes `deprecated`; the replacement is committed. One paragraph: Mneme
-   makes belief change explicit and auditable rather than silently overwriting.
+   kappa.markdown(maxTokens)))` → a token-bounded `ComposedContext` summarizing current host
+   status. Shows the algebra pipeline (select-rank-compose).
+4. **Contradiction → resolve.** `mneme.supersede(corpusId, oldId, replacement, { writer })` —
+   fresh probes flip `host:web-01` to `"degraded"`. The old claim becomes `deprecated`; the
+   replacement is committed. One paragraph: Mneme makes belief change explicit and auditable
+   rather than silently overwriting a value.
 5. **Decay over time.** `mneme.query(corpusId, pipe(leaf(corpusId), delta.exponential(
-   halfLifeDays)), { evaluationClock })` at a clock well after the claim's `recorded` time —
-   show `confidence.effective` is lower than `confidence.raw`. Note the pinned clock makes
-   this deterministic (and is what replay relies on).
+   halfLifeDays)), { evaluationClock })` at a clock well after the `host:web-02` status was
+   recorded — show `confidence.effective` is lower than `confidence.raw` as the reading goes
+   stale. Note the pinned clock makes this deterministic (and is what replay relies on).
 6. **Reproducibility / replay.** `mneme.replay(claim)` returns a `ReplayStatus`. Per the
    decision in §5, demonstrate it on a normal committed claim → `integrity_unknown` (no
    recorded query), and describe in prose that claims derived from a recorded query
@@ -109,9 +120,9 @@ rawConfidence`) is stable for any positive age. Summary shape, e.g.:
 ```ts
 export interface QuickstartResult {
   committedId: string;
-  contextIncludesValue: boolean;       // step 3: composed context contains the claim value
+  contextIncludesValue: boolean;       // step 3: composed context contains "healthy"
   supersededOldStatus: string;          // step 4: "deprecated"
-  replacementValue: string;             // step 4: "Rust"
+  replacementValue: string;             // step 4: "degraded"
   rawConfidence: number;                // step 5
   effectiveAfterDecay: number;          // step 5: < rawConfidence
   replayStatusOfPlainClaim: string;     // step 6: "integrity_unknown"
@@ -125,7 +136,7 @@ A guarded script entry runs it and `console.log`s a readable trace for `npm run 
 `examples/quickstart.test.ts` asserts:
 - `committedId` is a non-empty string.
 - `contextIncludesValue === true`.
-- `supersededOldStatus === "deprecated"` and `replacementValue === "Rust"`.
+- `supersededOldStatus === "deprecated"` and `replacementValue === "degraded"`.
 - `effectiveAfterDecay < rawConfidence` (decay actually reduced effective confidence).
 - `replayStatusOfPlainClaim === "integrity_unknown"`.
 
@@ -146,5 +157,7 @@ existing `vitest run` suite and keep `tsc --noEmit` clean.
 ## 10. Out of scope / follow-ups
 
 - Public derive surface (§5) — tracked, deferred.
-- Bio-layer getting-started — separate doc.
+- **Bio-layer quickstart — deliverable 2 of 2.** A committed sibling: its own scenario, spec,
+  and runnable example (createBioMemory + a cognitive cycle, consolidation/summarize).
+  Brainstormed as its own spec→plan→build cycle after this slice ships.
 - CLI / MCP / service on Mneme — deferred by explicit decision.
