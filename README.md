@@ -82,6 +82,11 @@ confidence drops as the reading ages. The pinned clock makes the result determin
 ```ts
 import { delta } from "mneme";
 
+// Assume a host:web-02 status claim was committed earlier; read it back to get its
+// `recorded` timestamp, then evaluate 30 days later so the reading has gone stale.
+const recordedAt = web02.recorded; // from mneme.readByIds(...) — see examples/quickstart.ts
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
 const decayed = mneme.query("infra:prod", pipe(
   leaf("infra:prod"),
   sigma({ op: "subjectEq", value: "host:web-02" }),
