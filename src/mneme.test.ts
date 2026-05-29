@@ -5,7 +5,7 @@ import type { ComposedContext } from "./algebra/types.js";
 import type { Corpus as CorpusDef } from "./catalog/corpus.js";
 import type { ClaimSchema } from "./catalog/schema.js";
 import type { AggregateResult } from "./algebra/aggregation.js";
-import { leaf as astLeaf } from "./algebra/ast.js";
+import { leaf as astLeaf, sigma as astSigma } from "./algebra/ast.js";
 import { serializeExpr } from "./algebra/serialize.js";
 import type { Claim } from "./core/claim.js";
 
@@ -787,4 +787,60 @@ it("read returns claims by ExecutionPlan; readByIds by id; unknown corpus throws
   // unknown corpus throws for both methods
   expect(() => m.read("nope", { corpusId: "nope" })).toThrow();
   expect(() => m.readByIds("nope", [])).toThrow();
+});
+
+// ── derive surface ────────────────────────────────────────────────────────────
+
+function statusMemory(value: string, alpha: number) {
+  return {
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject: "host",
+    key: "status",
+    scope: {},
+    value,
+    confidence: { distribution: "beta", parameters: { alpha, beta: 1 }, raw: alpha / (alpha + 1) },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+  } as any;
+}
+
+it("derive commits a derived claim that replays to exact", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  m.commit("workspace:canopy", statusMemory("healthy", 8), { writer: "probe" });
+  m.commit("workspace:canopy", statusMemory("degraded", 5), { writer: "probe" });
+
+  const expr = astSigma({ op: "keyEq", value: "status" }, astLeaf("workspace:canopy"));
+  const res = m.derive("workspace:canopy", expr, {
+    subject: "host",
+    key: "status.summary",
+    scope: {},
+    writer: "rollup",
+    evaluationClock: 1234,
+  });
+
+  expect(res.status).toBe("committed");
+  expect(typeof res.id).toBe("string");
+
+  const claim = m.readByIds("workspace:canopy", [res.id as any])[0];
+  expect(m.replay(claim).status).toBe("exact");
+});
+
+it("derive throws on an unknown corpus", () => {
+  const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+  expect(() =>
+    m.derive("nonexistent", astLeaf("nonexistent"), {
+      subject: "s",
+      key: "k",
+      scope: {},
+      writer: "w",
+    }),
+  ).toThrow();
 });

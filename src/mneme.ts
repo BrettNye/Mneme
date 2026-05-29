@@ -1,6 +1,10 @@
 import { Catalog } from "./catalog/catalog.js";
 import { Promoter } from "./write/pipeline.js";
 import { replayStatus, type ReplayResult } from "./write/replay.js";
+import { deriveClaimFrom } from "./write/derive.js";
+import { commitDerived } from "./write/derived-write.js";
+import type { ExprNode } from "./algebra/ast.js";
+import type { Scope } from "./core/scope.js";
 import type { StorageAdapter, ExecutionPlan } from "./adapters/adapter.js";
 import type { TierRequirement } from "./catalog/tiers.js";
 import type { Corpus as CorpusDef, ContradictionPolicy } from "./catalog/corpus.js";
@@ -177,6 +181,29 @@ export interface Mneme {
    * status (`exact`/`mismatch`/`missing_inputs`/`unavailable_models`/`integrity_unknown`/`failed`).
    */
   replay(claim: Claim): ReplayResult;
+  /**
+   * Derive and commit a claim from an algebra expression, recording the serialized query
+   * as provenance so it can later be re-executed via `replay`. Threads this instance's
+   * adapter / catalog / corpus promoter.
+   *
+   * For `replay` to return `exact`, choose a query that does NOT re-select the derived
+   * claim itself (e.g. derive under a `key` the query's predicate excludes) — otherwise
+   * re-execution includes the derived claim and the comparison may mismatch.
+   */
+  derive(
+    corpusId: string,
+    expr: ExprNode,
+    opts: {
+      subject: string;
+      key: string;
+      scope: Scope;
+      writer: string;
+      evaluationClock?: number;
+      combination?: string;
+      policy?: ContradictionPolicy;
+      idempotencyKey?: string;
+    },
+  ): { id: string; status: string };
 }
 
 export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
@@ -253,6 +280,38 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
 
     replay(claim: Claim): ReplayResult {
       return replayStatus(claim, adapter, catalog);
+    },
+
+    derive(
+      corpusId: string,
+      expr: ExprNode,
+      opts: {
+        subject: string;
+        key: string;
+        scope: Scope;
+        writer: string;
+        evaluationClock?: number;
+        combination?: string;
+        policy?: ContradictionPolicy;
+        idempotencyKey?: string;
+      },
+    ): { id: string; status: string } {
+      catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
+      const candidate = deriveClaimFrom(adapter, catalog, expr, {
+        subject: opts.subject,
+        key: opts.key,
+        scope: opts.scope,
+        combination: opts.combination,
+        evaluationClock: opts.evaluationClock,
+      });
+      const df = candidate.provenance!.derivedFrom!; // deriveClaimFrom always sets this
+      return commitDerived(promoterFor(corpusId), candidate, {
+        queryExpression: df.queryExpression,
+        corpusState: df.corpusState,
+        writer: opts.writer,
+        policy: opts.policy,
+        idempotencyKey: opts.idempotencyKey,
+      });
     },
   };
 }

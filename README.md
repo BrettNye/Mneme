@@ -99,10 +99,31 @@ console.log(c.raw, c.effective); // effective < raw
 
 ### 6. Verify reproducibility with replay
 
+A plain committed claim has no recorded query, so `replay` reports `integrity_unknown`:
+
 ```ts
-mneme.replay(claim).status;
-// A plain committed claim has no recorded query → "integrity_unknown".
-// Claims derived from a recorded query re-execute to "exact" / "mismatch".
+mneme.replay(claim).status; // "integrity_unknown"
+```
+
+A claim produced by `mneme.derive` records its query, so it re-executes and is verified —
+`exact` if it reproduces, `mismatch` if the inputs changed. Pick a query that doesn't
+re-select the derived claim itself (here the derived `status.summary` is excluded by the
+`status` filter):
+
+```ts
+import { astLeaf, astSigma } from "mneme";
+
+const { id } = mneme.derive(
+  "infra:prod",
+  astSigma(
+    { op: "and", preds: [{ op: "subjectEq", value: "host:web-02" }, { op: "keyEq", value: "status" }] },
+    astLeaf("infra:prod"),
+  ),
+  { subject: "host:web-02", key: "status.summary", scope: {}, writer: "rollup" },
+);
+
+const derived = mneme.readByIds("infra:prod", [id])[0];
+mneme.replay(derived).status; // "exact"
 ```
 
 ## Bio layer (cognitive memory)

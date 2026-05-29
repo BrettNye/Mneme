@@ -15,6 +15,8 @@ import {
   rho,
   kappa,
   delta,
+  astLeaf,
+  astSigma,
 } from "../src/index.js";
 // index.ts exports the catalog corpus as `CorpusDef` and the algebra corpus as `Corpus`.
 import type { CorpusDef, ComposedContext, Corpus } from "../src/index.js";
@@ -27,6 +29,7 @@ export interface QuickstartResult {
   rawConfidence: number;
   effectiveAfterDecay: number;
   replayStatusOfPlainClaim: string;
+  derivedReplayStatus: string;
 }
 
 const CORPUS = "infra:prod";
@@ -158,9 +161,23 @@ export function runQuickstart(): QuickstartResult {
   const effectiveAfterDecay = decayedClaim.confidence.effective ?? rawConfidence;
 
   // 6. Reproducibility / replay. A normal committed claim has no recorded query, so replay
-  //    reports integrity_unknown. Claims DERIVED from a recorded query re-execute to
-  //    exact / mismatch (see the replay-engine design doc).
+  //    reports integrity_unknown.
   const replayStatusOfPlainClaim = mneme.replay(web02).status;
+
+  // 7. Derive a claim from a recorded query, then verify it re-executes to "exact".
+  //    The query selects host:web-02's "status"; the derived key is "status.summary", so
+  //    re-execution never re-selects the derived claim itself (which would pollute the check).
+  const derived = mneme.derive(
+    CORPUS,
+    astSigma(
+      { op: "and", preds: [{ op: "subjectEq", value: "host:web-02" }, { op: "keyEq", value: "status" }] },
+      astLeaf(CORPUS),
+    ),
+    { subject: "host:web-02", key: "status.summary", scope: {}, writer: "rollup", evaluationClock: 1234 },
+  );
+  const derivedReplayStatus = mneme.replay(
+    mneme.readByIds(CORPUS, [derived.id as never])[0],
+  ).status;
 
   return {
     committedId: committed.id,
@@ -170,6 +187,7 @@ export function runQuickstart(): QuickstartResult {
     rawConfidence,
     effectiveAfterDecay,
     replayStatusOfPlainClaim,
+    derivedReplayStatus,
   };
 }
 
@@ -184,4 +202,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`  web-02 raw confidence:                ${r.rawConfidence.toFixed(4)}`);
   console.log(`  web-02 effective after 30d decay:     ${r.effectiveAfterDecay.toFixed(4)}`);
   console.log(`  replay(plain claim) status:           ${r.replayStatusOfPlainClaim}`);
+  console.log(`  replay(derived claim) status:         ${r.derivedReplayStatus}`);
 }
