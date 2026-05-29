@@ -5,15 +5,15 @@ created: 2026-05-29
 
 ```mermaid
 flowchart TD
-    task-surface-types["task-surface-types: shared contract types<br/>files: src/surface/types.ts +1 more"]
-    task-dsl["task-dsl: query DSL parser<br/>files: src/surface/dsl.ts +1 more"]
-    task-corpus-store["task-corpus-store: corpus def store<br/>files: src/surface/corpus-store.ts +1 more"]
-    task-format["task-format: query result formatters<br/>files: src/surface/format.ts +1 more"]
-    task-import["task-import: streaming importer<br/>files: src/surface/import.ts +1 more"]
-    task-session["task-session: session facade<br/>files: src/surface/session.ts +1 more"]
-    task-surface-barrel["task-surface-barrel: surface barrel<br/>files: src/surface/index.ts +1 more"]
-    task-cli["task-cli: command-line interface<br/>files: src/cli/main.ts +2 more"]
-    task-package-exports["task-package-exports: package wiring<br/>files: package.json +2 more"]
+    task-surface-types["task-surface-types: shared contract types<br/>files: src/surface/types.ts +1 more"]:::done
+    task-dsl["task-dsl: query DSL parser<br/>files: src/surface/dsl.ts +1 more"]:::done
+    task-corpus-store["task-corpus-store: corpus def store<br/>files: src/surface/corpus-store.ts +1 more"]:::done
+    task-format["task-format: query result formatters<br/>files: src/surface/format.ts +1 more"]:::done
+    task-import["task-import: streaming importer<br/>files: src/surface/import.ts +1 more"]:::done
+    task-session["task-session: session facade<br/>files: src/surface/session.ts +1 more"]:::done
+    task-surface-barrel["task-surface-barrel: surface barrel<br/>files: src/surface/index.ts +1 more"]:::done
+    task-cli["task-cli: command-line interface<br/>files: src/cli/main.ts +2 more"]:::done
+    task-package-exports["task-package-exports: package wiring<br/>files: package.json +2 more"]:::done
 
     task-surface-types --> task-format
     task-surface-types --> task-import
@@ -77,7 +77,7 @@ depends_on: []
 files:
   - src/surface/types.ts
   - src/surface/types.test.ts
-status: pending
+status: done
 ```
 
 Defines the contract surface every other surface module consumes: the
@@ -201,7 +201,7 @@ depends_on: []
 files:
   - src/surface/dsl.ts
   - src/surface/dsl.test.ts
-status: pending
+status: done
 ```
 
 Compiles a terse, pipe-separated DSL string into an evaluable `Stage[]` using
@@ -285,7 +285,7 @@ depends_on: []
 files:
   - src/surface/corpus-store.ts
   - src/surface/corpus-store.test.ts
-status: pending
+status: done
 ```
 
 Persists corpus definitions to a JSON sidecar next to the SQLite db so they
@@ -350,7 +350,7 @@ depends_on: [task-surface-types]
 files:
   - src/surface/format.ts
   - src/surface/format.test.ts
-status: pending
+status: done
 ```
 
 Pure functions that render a `QueryResult` (any arm of the union) into a
@@ -418,7 +418,7 @@ depends_on: [task-surface-types]
 files:
   - src/surface/import.ts
   - src/surface/import.test.ts
-status: pending
+status: done
 ```
 
 Streams a JSONL file line-by-line (never loading it whole), maps each row to a
@@ -531,7 +531,7 @@ depends_on: [task-surface-types, task-dsl, task-corpus-store]
 files:
   - src/surface/session.ts
   - src/surface/session.test.ts
-status: pending
+status: done
 ```
 
 `openSession(opts)` opens a persisted SQLite adapter, re-registers corpus defs
@@ -657,7 +657,7 @@ is_wiring_task: true
 files:
   - src/surface/index.ts
   - src/surface/index.test.ts
-status: pending
+status: done
 ```
 
 Re-exports the public `mneme/surface` API from one barrel so the CLI and any
@@ -696,7 +696,7 @@ files:
   - src/cli/main.ts
   - src/cli/index.ts
   - src/cli/main.test.ts
-status: pending
+status: done
 ```
 
 Thin command shell over `mneme/surface`. `run(argv)` parses global flags
@@ -800,7 +800,7 @@ files:
   - package.json
   - bin/mneme.ts
   - bin/mneme.smoke.test.ts
-status: pending
+status: done
 ```
 
 Wires the new subsystems into the package: adds the subpath `exports` map
