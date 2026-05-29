@@ -1,5 +1,6 @@
 import { Catalog } from "./catalog/catalog.js";
 import { Promoter } from "./write/pipeline.js";
+import { replayStatus, type ReplayResult } from "./write/replay.js";
 import type { StorageAdapter, ExecutionPlan } from "./adapters/adapter.js";
 import type { TierRequirement } from "./catalog/tiers.js";
 import type { Corpus as CorpusDef, ContradictionPolicy } from "./catalog/corpus.js";
@@ -170,6 +171,12 @@ export interface Mneme {
   ): { id: string; status: string };
   read(corpusId: string, plan: ExecutionPlan): Claim[];
   readByIds(corpusId: string, ids: ClaimId[]): Claim[];
+  /**
+   * Verify a derived claim by re-executing its recorded query against the current
+   * store, threading this instance's adapter and catalog. Returns the §7.6 replay
+   * status (`exact`/`mismatch`/`missing_inputs`/`unavailable_models`/`integrity_unknown`/`failed`).
+   */
+  replay(claim: Claim): ReplayResult;
 }
 
 export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
@@ -242,6 +249,10 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
     readByIds(corpusId: string, ids: ClaimId[]): Claim[] {
       catalog.getCorpus(corpusId);
       return ids.map(id => adapter.getClaim(id)).filter((c): c is Claim => c !== undefined);
+    },
+
+    replay(claim: Claim): ReplayResult {
+      return replayStatus(claim, adapter, catalog);
     },
   };
 }
