@@ -9,6 +9,9 @@ import type { AggregateResult } from "./algebra/aggregation.js";
 import { leaf as astLeaf, sigma as astSigma } from "./algebra/ast.js";
 import { serializeExpr } from "./algebra/serialize.js";
 import type { Claim } from "./core/claim.js";
+import type { QueryWarning } from "./algebra/value-routing.js";
+import { UnsupportedValuePredicateError } from "./algebra/value-routing.js";
+import type { Value } from "./core/value.js";
 
 const schema: ClaimSchema = {
   version: "1",
@@ -971,5 +974,75 @@ describe("audience field (§2.1)", () => {
     const r = m.commit("workspace:canopy", aud({ personas: ["reviewer", "architect"] }), { writer: "w" });
     const claim = m.readByIds("workspace:canopy", [r.id as any])[0];
     expect(claim.audience).toEqual({ personas: ["reviewer", "architect"] });
+  });
+});
+
+// ── sigma capability-aware routing (§10.2) ───────────────────────────────────
+
+describe("sigma capability-aware routing", () => {
+  const mk = (subject: string, key: string, value: Value, scope: Record<string, string> = {}) => ({
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject,
+    key,
+    scope,
+    value,
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+  });
+
+  it("query invokes onWarning for a fallback value predicate over the threshold", () => {
+    const warnings: QueryWarning[] = [];
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mk("s", "k", { amount: 1 }), { writer: "w" });
+    m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), sigma({ op: "valueEq", path: "amount", value: 1 })),
+      { fallbackWarnThreshold: 0, onWarning: (w) => warnings.push(w) }
+    );
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("query with sigma on an unsupported value predicate kind throws UnsupportedValuePredicateError", () => {
+    // Use a custom adapter that declares 'equality' as unsupported
+    const base = createSqliteAdapter();
+    const unsupportingAdapter = {
+      ...base,
+      capabilities: () => ({
+        valuePredicateSupport: {
+          ...base.capabilities().valuePredicateSupport,
+          equality: "unsupported" as const,
+        },
+      }),
+    };
+    const m = createMneme({ adapter: unsupportingAdapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mk("s", "k", "hello"), { writer: "w" });
+    expect(() =>
+      m.query<any>(
+        "workspace:canopy",
+        pipe(leaf("workspace:canopy"), sigma({ op: "valueEq", path: "x", value: "hello" }))
+      )
+    ).toThrow(UnsupportedValuePredicateError);
+  });
+
+  it("sigma with only base predicates triggers no warning and no throw", () => {
+    const warnings: QueryWarning[] = [];
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mk("subj-a", "key-1", "value-a"), { writer: "w" });
+    const out = m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), sigma({ op: "subjectEq", value: "subj-a" })),
+      { fallbackWarnThreshold: 0, onWarning: (w) => warnings.push(w) }
+    );
+    expect(warnings).toHaveLength(0);
+    expect(out.claims).toHaveLength(1);
   });
 });

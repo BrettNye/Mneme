@@ -23,6 +23,7 @@ import {
   type EvalContext,
 } from "./algebra/expression.js";
 import { sigma as sigmaOp } from "./algebra/selection.js";
+import { routeValuePredicates, type QueryWarning } from "./algebra/value-routing.js";
 import {
   tauNow as tauNowOp,
   tauKnown as tauKnownOp,
@@ -61,10 +62,18 @@ import type { BatchResult, BatchPolicy } from "./write/pipeline.js";
 
 export type { Stage, EvalContext } from "./algebra/expression.js";
 export type { Format } from "./algebra/composition.js";
+export type { QueryWarning } from "./algebra/value-routing.js";
 
 // ── Stage-producing builders ────────────────────────────────────────────────
 
-export const sigma = (p: Predicate): Stage<Corpus, Corpus> => liftOp(sigmaOp(p));
+export const sigma = (p: Predicate): Stage<Corpus, Corpus> => (c, ctx) => {
+  routeValuePredicates(p, ctx.adapter.capabilities(), {
+    workingSetSize: c.claims.length,
+    threshold: ctx.fallbackWarnThreshold ?? 10_000,
+    onWarning: ctx.onWarning ?? ((w) => console.warn(w.message)),
+  });
+  return sigmaOp(p)(c);
+};
 
 export const tau = {
   now: (): Stage<Corpus, Corpus> =>
@@ -191,7 +200,7 @@ export interface Mneme {
     claims: (CandidateClaim & { idempotencyKey?: string })[],
     opts: { policy?: ContradictionPolicy; writer: string; batchPolicy?: BatchPolicy }
   ): BatchResult;
-  query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number }): O;
+  query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number; onWarning?: (w: QueryWarning) => void; fallbackWarnThreshold?: number }): O;
   supersede(
     corpusId: string,
     deprecateId: string,
@@ -292,7 +301,7 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
       });
     },
 
-    query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number }): O {
+    query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number; onWarning?: (w: QueryWarning) => void; fallbackWarnThreshold?: number }): O {
       catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
       const ctx: EvalContext = {
         adapter,
@@ -300,6 +309,8 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
         evaluationClock: opts?.evaluationClock ?? Date.now(),
         usedSimilarityVersions: {},
         usedEmbeddingModelVersions: {},
+        onWarning: opts?.onWarning,
+        fallbackWarnThreshold: opts?.fallbackWarnThreshold,
       };
       return evaluate<O>(pipeline, ctx);
     },
