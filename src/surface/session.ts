@@ -182,7 +182,9 @@ export function openSession(opts: SessionOptions = {}): Session {
     },
 
     close(): void {
-      // Sidecar is already flushed on createCorpus; nothing else to flush.
+      // Sidecar is already flushed on createCorpus; release the DB file handle
+      // so the underlying file can be reopened/removed (notably on Windows).
+      adapter.close?.();
     },
   };
 

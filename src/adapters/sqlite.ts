@@ -224,6 +224,10 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
   );
 
   return {
+    close(): void {
+      db.close();
+    },
+
     insertClaim(c: Claim): void {
       insertStmt.run(toRow(c));
     },
