@@ -93,6 +93,7 @@ export const resolveFlagForReview =
       source: "heuristic" as const,
       provenance: {} as any,
       evidence: [],
+      audience: {},
       tags: [],
       schema: "contradiction-flag-v1",
     }));

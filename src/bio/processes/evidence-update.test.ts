@@ -24,6 +24,7 @@ function makeClaim(id: string, alpha: number, beta: number): Claim {
     source: "heuristic",
     provenance: {},
     evidence: [],
+    audience: {},
     tags: [],
     schema: "v1",
   };
@@ -242,6 +243,7 @@ it("scalar confidence claim with p=0.9 is promoted to beta preserving its mean (
     source: "heuristic",
     provenance: {},
     evidence: [],
+    audience: {},
     tags: [],
     schema: "v1",
   };
@@ -288,6 +290,7 @@ it("scalar confidence claim with p=0.7 is promoted to beta preserving its mean",
     source: "heuristic",
     provenance: {},
     evidence: [],
+    audience: {},
     tags: [],
     schema: "v1",
   };
@@ -412,6 +415,7 @@ it("overriding scalarPseudocount changes the beta promotion parameters", () => {
     source: "heuristic",
     provenance: {},
     evidence: [],
+    audience: {},
     tags: [],
     schema: "v1",
   };

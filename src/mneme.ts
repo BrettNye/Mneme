@@ -55,6 +55,9 @@ import {
   reweightBoost,
   type ReweightFn,
 } from "./algebra/aggregate-join.js";
+import { override as overrideBuilder } from "./algebra/override.js";
+import { joinScopeWith, joinSubjectWith, joinEvidenceWith } from "./algebra/join.js";
+import type { BatchResult, BatchPolicy } from "./write/pipeline.js";
 
 export type { Stage, EvalContext } from "./algebra/expression.js";
 export type { Format } from "./algebra/composition.js";
@@ -142,6 +145,20 @@ export const reweight = {
   boost: reweightBoost,
 };
 
+// ── Binary corpus operators (⊳ layered override §4.10, ⋈ join §4.11) ──────────
+// Each takes its right operand as a sub-pipeline evaluated in the same ctx, so it
+// composes inside pipe(): pipe(leaf(c1), sigma(...), override(pipe(leaf(c2), ...))).
+
+/** ⊳ layered override: the piped (left) corpus dominates `right` on matching (subject,key,scope) triples. */
+export const override = overrideBuilder;
+
+/** ⋈ join: collect the related claims from the piped (left) corpus and a `right` sub-pipeline. */
+export const join = {
+  scope: joinScopeWith,
+  subject: joinSubjectWith,
+  evidence: joinEvidenceWith,
+};
+
 // Re-export pipe and leaf from expression so callers can import them from here.
 export const pipe = pipeStages;
 export const leaf = leafStage;
@@ -155,11 +172,25 @@ export interface MnemeOptions {
 
 export interface Mneme {
   createCorpus(corpus: CorpusDef): CorpusDef;
+  /** Remove a corpus from the catalog registry (§6.1). Throws for an unknown corpus. */
+  deleteCorpus(corpusId: string): void;
+  /** List registered corpora (§6.2), optionally narrowed by a predicate. */
+  listCorpora(filter?: (c: CorpusDef) => boolean): CorpusDef[];
   commit(
     corpusId: string,
     candidate: CandidateClaim,
     opts: { policy?: ContradictionPolicy; writer: string; idempotencyKey?: string }
   ): { id: string; status: "committed" | "rejected" | "duplicate" };
+  /**
+   * Non-atomic batch write (§7.5): commits each claim independently with per-write
+   * status; an individual failure does NOT roll back earlier successes. Policy
+   * defaults to the corpus's contradiction policy when omitted.
+   */
+  commitBatch(
+    corpusId: string,
+    claims: (CandidateClaim & { idempotencyKey?: string })[],
+    opts: { policy?: ContradictionPolicy; writer: string; batchPolicy?: BatchPolicy }
+  ): BatchResult;
   query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number }): O;
   supersede(
     corpusId: string,
@@ -224,6 +255,15 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
       return catalog.createCorpus(corpus);
     },
 
+    deleteCorpus(corpusId: string): void {
+      catalog.deleteCorpus(corpusId); // throws for unknown corpus
+      promoters.delete(corpusId);     // drop the cached promoter for the removed corpus
+    },
+
+    listCorpora(filter?: (c: CorpusDef) => boolean): CorpusDef[] {
+      return catalog.listCorpora(filter);
+    },
+
     commit(
       corpusId: string,
       candidate: CandidateClaim,
@@ -235,6 +275,20 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
         policy,
         writer: opts.writer,
         idempotencyKey: opts.idempotencyKey,
+      });
+    },
+
+    commitBatch(
+      corpusId: string,
+      claims: (CandidateClaim & { idempotencyKey?: string })[],
+      opts: { policy?: ContradictionPolicy; writer: string; batchPolicy?: BatchPolicy }
+    ): BatchResult {
+      const corpusDef = catalog.getCorpus(corpusId);
+      const policy = opts.policy ?? corpusDef.defaults.contradictionPolicy;
+      return promoterFor(corpusId).commitBatch(claims, {
+        policy,
+        writer: opts.writer,
+        batchPolicy: opts.batchPolicy,
       });
     },
 

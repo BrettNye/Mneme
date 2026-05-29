@@ -4,6 +4,7 @@ import { subjectOf } from "../../core/key.js";
 import type { Episode, AppendOp } from "../types.js";
 import { SUMMARY_WORKFLOW, type ProposedSummary } from "./summarize-types.js";
 import { DEFAULT_BIO_POLICY } from "../policy.js";
+import { inputHashesOf } from "../../core/provenance.js";
 
 export interface AdmitOpts {
   prior?: { alpha: number; beta: number };
@@ -89,6 +90,9 @@ function buildDigest(
         corpusState: Number(now),
         combinationRule: `summary@${modelVersion}`,
         inputClaims: p.cites,
+        inputHashes: inputHashesOf(
+          p.cites.map((id) => byId.get(String(id))).filter((c): c is Claim => c !== undefined)
+        ),
         similarityVersions: {},
         embeddingModelVersions: {},
         evaluationClock: Number(now),

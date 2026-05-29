@@ -1,6 +1,7 @@
 import { createMneme, alpha, reweight } from "./mneme.js";
 import { createSqliteAdapter } from "./adapters/sqlite.js";
-import { pipe, leaf, sigma, kappa, tau, rho, delta } from "./mneme.js";
+import { pipe, leaf, sigma, kappa, tau, rho, delta, override, join } from "./mneme.js";
+import type { Corpus as AlgCorpus } from "./algebra/types.js";
 import type { ComposedContext } from "./algebra/types.js";
 import type { Corpus as CorpusDef } from "./catalog/corpus.js";
 import type { ClaimSchema } from "./catalog/schema.js";
@@ -843,4 +844,132 @@ it("derive throws on an unknown corpus", () => {
       writer: "w",
     }),
   ).toThrow();
+});
+
+// ── Façade wiring for the binary operators (§4.10 ⊳, §4.11 ⋈), batch (§7.5),
+//    and catalog ops (§6.1/§6.2) — exercised end-to-end through createMneme. ──
+
+describe("façade: override / join / commitBatch / catalog ops", () => {
+  const mk = (subject: string, key: string, value: string, scope: Record<string, string> = {}) => ({
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject,
+    key,
+    scope,
+    value,
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+  });
+
+  const scopedCorpus: CorpusDef = {
+    ...corpusDef,
+    schema: { ...schema, scopeFields: { entityId: "string" } },
+  };
+
+  it("override (⊳) composes through query: dominator wins, dominated fills gaps", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mk("alpha-subj", "k1", "left value"), { writer: "w" });
+    m.commit("workspace:canopy", mk("beta-subj", "k2", "right value"), { writer: "w" });
+
+    // left = subjectEq alpha-subj (dominator); right sub-pipeline = subjectEq beta-subj.
+    // Distinct triples → result is the union of both.
+    const out = m.query<AlgCorpus>(
+      "workspace:canopy",
+      pipe(
+        leaf("workspace:canopy"),
+        sigma({ op: "subjectEq", value: "alpha-subj" }),
+        override(pipe(leaf("workspace:canopy"), sigma({ op: "subjectEq", value: "beta-subj" })))
+      )
+    );
+    const subjects = out.claims.map((c) => c.subject).sort();
+    expect(subjects).toEqual(["alpha-subj", "beta-subj"]);
+  });
+
+  it("join.scope (⋈) collects related claims from a right sub-pipeline by entityId", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(scopedCorpus);
+    m.commit("workspace:canopy", mk("alpha-subj", "k1", "a-e1", { entityId: "e1" }), { writer: "w" });
+    m.commit("workspace:canopy", mk("alpha-subj", "k2", "a-e2", { entityId: "e2" }), { writer: "w" });
+    m.commit("workspace:canopy", mk("beta-subj", "k3", "b-e1", { entityId: "e1" }), { writer: "w" });
+
+    // left = alpha-subj claims [e1, e2]; right = beta-subj claims [e1].
+    // join on entityId → only the e1 pair participates (a-e1 + b-e1); a-e2 excluded.
+    const out = m.query<AlgCorpus>(
+      "workspace:canopy",
+      pipe(
+        leaf("workspace:canopy"),
+        sigma({ op: "subjectEq", value: "alpha-subj" }),
+        join.scope(pipe(leaf("workspace:canopy"), sigma({ op: "subjectEq", value: "beta-subj" })))
+      )
+    );
+    const values = out.claims.map((c) => c.value).sort();
+    expect(values).toEqual(["a-e1", "b-e1"]);
+  });
+
+  it("commitBatch (§7.5) commits each claim with per-write status, non-atomically", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+
+    const res = m.commitBatch(
+      "workspace:canopy",
+      [mk("s1", "k1", "v1"), mk("s2", "k2", "v2")],
+      { writer: "w" }
+    );
+
+    expect(res.results).toHaveLength(2);
+    expect(res.results.map((r) => r.index)).toEqual([0, 1]);
+    expect(res.results.every((r) => r.status === "committed")).toBe(true);
+  });
+
+  it("listCorpora / deleteCorpus (§6.1/§6.2) manage the catalog registry", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    expect(m.listCorpora().map((c) => c.id)).toEqual(["workspace:canopy"]);
+
+    m.deleteCorpus("workspace:canopy");
+    expect(m.listCorpora()).toEqual([]);
+    expect(() => m.query("workspace:canopy", pipe(leaf("workspace:canopy")))).toThrow();
+    expect(() => m.deleteCorpus("workspace:canopy")).toThrow();
+  });
+});
+
+describe("audience field (§2.1)", () => {
+  const aud = (audience?: { personas?: string[] }) => ({
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject: "person",
+    key: "person.name",
+    scope: {},
+    value: "Alice",
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+    ...(audience ? { audience } : {}),
+  });
+
+  it("defaults audience to {} when the writer omits it, and round-trips through the adapter", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const r = m.commit("workspace:canopy", aud(), { writer: "w" });
+    const claim = m.readByIds("workspace:canopy", [r.id as any])[0];
+    expect(claim.audience).toEqual({});
+  });
+
+  it("carries a writer-provided audience through commit and read-back", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const r = m.commit("workspace:canopy", aud({ personas: ["reviewer", "architect"] }), { writer: "w" });
+    const claim = m.readByIds("workspace:canopy", [r.id as any])[0];
+    expect(claim.audience).toEqual({ personas: ["reviewer", "architect"] });
+  });
 });

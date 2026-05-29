@@ -1,9 +1,14 @@
 // Public library surface — re-export everything consumers need.
 
-export { createMneme, sigma, tau, delta, rho, gamma, kappa, pipe, leaf, alpha, reweight } from "./mneme.js";
+export { createMneme, sigma, tau, delta, rho, gamma, kappa, pipe, leaf, alpha, reweight, override, join } from "./mneme.js";
 export { createSqliteAdapter } from "./adapters/sqlite.js";
 export type { AggregateResult, AggValue, GroupKey } from "./algebra/aggregation.js";
 export type { ReweightFn } from "./algebra/aggregate-join.js";
+export type { BatchResult, BatchWriteResult, BatchWriteStatus, BatchPolicy } from "./write/pipeline.js";
+
+// Binary corpus operators (pure forms) — ⊳ layered override (§4.10), ⋈ join (§4.11)
+export { overrideOp } from "./algebra/override.js";
+export { joinScope, joinSubject, joinEvidence } from "./algebra/join.js";
 
 // Public core types
 export type { Claim, CandidateClaim, Status, Source } from "./core/claim.js";

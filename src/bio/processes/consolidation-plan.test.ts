@@ -45,6 +45,7 @@ function makeClaim(
     source: "heuristic",
     provenance: {},
     evidence: [],
+    audience: {},
     tags: [],
     schema: "v1",
   };

@@ -2,11 +2,39 @@ import type { CandidateClaim, Claim, Status } from "../core/claim.js";
 import { newClaimId, type ClaimId } from "../core/ids.js";
 import { scopeHash } from "../core/scope.js";
 import { valueHash } from "../core/value.js";
+import { INFINITY } from "../core/time.js";
 import { validateScope, type ClaimSchema } from "../catalog/schema.js";
 import { enforce } from "./contradiction.js";
 import { checkIdempotent, recordIdempotent, idempotencyScope } from "./idempotency.js";
 import type { ContradictionPolicy } from "../catalog/corpus.js";
 import type { ClaimEvent, StorageAdapter } from "../adapters/adapter.js";
+
+/**
+ * §7.5 batch writes — non-atomic, high-throughput.
+ *
+ * Per-write outcome status. "committed" | "rejected" | "duplicate" mirror the
+ * single-write commit() return; "error" is a per-item failure (e.g. a thrown
+ * validation error) that, per spec, does NOT roll back successful writes in the
+ * same batch.
+ */
+export type BatchWriteStatus = "committed" | "rejected" | "duplicate" | "error";
+
+export interface BatchWriteResult {
+  index: number;
+  id?: string;
+  status: BatchWriteStatus;
+  error?: string;
+}
+
+export interface BatchResult {
+  results: BatchWriteResult[];
+}
+
+/**
+ * Batch-level knobs. Defaults to continue-on-error (non-atomic high-throughput).
+ * stopOnError flips to fail-fast: the first errored write halts further attempts.
+ */
+export type BatchPolicy = { stopOnError?: boolean };
 
 // Forward-only lifecycle transitions (excluding any→deprecated which is always valid)
 const LIFECYCLE_ORDER: Status[] = ["candidate", "provisional", "validated", "deprecated"];
@@ -58,6 +86,43 @@ export class Promoter {
     });
   }
 
+  /**
+   * Build the `contradiction` artifact claim for the accept_but_mark policy (§7.3).
+   * Records the conflicting pair's ids as its value; a scalar-certain, validated,
+   * verification-sourced claim under the reserved `contradiction` subject so it is
+   * directly queryable. Inserted alongside the accepted claim, not run through enforce().
+   */
+  private contradictionArtifact(
+    accepted: Claim,
+    conflictId: string,
+    recorded: number,
+    seq: number
+  ): Claim {
+    const value = { leftId: accepted.id, rightId: conflictId } as Claim["value"];
+    return {
+      id: newClaimId(),
+      profile: accepted.profile,
+      workspace: accepted.workspace,
+      subject: "contradiction" as Claim["subject"],
+      key: "contradiction.mark" as Claim["key"],
+      scope: accepted.scope,
+      scopeHash: accepted.scopeHash,
+      value,
+      valueHash: valueHash(value),
+      confidence: { distribution: "scalar", parameters: { p: 1 }, raw: 1 },
+      valid: { from: recorded, to: INFINITY },
+      recorded,
+      recordedSeq: seq,
+      status: "validated",
+      source: "verification",
+      provenance: {},
+      evidence: [],
+      audience: {},
+      tags: [],
+      schema: "contradiction-mark-v1",
+    };
+  }
+
   commit(
     candidate: CandidateClaim,
     opts: {
@@ -80,6 +145,7 @@ export class Promoter {
       recorded: 0,       // placeholder — will be overwritten after accept
       recordedSeq: 0,    // placeholder — will be overwritten after accept
       status: candidate.status ?? "validated",
+      audience: candidate.audience ?? {},   // persona-targeting hints default to none (§2.1)
     } as Claim;
 
     const outcome = enforce(candidateForEnforce, opts.policy, this.adapter);
@@ -102,6 +168,12 @@ export class Promoter {
         outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as ClaimId));
         this.adapter.insertClaim(claim);
 
+        // accept_but_mark (§7.3): both claims live; write a separate `contradiction`
+        // claim recording the conflicting pair so it is queryable for later review.
+        if (outcome.markArtifact && outcome.conflictId) {
+          this.adapter.insertClaim(this.contradictionArtifact(claim, outcome.conflictId, recorded, seq));
+        }
+
         const event: ClaimEvent = {
           op: "commit",
           corpusId: this.corpusId,
@@ -114,6 +186,53 @@ export class Promoter {
         return { result: { id: claim.id, status: "committed" as const }, id: claim.id, event };
       }
     );
+  }
+
+  /**
+   * §7.5 commit_batch — non-atomic, high-throughput batch write.
+   *
+   * Loops over claims invoking the existing single-write commit() per item.
+   * Each commit() is independently transactional; this method deliberately does
+   * NOT wrap the batch in one transaction, so a failure of an individual write
+   * does not roll back the writes that already succeeded. Per-write status is
+   * collected in input order and claims become visible incrementally.
+   *
+   * An item may carry an optional `idempotencyKey` (passed through to commit()).
+   * A thrown error from one write is captured as status "error" and the loop
+   * continues — unless opts.batchPolicy.stopOnError is set, in which case the
+   * batch halts after recording that error.
+   */
+  commitBatch(
+    claims: (CandidateClaim & { idempotencyKey?: string })[],
+    opts: {
+      policy: ContradictionPolicy;
+      writer: string;
+      batchPolicy?: BatchPolicy;
+    }
+  ): BatchResult {
+    const stopOnError = opts.batchPolicy?.stopOnError ?? false;
+    const results: BatchWriteResult[] = [];
+
+    for (let index = 0; index < claims.length; index++) {
+      const { idempotencyKey, ...candidate } = claims[index];
+      try {
+        const r = this.commit(candidate, {
+          policy: opts.policy,
+          writer: opts.writer,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        });
+        results.push({ index, id: r.id, status: r.status });
+      } catch (e) {
+        results.push({
+          index,
+          status: "error",
+          error: e instanceof Error ? e.message : String(e),
+        });
+        if (stopOnError) break;
+      }
+    }
+
+    return { results };
   }
 
   supersede(
@@ -140,6 +259,7 @@ export class Promoter {
           recorded,
           recordedSeq: seq,
           status: replacement.status ?? "validated",
+          audience: replacement.audience ?? {},
         };
 
         // Best-effort soft-deprecate (missing id → no-op for store, but call is made)

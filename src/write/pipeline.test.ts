@@ -686,3 +686,53 @@ it("promote replaces the claim in-place (same id, new status) — real SQLite ad
   const forThisId = all.filter(c => c.id === targetId);
   expect(forThisId).toHaveLength(1);
 });
+
+it("accept_but_mark commits the claim AND writes a queryable contradiction artifact (§7.3)", () => {
+  // Preload a currently-validated claim the candidate will conflict with.
+  const existing = {
+    ...baseCandidate,
+    id: "claim-A" as any,
+    scopeHash: "_",          // scopeHash({}) sentinel — must match the candidate's
+    valueHash: "vh-existing",
+    value: 1,
+    recorded: 1,
+    recordedSeq: 0,
+    status: "validated",
+  } as unknown as Claim;
+  const adapter = makeAdapter([existing]);
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any, "corpus-mark");
+
+  const res = p.commit(
+    { ...baseCandidate, value: 2 },               // different value → conflicts with `existing`
+    { policy: { kind: "accept_but_mark" }, writer: "w" }
+  );
+
+  expect(res.status).toBe("committed");
+
+  const artifacts = adapter.inserted.filter((c) => c.subject === ("contradiction" as any));
+  expect(artifacts).toHaveLength(1);
+  expect(artifacts[0].key).toBe("contradiction.mark");
+  expect(artifacts[0].schema).toBe("contradiction-mark-v1");
+  expect(artifacts[0].value).toEqual({ leftId: res.id, rightId: "claim-A" });
+  // both the accepted claim and the artifact were inserted
+  expect(adapter.inserted.filter((c) => c.subject === ("repo" as any))).toHaveLength(1);
+});
+
+it("always_accept does NOT write a contradiction artifact", () => {
+  const existing = {
+    ...baseCandidate,
+    id: "claim-A" as any,
+    scopeHash: "_",
+    valueHash: "vh-existing",
+    value: 1,
+    recorded: 1,
+    recordedSeq: 0,
+    status: "validated",
+  } as unknown as Claim;
+  const adapter = makeAdapter([existing]);
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any, "corpus-mark");
+
+  p.commit({ ...baseCandidate, value: 2 }, { policy: { kind: "always_accept" }, writer: "w" });
+
+  expect(adapter.inserted.filter((c) => c.subject === ("contradiction" as any))).toHaveLength(0);
+});

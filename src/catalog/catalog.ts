@@ -22,4 +22,14 @@ export class Catalog {
   getCorpusSchema(id: string): ClaimSchema {
     return this.getCorpus(id).schema;
   }
+
+  deleteCorpus(id: string): void {
+    if (!this.corpora.has(id)) throw new Error(`unknown corpus "${id}"`);
+    this.corpora.delete(id);
+  }
+
+  listCorpora(filter?: (c: Corpus) => boolean): Corpus[] {
+    const all = [...this.corpora.values()];
+    return filter ? all.filter(filter) : all;
+  }
 }

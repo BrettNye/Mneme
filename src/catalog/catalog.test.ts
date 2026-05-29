@@ -74,3 +74,53 @@ it("rejects a corpus requiring an unavailable profile tier", () => {
     } as Corpus)
   ).toThrow(/medical/);
 });
+
+// A second corpus fixture for discovery/deletion tests
+const secondCorpus: Corpus = {
+  ...minimalCorpus,
+  id: "second-corpus",
+  displayName: "Second Corpus",
+  metadata: { kind: "secondary" },
+};
+
+it("listCorpora returns all registered corpora", () => {
+  const cat = new Catalog([{ kind: "core" }]);
+  cat.createCorpus(minimalCorpus);
+  cat.createCorpus(secondCorpus);
+  const all = cat.listCorpora();
+  expect(all).toHaveLength(2);
+  expect(all).toEqual(expect.arrayContaining([minimalCorpus, secondCorpus]));
+});
+
+it("listCorpora returns an empty array when no corpora exist", () => {
+  const cat = new Catalog([{ kind: "core" }]);
+  expect(cat.listCorpora()).toEqual([]);
+});
+
+it("listCorpora narrows results with a predicate filter", () => {
+  const cat = new Catalog([{ kind: "core" }]);
+  cat.createCorpus(minimalCorpus);
+  cat.createCorpus(secondCorpus);
+  const filtered = cat.listCorpora((c) => c.id === "second-corpus");
+  expect(filtered).toEqual([secondCorpus]);
+});
+
+it("deleteCorpus removes a corpus so listCorpora returns the remainder", () => {
+  const cat = new Catalog([{ kind: "core" }]);
+  cat.createCorpus(minimalCorpus);
+  cat.createCorpus(secondCorpus);
+  cat.deleteCorpus("test-corpus");
+  expect(cat.listCorpora()).toEqual([secondCorpus]);
+});
+
+it("deleteCorpus makes the deleted id unresolvable via getCorpus", () => {
+  const cat = new Catalog([{ kind: "core" }]);
+  cat.createCorpus(minimalCorpus);
+  cat.deleteCorpus("test-corpus");
+  expect(() => cat.getCorpus("test-corpus")).toThrow(/unknown corpus "test-corpus"/);
+});
+
+it("deleteCorpus throws a typed error for an unknown id", () => {
+  const cat = new Catalog([{ kind: "core" }]);
+  expect(() => cat.deleteCorpus("nope")).toThrow(/unknown corpus "nope"/);
+});

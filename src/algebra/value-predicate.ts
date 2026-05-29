@@ -7,7 +7,10 @@ export type ValuePredicate =
   | { op: "valueEq"; path: string; value: Value }
   | { op: "valueGt"; path: string; value: number }
   | { op: "valueIn"; path: string; values: Value[] }
-  | { op: "valueExists"; path: string };
+  | { op: "valueExists"; path: string }
+  | { op: "valueRegex"; path: string; pattern: string }
+  | { op: "valueNull"; path: string }
+  | { op: "valueMatches"; pattern: Value };
 
 // ---------------------------------------------------------------------------
 // Path tokenizer — splits "a.b[0].c" into ["a", "b", "0", "c"]
@@ -43,6 +46,37 @@ export function getPath(value: Value, path: string): Value | undefined {
     }
   }
   return current;
+}
+
+// ---------------------------------------------------------------------------
+// structurallyMatches — partial/subset structural match of a pattern against a
+// value. For every key in `pattern` (recursively for nested objects), the value
+// must have a matching canonicalized value at that location; arrays match
+// element-wise by the same rule; primitives match by canonicalizeValue equality.
+// Extra keys in the value are allowed.
+// ---------------------------------------------------------------------------
+
+function structurallyMatches(value: Value, pattern: Value): boolean {
+  // Arrays: match element-wise, lengths must be equal.
+  if (Array.isArray(pattern)) {
+    if (!Array.isArray(value)) return false;
+    if (value.length !== pattern.length) return false;
+    return pattern.every((p, i) => structurallyMatches(value[i], p));
+  }
+
+  // Objects (non-null, non-array): subset match recursively.
+  if (pattern !== null && typeof pattern === "object") {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const v = value as Record<string, Value>;
+    return Object.keys(pattern).every(
+      (key) => key in v && structurallyMatches(v[key], pattern[key])
+    );
+  }
+
+  // Primitives (and null): canonicalized equality.
+  return canonicalizeValue(value) === canonicalizeValue(pattern);
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +137,12 @@ function isNumericZodType(schema: z.ZodTypeAny): boolean {
   return inner instanceof z.ZodNumber;
 }
 
+/** Returns true if the unwrapped Zod schema is a string type (ZodString) */
+function isStringZodType(schema: z.ZodTypeAny): boolean {
+  const inner = unwrapZod(schema);
+  return inner instanceof z.ZodString;
+}
+
 // ---------------------------------------------------------------------------
 // typecheckValuePredicate — parse-time type-checking against declared schema
 // ---------------------------------------------------------------------------
@@ -112,6 +152,12 @@ export function typecheckValuePredicate(
   key: string,
   schema: ClaimSchema
 ): void {
+  if (p.op === "valueMatches") {
+    // Structural patterns aren't validated against the field schema —
+    // dynamically typed, no-op (no path to check).
+    return;
+  }
+
   const zodSchema = schema.valueSchemas?.[key];
   if (zodSchema === undefined) {
     // No declared schema → dynamically typed, no-op
@@ -131,6 +177,21 @@ export function typecheckValuePredicate(
 
   if (p.op === "valueExists") {
     // Field exists in schema — that's enough
+    return;
+  }
+
+  if (p.op === "valueNull") {
+    // Field exists in schema (checked above) — that's enough
+    return;
+  }
+
+  if (p.op === "valueRegex") {
+    // Must be a string field
+    if (!isStringZodType(fieldType)) {
+      throw new Error(
+        `valueRegex predicate on path "${p.path}" requires a string field, but the schema declares a non-string type`
+      );
+    }
     return;
   }
 
@@ -202,6 +263,25 @@ export const matchesValue = (value: Value, p: ValuePredicate): boolean => {
     if (resolved === undefined) return false;
     const canon = canonicalizeValue(resolved);
     return p.values.some((v) => canonicalizeValue(v) === canon);
+  }
+
+  if (p.op === "valueRegex") {
+    const resolved = getPath(value, p.path);
+    if (resolved === undefined) return false;
+    if (typeof resolved !== "string") {
+      throw new TypeError(
+        `valueRegex: path "${p.path}" resolved to ${JSON.stringify(resolved)} (${typeof resolved}) — expected a string`
+      );
+    }
+    return new RegExp(p.pattern).test(resolved);
+  }
+
+  if (p.op === "valueNull") {
+    return getPath(value, p.path) === null;
+  }
+
+  if (p.op === "valueMatches") {
+    return structurallyMatches(value, p.pattern);
   }
 
   // TypeScript exhaustiveness — should never reach here

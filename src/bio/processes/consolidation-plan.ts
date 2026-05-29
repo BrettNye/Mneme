@@ -5,6 +5,7 @@ import type { resolvePolicy } from "../policy.js";
 import { lowerBound, tierFor, rankOf, type PromoteTier } from "./consolidation-confidence.js";
 import { oplusSynthesizeAs } from "../../algebra/combination.js";
 import { corpusOf } from "../../algebra/types.js";
+import { inputHashesOf } from "../../core/provenance.js";
 
 export const CONSOLIDATE_WORKFLOW = "consolidate";
 
@@ -139,6 +140,7 @@ function buildConsolidated(
         corpusState: Number(now),
         combinationRule: foldRule,
         inputClaims: group.map((c) => c.id),
+        inputHashes: inputHashesOf(group),
         similarityVersions: {},
         embeddingModelVersions: {},
         evaluationClock: Number(now),

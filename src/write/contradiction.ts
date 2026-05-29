@@ -6,6 +6,8 @@ import { pointEstimate } from "../core/confidence.js";
 export interface ContradictionOutcome {
   decision: "accept" | "reject";
   markArtifact?: boolean;
+  /** id of the currently-validated claim the candidate conflicts with — set when markArtifact is true. */
+  conflictId?: string;
   deprecateIds?: string[];
 }
 
@@ -42,7 +44,7 @@ export function enforce(
         : { decision: "accept" };
 
     case "accept_but_mark":
-      return { decision: "accept", markArtifact: true };
+      return { decision: "accept", markArtifact: true, conflictId: conflict.id };
 
     case "accept_and_resolve":
       if (policy.rule === "deprecate_lower") {

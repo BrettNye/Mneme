@@ -27,6 +27,7 @@ function makeValidatedClaim(overrides: Partial<Claim> = {}): Claim {
     source: "manual",
     provenance: { workflow: "test-workflow", runId: "run-1" },
     evidence: [],
+    audience: {},
     tags: ["ci", "build"],
     schema: "1.0",
   };

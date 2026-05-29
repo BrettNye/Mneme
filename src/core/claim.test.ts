@@ -19,6 +19,7 @@ it("a fully-populated claim satisfies the Claim shape", () => {
     source: "manual",
     provenance: {},
     evidence: [],
+    audience: {},
     tags: [],
     schema: "text",
   };

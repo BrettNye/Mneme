@@ -7,6 +7,7 @@ import { RULE } from "../distribution/rules.js";
 import { SOURCE_WEIGHT } from "../core/source-trust.js";
 import type { ContradictionCluster } from "./contradiction.js";
 import { INFINITY } from "../core/time.js";
+import { inputHashesOf } from "../core/provenance.js";
 
 /**
  * resolveSynthesizeBelief (§4.8, core binary case):
@@ -89,6 +90,7 @@ export const resolveSynthesizeBelief =
         status: "validated",
         source: "workflow",
         evidence: allEvidence,
+        audience: {},
         tags: [],
         schema: favoredClaims[0].schema ?? "",
         profile: favoredClaims[0].profile,
@@ -102,6 +104,7 @@ export const resolveSynthesizeBelief =
             corpusState: 0,
             combinationRule: rule,
             inputClaims: [...claimsA, ...claimsB].map((c) => c.id),
+            inputHashes: inputHashesOf([...claimsA, ...claimsB]),
             similarityVersions: {},
             embeddingModelVersions: {},
             evaluationClock: Date.now(),
