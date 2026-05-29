@@ -29,7 +29,7 @@ const REQUIRED_FIELDS: Record<string, string[]> = {
   kappa: ["fmt", "maxTokens", "src"],
   combine: ["rule", "src"],
   synthesize: ["subject", "key", "rule", "src"],
-  resolve: ["policy", "src"],
+  resolve: ["policy", "threshold", "src"],
   aggregate: ["fn", "src"],
 };
 
