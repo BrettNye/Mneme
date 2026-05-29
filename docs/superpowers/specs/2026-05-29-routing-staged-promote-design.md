@@ -31,8 +31,12 @@ Today `ValuePredicate` (`src/algebra/value-predicate.ts`) is a standalone module
     | ValuePredicate;            // imported from ./value-predicate.js
   ```
   (Flatten chosen over a carrier variant: the value ops already have unique names and live in their own module, so a wrapper would add nesting and double dispatch for no benefit; flat is the idiomatic discriminated-union shape the rest of `Predicate` already uses, and is more ergonomic for the consumer — `sigma({op:"valueEq",path,value})` rather than `sigma({op:"value",pred:{…}})`.)
-- Add a type guard `isValuePredicate(p: Predicate): p is ValuePredicate` (checks `p.op` against the set of value-predicate ops). `matches(claim, p)` routes value ops through it: `if (isValuePredicate(p)) return matchesValue(claim.value, p);`. The router and `collectValuePredicates` likewise use the guard to find value predicates.
-- Add `predicateKindOf(vp: ValuePredicate): PredicateKind` mapping:
+- **Single source of truth for the value-op set (DRY).** Define one map `VALUE_PREDICATE_KIND: Record<ValuePredicate["op"], PredicateKind>` (table below) and derive both helpers from it — never re-list the op names in a guard *and* a mapping:
+  - `isValuePredicate(p: Predicate): p is ValuePredicate` ⇔ `p.op in VALUE_PREDICATE_KIND`.
+  - `predicateKindOf(vp: ValuePredicate): PredicateKind` = `VALUE_PREDICATE_KIND[vp.op]`.
+
+  `matches(claim, p)` routes value ops via the guard: `if (isValuePredicate(p)) return matchesValue(claim.value, p);`. The router and `collectValuePredicates` use the same guard. The op set is then enumerated exactly twice and unavoidably so — once as the `ValuePredicate` union (the shapes) and once as `VALUE_PREDICATE_KIND` (the op→kind table) — never a third time.
+
   | ValuePredicate op | PredicateKind |
   |---|---|
   | `valueEq` | `equality` |
@@ -50,7 +54,7 @@ New module `src/algebra/value-routing.ts`:
 - `routeValuePredicates(pred, caps, opts)` — for each value predicate, look up `valuePredicateLevel(caps, predicateKindOf(vp))`:
   - **`unsupported`** → throw `UnsupportedValuePredicateError` naming the path + kind + adapter.
   - **`fallback_in_memory`** and working-set size `> threshold` → emit a `QueryWarning` via `onWarning`.
-  - **`native_indexed` / `native_unindexed`** → proceed (no push-down in this pass).
+  - **`native_indexed` / `native_unindexed`** → proceed (no push-down in this pass). Note: this means a predicate an adapter declares *native* is still filtered in memory rather than pushed — correct results, just unoptimized. This path is **unreachable for the reference adapter** (SQLite is `fallback_in_memory` after the honesty fix); honoring `native_*` by actually pushing is the v0.3 push-down work.
 
 Integration point: a **value-aware selection stage**. The `sigma` builder in `mneme.ts` wraps `sigmaOp(p)` so that, at evaluation entry, it consults `ctx.adapter.capabilities()` and runs `routeValuePredicates` over `p` before filtering. Unsupported → throw immediately; fallback over threshold → warn; then filter in memory as today.
 
@@ -73,7 +77,7 @@ A per-`createMneme`-instance staging buffer (`Map<string, StagedEntry>`, alongsi
 - `listStaged(corpusId?) → { stagingId: string; corpusId: string }[]` — introspection.
 - `discardStaged(stagingId) → boolean` — drop without promoting; returns whether an entry was removed.
 
-`stagingId` is generated with the existing id generator (or a dedicated counter); it is distinct from a committed claim `id`. The buffer is non-durable by design — staged candidates are uncommitted work and are correctly lost if the process restarts before promotion.
+`stagingId` is a freshly generated UUID (via the existing `newClaimId`-style id generator) — semantically a staging handle, distinct from the committed claim `id` that `promoteStaged` later assigns. The buffer is non-durable by design — staged candidates are uncommitted work and are correctly lost if the process restarts before promotion.
 
 ## 4. Spec reconciliation (`mneme-spec-v0.2-consolidated.md`)
 
@@ -84,7 +88,7 @@ A per-`createMneme`-instance staging buffer (`Map<string, StagedEntry>`, alongsi
 
 ## Testing
 
-- **predicate.ts** — `op:"value"` carrier matches via `matchesValue`; composes inside `and`/`or`/`not`.
+- **predicate.ts** — value ops (flattened into the `Predicate` union) match via `matchesValue` through the `isValuePredicate` guard; compose inside `and`/`or`/`not`; `predicateKindOf` returns the right `PredicateKind` for each value op.
 - **value-routing.ts** — `unsupported` kind throws `UnsupportedValuePredicateError`; `fallback_in_memory` over threshold emits a `QueryWarning` through the callback; under threshold and `native_*` stay silent; `collectValuePredicates` finds value predicates nested in compound predicates.
 - **sqlite** — capability matrix reports `fallback_in_memory` for value-predicate kinds.
 - **staged-promote (façade, through `createMneme` + SQLite)** — emitted candidate is invisible to `query`/`readByIds`; `promoteStaged` commits it and removes it from `listStaged`; `promoteAllStaged` returns a `BatchResult` and clears the buffer; `discardStaged` drops without committing; unknown `stagingId` throws / returns false as specified.
