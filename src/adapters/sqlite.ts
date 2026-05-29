@@ -160,6 +160,10 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     CREATE INDEX IF NOT EXISTS idx_claims_pks ON claims(profile, key, scope_hash);
     CREATE INDEX IF NOT EXISTS idx_claims_subject ON claims(subject);
     CREATE INDEX IF NOT EXISTS idx_claims_run_id ON claims(run_id);
+    -- maxRecordedSeq() runs SELECT MAX(recorded_seq) on every commit; without this
+    -- index that is a full-table scan (O(n) per insert → O(n^2) import). With it,
+    -- SQLite reads the max from the index tail in O(log n).
+    CREATE INDEX IF NOT EXISTS idx_claims_recorded_seq ON claims(recorded_seq);
     CREATE TABLE IF NOT EXISTS idempotency (
       scope TEXT,
       key TEXT,
