@@ -1,5 +1,6 @@
 import { Catalog } from "./catalog/catalog.js";
 import { Promoter } from "./write/pipeline.js";
+import { StagingBuffer } from "./write/staging.js";
 import { replayStatus, type ReplayResult } from "./write/replay.js";
 import { deriveClaimFrom } from "./write/derive.js";
 import { commitDerived } from "./write/derived-write.js";
@@ -244,11 +245,22 @@ export interface Mneme {
       idempotencyKey?: string;
     },
   ): { id: string; status: string };
+  /** §7.1 Stage a candidate without committing it. Throws for an unknown corpus. */
+  emitCandidate(corpusId: string, candidate: CandidateClaim, opts?: { idempotencyKey?: string }): { stagingId: string };
+  /** §7.1 Promote a staged entry via the normal commit pipeline. Throws for an unknown stagingId. */
+  promoteStaged(stagingId: string, opts: { writer: string; policy?: ContradictionPolicy; idempotencyKey?: string }): { id: string; status: string };
+  /** §7.1 Promote all staged entries for a corpus via commitBatch. */
+  promoteAllStaged(corpusId: string, opts: { writer: string; policy?: ContradictionPolicy; batchPolicy?: BatchPolicy }): BatchResult;
+  /** §7.1 List staged entries, optionally filtered by corpusId. */
+  listStaged(corpusId?: string): { stagingId: string; corpusId: string }[];
+  /** §7.1 Discard a staged entry without committing. Returns true if found, false if absent. */
+  discardStaged(stagingId: string): boolean;
 }
 
 export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
   const catalog = new Catalog(availableTiers);
   const promoters = new Map<string, Promoter>();
+  const staging = new StagingBuffer();
 
   function promoterFor(corpusId: string): Promoter {
     let p = promoters.get(corpusId);
@@ -378,5 +390,25 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
         idempotencyKey: opts.idempotencyKey,
       });
     },
+
+    emitCandidate(corpusId: string, candidate: CandidateClaim, opts?: { idempotencyKey?: string }): { stagingId: string } {
+      catalog.getCorpus(corpusId); // throws for unknown corpus
+      return { stagingId: staging.emit(corpusId, candidate, opts?.idempotencyKey) };
+    },
+
+    promoteStaged(stagingId: string, opts: { writer: string; policy?: ContradictionPolicy; idempotencyKey?: string }): { id: string; status: string } {
+      const e = staging.take(stagingId);
+      if (!e) throw new Error(`unknown stagingId "${stagingId}"`);
+      return this.commit(e.corpusId, e.candidate, { writer: opts.writer, policy: opts.policy, idempotencyKey: opts.idempotencyKey ?? e.idempotencyKey });
+    },
+
+    promoteAllStaged(corpusId: string, opts: { writer: string; policy?: ContradictionPolicy; batchPolicy?: BatchPolicy }): BatchResult {
+      const es = staging.takeAll(corpusId);
+      return this.commitBatch(corpusId, es.map((e) => ({ ...e.candidate, idempotencyKey: e.idempotencyKey })), opts);
+    },
+
+    listStaged(corpusId?: string) { return staging.list(corpusId); },
+
+    discardStaged(stagingId: string): boolean { return staging.discard(stagingId); },
   };
 }

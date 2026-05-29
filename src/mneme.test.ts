@@ -977,6 +977,89 @@ describe("audience field (§2.1)", () => {
   });
 });
 
+// ── §7.1 staged-promote ──────────────────────────────────────────────────────
+
+describe("staged-promote (§7.1)", () => {
+  const mk = (subject: string, key: string, value: string) => ({
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject,
+    key,
+    scope: {},
+    value,
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+  });
+
+  it("emitCandidate is invisible to reads until promoted, then committed", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const { stagingId } = m.emitCandidate("workspace:canopy", mk("s", "k", "v"), {});
+    expect(m.query<AlgCorpus>("workspace:canopy", pipe(leaf("workspace:canopy"))).claims).toHaveLength(0);
+    const r = m.promoteStaged(stagingId, { writer: "w" });
+    expect(r.status).toBe("committed");
+    expect(m.listStaged("workspace:canopy")).toEqual([]);
+  });
+
+  it("emitCandidate returns stagingId and appears in listStaged before promotion", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const { stagingId } = m.emitCandidate("workspace:canopy", mk("s2", "k2", "v2"));
+    expect(typeof stagingId).toBe("string");
+    const listed = m.listStaged("workspace:canopy");
+    expect(listed).toHaveLength(1);
+    expect(listed[0].stagingId).toBe(stagingId);
+  });
+
+  it("promoteStaged throws for an unknown stagingId", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    expect(() => m.promoteStaged("nonexistent-staging-id", { writer: "w" })).toThrow(/unknown stagingId/);
+  });
+
+  it("emitCandidate throws for an unknown corpus", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    expect(() => m.emitCandidate("nonexistent-corpus", mk("s", "k", "v"))).toThrow();
+  });
+
+  it("promoteAllStaged returns BatchResult and empties the staged entries for the corpus", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.emitCandidate("workspace:canopy", mk("s3", "k3", "v3"));
+    m.emitCandidate("workspace:canopy", mk("s4", "k4", "v4"));
+    const res = m.promoteAllStaged("workspace:canopy", { writer: "w" });
+    expect(res.results).toHaveLength(2);
+    expect(res.results.every((r) => r.status === "committed")).toBe(true);
+    expect(m.listStaged("workspace:canopy")).toEqual([]);
+  });
+
+  it("discardStaged drops an entry without committing and returns true; false if absent", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const { stagingId } = m.emitCandidate("workspace:canopy", mk("s5", "k5", "v5"));
+    expect(m.discardStaged(stagingId)).toBe(true);
+    expect(m.listStaged("workspace:canopy")).toEqual([]);
+    // After discard, the claim is NOT committed
+    expect(m.query<AlgCorpus>("workspace:canopy", pipe(leaf("workspace:canopy"))).claims).toHaveLength(0);
+    // Discard again returns false
+    expect(m.discardStaged(stagingId)).toBe(false);
+  });
+
+  it("listStaged without corpusId returns all staged entries across corpora", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.emitCandidate("workspace:canopy", mk("sA", "kA", "vA"));
+    m.emitCandidate("workspace:canopy", mk("sB", "kB", "vB"));
+    const all = m.listStaged();
+    expect(all).toHaveLength(2);
+  });
+});
+
 // ── sigma capability-aware routing (§10.2) ───────────────────────────────────
 
 describe("sigma capability-aware routing", () => {
