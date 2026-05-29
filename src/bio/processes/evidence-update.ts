@@ -3,6 +3,7 @@ import type { ClaimId } from "../../core/ids.js";
 import type { AppendOp, CognitiveProcess, ProcessInput } from "../types.js";
 import type { BioPolicy } from "../policy.js";
 import { DEFAULT_BIO_POLICY } from "../policy.js";
+import { inputHashesOf } from "../../core/provenance.js";
 
 export function evidenceUpdate(evidence?: BioPolicy["evidence"]): CognitiveProcess {
   const usageWeight = evidence?.usageWeight ?? DEFAULT_BIO_POLICY.evidence.usageWeight;
@@ -108,6 +109,7 @@ function reweighted(
         queryExpression: "evidence-update",
         corpusState: evalTime,
         inputClaims: [c.id],
+        inputHashes: inputHashesOf([c]),
         similarityVersions: {},
         embeddingModelVersions: {},
         evaluationClock: evalTime,

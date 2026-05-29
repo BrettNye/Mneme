@@ -379,3 +379,245 @@ it("accepts a valueGt predicate on a defaulted numeric field (ZodDefault unwrapp
     )
   ).not.toThrow();
 });
+
+// ---------------------------------------------------------------------------
+// valueRegex — typecheck (parse-time)
+// ---------------------------------------------------------------------------
+
+it("rejects a valueRegex predicate on a non-string field", () => {
+  const schema: ClaimSchema = {
+    version: "1",
+    subjects: [],
+    scopeFields: {},
+    required: [],
+    scalarPseudocount: {},
+    valueSchemas: {
+      "action.outcome": z.object({ score: z.number() }),
+    },
+  };
+  expect(() =>
+    typecheckValuePredicate(
+      { op: "valueRegex", path: "score", pattern: "^\\d+$" },
+      "action.outcome",
+      schema
+    )
+  ).toThrow();
+});
+
+it("accepts a valueRegex predicate on a string field", () => {
+  const schema: ClaimSchema = {
+    version: "1",
+    subjects: [],
+    scopeFields: {},
+    required: [],
+    scalarPseudocount: {},
+    valueSchemas: {
+      "action.outcome": z.object({ label: z.string() }),
+    },
+  };
+  expect(() =>
+    typecheckValuePredicate(
+      { op: "valueRegex", path: "label", pattern: "^foo" },
+      "action.outcome",
+      schema
+    )
+  ).not.toThrow();
+});
+
+it("rejects a valueRegex predicate on a field absent from the declared schema", () => {
+  const schema: ClaimSchema = {
+    version: "1",
+    subjects: [],
+    scopeFields: {},
+    required: [],
+    scalarPseudocount: {},
+    valueSchemas: {
+      "action.outcome": z.object({ label: z.string() }),
+    },
+  };
+  expect(() =>
+    typecheckValuePredicate(
+      { op: "valueRegex", path: "missing", pattern: "^foo" },
+      "action.outcome",
+      schema
+    )
+  ).toThrow();
+});
+
+// ---------------------------------------------------------------------------
+// valueNull — typecheck (parse-time)
+// ---------------------------------------------------------------------------
+
+it("accepts a valueNull predicate on a declared field", () => {
+  const schema: ClaimSchema = {
+    version: "1",
+    subjects: [],
+    scopeFields: {},
+    required: [],
+    scalarPseudocount: {},
+    valueSchemas: {
+      "action.outcome": z.object({ note: z.string().nullable() }),
+    },
+  };
+  expect(() =>
+    typecheckValuePredicate(
+      { op: "valueNull", path: "note" },
+      "action.outcome",
+      schema
+    )
+  ).not.toThrow();
+});
+
+it("rejects a valueNull predicate on a field absent from the declared schema", () => {
+  const schema: ClaimSchema = {
+    version: "1",
+    subjects: [],
+    scopeFields: {},
+    required: [],
+    scalarPseudocount: {},
+    valueSchemas: {
+      "action.outcome": z.object({ note: z.string().nullable() }),
+    },
+  };
+  expect(() =>
+    typecheckValuePredicate(
+      { op: "valueNull", path: "missing" },
+      "action.outcome",
+      schema
+    )
+  ).toThrow();
+});
+
+// ---------------------------------------------------------------------------
+// valueMatches — typecheck (parse-time, dynamically typed no-op)
+// ---------------------------------------------------------------------------
+
+it("accepts a valueMatches predicate without checking against the declared schema (dynamically typed)", () => {
+  const schema: ClaimSchema = {
+    version: "1",
+    subjects: [],
+    scopeFields: {},
+    required: [],
+    scalarPseudocount: {},
+    valueSchemas: {
+      "action.outcome": z.object({ won: z.boolean() }),
+    },
+  };
+  expect(() =>
+    typecheckValuePredicate(
+      { op: "valueMatches", pattern: { anything: 123 } },
+      "action.outcome",
+      schema
+    )
+  ).not.toThrow();
+});
+
+// ---------------------------------------------------------------------------
+// getPath — null vs undefined distinction
+// ---------------------------------------------------------------------------
+
+it("getPath returns null (not undefined) when the stored value is literally null", () => {
+  expect(getPath({ a: null }, "a")).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// matchesValue — valueRegex (runtime)
+// ---------------------------------------------------------------------------
+
+it("matchesValue valueRegex returns true when the string matches the pattern", () => {
+  expect(
+    matchesValue({ label: "foobar" }, { op: "valueRegex", path: "label", pattern: "^foo" })
+  ).toBe(true);
+});
+
+it("matchesValue valueRegex returns false when the string does not match the pattern", () => {
+  expect(
+    matchesValue({ label: "barbaz" }, { op: "valueRegex", path: "label", pattern: "^foo" })
+  ).toBe(false);
+});
+
+it("matchesValue valueRegex throws a typed error on a non-string value (never silent false)", () => {
+  expect(() =>
+    matchesValue({ label: 42 }, { op: "valueRegex", path: "label", pattern: "^foo" })
+  ).toThrow();
+});
+
+it("matchesValue valueRegex returns false when the path is absent", () => {
+  expect(
+    matchesValue({}, { op: "valueRegex", path: "label", pattern: "^foo" })
+  ).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// matchesValue — valueNull (runtime)
+// ---------------------------------------------------------------------------
+
+it("matchesValue valueNull returns true when the path resolves to JSON null", () => {
+  expect(matchesValue({ note: null }, { op: "valueNull", path: "note" })).toBe(true);
+});
+
+it("matchesValue valueNull returns false when the path is absent", () => {
+  expect(matchesValue({}, { op: "valueNull", path: "note" })).toBe(false);
+});
+
+it("matchesValue valueNull returns false when the path resolves to a non-null value", () => {
+  expect(matchesValue({ note: "hi" }, { op: "valueNull", path: "note" })).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// matchesValue — valueMatches (whole-value structural match)
+// ---------------------------------------------------------------------------
+
+it("matchesValue valueMatches returns true on a subset object match (extra keys allowed)", () => {
+  expect(
+    matchesValue(
+      { a: 1, b: 2, c: 3 },
+      { op: "valueMatches", pattern: { a: 1, b: 2 } }
+    )
+  ).toBe(true);
+});
+
+it("matchesValue valueMatches returns true on a nested structural match", () => {
+  expect(
+    matchesValue(
+      { meta: { tags: ["x"], count: 5 }, extra: true },
+      { op: "valueMatches", pattern: { meta: { count: 5 } } }
+    )
+  ).toBe(true);
+});
+
+it("matchesValue valueMatches matches arrays element-wise", () => {
+  expect(
+    matchesValue(
+      { items: [{ id: 1, name: "a" }, { id: 2, name: "b" }] },
+      { op: "valueMatches", pattern: { items: [{ id: 1 }, { id: 2 }] } }
+    )
+  ).toBe(true);
+});
+
+it("matchesValue valueMatches returns false on a value mismatch", () => {
+  expect(
+    matchesValue(
+      { a: 1, b: 2 },
+      { op: "valueMatches", pattern: { a: 1, b: 99 } }
+    )
+  ).toBe(false);
+});
+
+it("matchesValue valueMatches returns false when a pattern key is absent in the value", () => {
+  expect(
+    matchesValue(
+      { a: 1 },
+      { op: "valueMatches", pattern: { a: 1, b: 2 } }
+    )
+  ).toBe(false);
+});
+
+it("matchesValue valueMatches returns false when array lengths differ", () => {
+  expect(
+    matchesValue(
+      { items: [1, 2] },
+      { op: "valueMatches", pattern: { items: [1, 2, 3] } }
+    )
+  ).toBe(false);
+});

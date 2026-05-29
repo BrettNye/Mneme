@@ -4,7 +4,8 @@ it("DerivationProvenance requires all mandatory fields", () => {
   const dp: DerivationProvenance = {
     queryExpression: "SELECT * WHERE ...",
     corpusState: 1234567890,
-    inputClaims: [] as import("./ids.js").ClaimId[],
+    inputClaims: ["c-1"] as import("./ids.js").ClaimId[],
+    inputHashes: { "c-1": "vh-c-1" },
     similarityVersions: { "model-a": "1.0.0" },
     embeddingModelVersions: { "embed-v1": "2.3.1" },
     evaluationClock: 1700000000000,
@@ -13,7 +14,8 @@ it("DerivationProvenance requires all mandatory fields", () => {
   expect(dp.queryExpression).toBe("SELECT * WHERE ...");
   expect(dp.corpusState).toBe(1234567890);
   expect(dp.evaluationClock).toBe(1700000000000);
-  expect(dp.inputClaims).toEqual([]);
+  expect(dp.inputClaims).toEqual(["c-1"]);
+  expect(dp.inputHashes).toEqual({ "c-1": "vh-c-1" });
   expect(dp.similarityVersions).toEqual({ "model-a": "1.0.0" });
   expect(dp.embeddingModelVersions).toEqual({ "embed-v1": "2.3.1" });
 });
@@ -23,6 +25,7 @@ it("DerivationProvenance optional combinationRule defaults to undefined", () => 
     queryExpression: "match-all",
     corpusState: 0,
     inputClaims: [] as import("./ids.js").ClaimId[],
+    inputHashes: {},
     similarityVersions: {},
     embeddingModelVersions: {},
     evaluationClock: 0,
@@ -37,6 +40,7 @@ it("DerivationProvenance combinationRule can be set", () => {
     corpusState: 1,
     combinationRule: "max-pooling",
     inputClaims: [] as import("./ids.js").ClaimId[],
+    inputHashes: {},
     similarityVersions: {},
     embeddingModelVersions: {},
     evaluationClock: 1,
@@ -56,6 +60,7 @@ it("Provenance carries all optional fields", () => {
     queryExpression: "q",
     corpusState: 1,
     inputClaims: [] as import("./ids.js").ClaimId[],
+    inputHashes: {},
     similarityVersions: {},
     embeddingModelVersions: {},
     evaluationClock: 1,

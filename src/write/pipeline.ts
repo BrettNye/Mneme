@@ -8,6 +8,33 @@ import { checkIdempotent, recordIdempotent, idempotencyScope } from "./idempoten
 import type { ContradictionPolicy } from "../catalog/corpus.js";
 import type { ClaimEvent, StorageAdapter } from "../adapters/adapter.js";
 
+/**
+ * §7.5 batch writes — non-atomic, high-throughput.
+ *
+ * Per-write outcome status. "committed" | "rejected" | "duplicate" mirror the
+ * single-write commit() return; "error" is a per-item failure (e.g. a thrown
+ * validation error) that, per spec, does NOT roll back successful writes in the
+ * same batch.
+ */
+export type BatchWriteStatus = "committed" | "rejected" | "duplicate" | "error";
+
+export interface BatchWriteResult {
+  index: number;
+  id?: string;
+  status: BatchWriteStatus;
+  error?: string;
+}
+
+export interface BatchResult {
+  results: BatchWriteResult[];
+}
+
+/**
+ * Batch-level knobs. Defaults to continue-on-error (non-atomic high-throughput).
+ * stopOnError flips to fail-fast: the first errored write halts further attempts.
+ */
+export type BatchPolicy = { stopOnError?: boolean };
+
 // Forward-only lifecycle transitions (excluding any→deprecated which is always valid)
 const LIFECYCLE_ORDER: Status[] = ["candidate", "provisional", "validated", "deprecated"];
 
@@ -114,6 +141,53 @@ export class Promoter {
         return { result: { id: claim.id, status: "committed" as const }, id: claim.id, event };
       }
     );
+  }
+
+  /**
+   * §7.5 commit_batch — non-atomic, high-throughput batch write.
+   *
+   * Loops over claims invoking the existing single-write commit() per item.
+   * Each commit() is independently transactional; this method deliberately does
+   * NOT wrap the batch in one transaction, so a failure of an individual write
+   * does not roll back the writes that already succeeded. Per-write status is
+   * collected in input order and claims become visible incrementally.
+   *
+   * An item may carry an optional `idempotencyKey` (passed through to commit()).
+   * A thrown error from one write is captured as status "error" and the loop
+   * continues — unless opts.batchPolicy.stopOnError is set, in which case the
+   * batch halts after recording that error.
+   */
+  commitBatch(
+    claims: (CandidateClaim & { idempotencyKey?: string })[],
+    opts: {
+      policy: ContradictionPolicy;
+      writer: string;
+      batchPolicy?: BatchPolicy;
+    }
+  ): BatchResult {
+    const stopOnError = opts.batchPolicy?.stopOnError ?? false;
+    const results: BatchWriteResult[] = [];
+
+    for (let index = 0; index < claims.length; index++) {
+      const { idempotencyKey, ...candidate } = claims[index];
+      try {
+        const r = this.commit(candidate, {
+          policy: opts.policy,
+          writer: opts.writer,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        });
+        results.push({ index, id: r.id, status: r.status });
+      } catch (e) {
+        results.push({
+          index,
+          status: "error",
+          error: e instanceof Error ? e.message : String(e),
+        });
+        if (stopOnError) break;
+      }
+    }
+
+    return { results };
   }
 
   supersede(

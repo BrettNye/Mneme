@@ -5,6 +5,7 @@ import { serializeExpr } from "../algebra/serialize.js";
 import type { ExprNode } from "../algebra/ast.js";
 import type { Claim, CandidateClaim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
+import { inputHashesOf } from "../core/provenance.js";
 import type { StorageAdapter } from "../adapters/adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import type { Scope } from "../core/scope.js";
@@ -48,7 +49,8 @@ export function deriveClaimFrom(
   const rep: Claim = result.claims[result.claims.length - 1];
 
   // inputClaims are the contributing claims excluding the derived representative itself.
-  const inputClaims: ClaimId[] = result.claims.filter((c) => c !== rep).map((c) => c.id);
+  const inputs: Claim[] = result.claims.filter((c) => c !== rep);
+  const inputClaims: ClaimId[] = inputs.map((c) => c.id);
 
   return {
     subject: opts.subject,
@@ -71,6 +73,7 @@ export function deriveClaimFrom(
         corpusState: adapter.maxRecordedSeq(),
         combinationRule: opts.combination,
         inputClaims,
+        inputHashes: inputHashesOf(inputs),
         similarityVersions: { ...ctx.usedSimilarityVersions },
         embeddingModelVersions: { ...ctx.usedEmbeddingModelVersions },
         evaluationClock: clock,

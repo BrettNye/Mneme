@@ -17,6 +17,7 @@ function makeClaim(id: string, value: string, confidence = 0.9): Claim {
     source: "workflow",
     status: "active",
     scope: {},
+    valueHash: `vh-${value}`,
     corpusId: "test-corpus",
     recorded: 1000,
     recordedSeq: 1,
@@ -89,6 +90,22 @@ describe("deriveClaimFrom (ExprNode API)", () => {
     expect(cand.provenance!.derivedFrom?.inputClaims).toEqual(["in-1"]);
     expect(cand.provenance!.derivedFrom?.evaluationClock).toBe(1234);
     expect(cand.provenance!.derivedFrom?.combinationRule).toBe("rule_weighted_avg");
+  });
+
+  it("records inputHashes mapping each input claim id to its content valueHash (App H.3 banked prerequisite)", () => {
+    // rep = claimB (last, excluded); input = claimA only. inputHashes anchors the
+    // input's content so a future erasure/integrity-verifiable replay can survive
+    // erasure of the input — irreversible, so it must be recorded at derive time.
+    const claimA = makeClaim("in-1", "v-a");
+    const claimB = makeClaim("in-2", "v-b");
+    const adapter = makeAdapter([claimA, claimB], 7);
+    const cand = deriveClaimFrom(adapter, catalog, leaf("test-corpus"), {
+      subject: "t",
+      key: "t.k",
+      scope: {},
+      evaluationClock: 1234,
+    });
+    expect(cand.provenance!.derivedFrom?.inputHashes).toEqual({ "in-1": "vh-v-a" });
   });
 
   it("throws when the pipeline produces an empty corpus", () => {

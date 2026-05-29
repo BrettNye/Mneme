@@ -3,6 +3,7 @@ import { subjectOf } from "../../core/key.js";
 import { validateScope, type ClaimSchema } from "../../catalog/schema.js";
 import type { AppendOp } from "../types.js";
 import { DREAM_WORKFLOW, DREAM_PRIOR, depthOf, depthTag, type ProposedInsight } from "./dreaming-types.js";
+import { inputHashesOf } from "../../core/provenance.js";
 
 export interface AdmitResult {
   ops: AppendOp[];
@@ -65,6 +66,9 @@ export function admitInsights(
           corpusState: nowMs,
           combinationRule: `dream@${modelVersion}`,
           inputClaims: ins.cites,
+          inputHashes: inputHashesOf(
+            ins.cites.map((id) => byId.get(String(id))).filter((c): c is Claim => c !== undefined)
+          ),
           similarityVersions: {},
           embeddingModelVersions: {},
           evaluationClock: nowMs,
