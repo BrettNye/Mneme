@@ -17,11 +17,9 @@ import {
 export class MissingRule extends Error {
   constructor(
     public readonly family: string,
-    public readonly name: string,
+    public readonly ruleName: string,
   ) {
-    super(`missing ${family} rule: ${name}`);
-    // Do NOT set `this.name` here — `name` is the looked-up rule name,
-    // not the Error.prototype.name discriminator.
+    super(`missing ${family} rule: ${ruleName}`);
   }
 }
 
@@ -35,9 +33,8 @@ const RESOLUTIONS: Record<string, unknown> = {
 };
 
 export function resolutionRegistry(name: string): unknown {
-  const fn = RESOLUTIONS[name];
-  if (!fn) throw new MissingRule("resolution", name);
-  return fn;
+  if (!Object.hasOwn(RESOLUTIONS, name)) throw new MissingRule("resolution", name);
+  return RESOLUTIONS[name];
 }
 
 const REWEIGHTS: Record<string, unknown> = {
@@ -49,7 +46,6 @@ const REWEIGHTS: Record<string, unknown> = {
 };
 
 export function reweightRegistry(name: string): unknown {
-  const fn = REWEIGHTS[name];
-  if (!fn) throw new MissingRule("reweight", name);
-  return fn;
+  if (!Object.hasOwn(REWEIGHTS, name)) throw new MissingRule("reweight", name);
+  return REWEIGHTS[name];
 }

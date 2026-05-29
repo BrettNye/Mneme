@@ -18,7 +18,7 @@ it("resolutionRegistry throws MissingRule on unknown name", () => {
   expect(() => resolutionRegistry("nope")).toThrow(MissingRule);
 });
 
-it("MissingRule carries family and name on resolution miss", () => {
+it("MissingRule carries family and ruleName on resolution miss", () => {
   let caught: unknown;
   try {
     resolutionRegistry("unknown-policy");
@@ -28,7 +28,7 @@ it("MissingRule carries family and name on resolution miss", () => {
   expect(caught).toBeInstanceOf(MissingRule);
   const err = caught as MissingRule;
   expect(err.family).toBe("resolution");
-  expect(err.name).toBe("unknown-policy");
+  expect(err.ruleName).toBe("unknown-policy");
 });
 
 it("reweightRegistry resolves all five shipped reweight functions", () => {
@@ -48,7 +48,7 @@ it("reweightRegistry throws MissingRule on unknown name", () => {
   expect(() => reweightRegistry("nope")).toThrow(MissingRule);
 });
 
-it("MissingRule carries family and name on reweight miss", () => {
+it("MissingRule carries family and ruleName on reweight miss", () => {
   let caught: unknown;
   try {
     reweightRegistry("unknown-reweight");
@@ -58,5 +58,17 @@ it("MissingRule carries family and name on reweight miss", () => {
   expect(caught).toBeInstanceOf(MissingRule);
   const err = caught as MissingRule;
   expect(err.family).toBe("reweight");
-  expect(err.name).toBe("unknown-reweight");
+  expect(err.ruleName).toBe("unknown-reweight");
+});
+
+it("resolutionRegistry throws MissingRule for inherited Object.prototype keys", () => {
+  expect(() => resolutionRegistry("constructor")).toThrow(MissingRule);
+  expect(() => resolutionRegistry("toString")).toThrow(MissingRule);
+  expect(() => resolutionRegistry("hasOwnProperty")).toThrow(MissingRule);
+});
+
+it("reweightRegistry throws MissingRule for inherited Object.prototype keys", () => {
+  expect(() => reweightRegistry("constructor")).toThrow(MissingRule);
+  expect(() => reweightRegistry("__proto__")).toThrow(MissingRule);
+  expect(() => reweightRegistry("toString")).toThrow(MissingRule);
 });
