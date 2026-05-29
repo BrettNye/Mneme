@@ -19,4 +19,7 @@ it("quickstart runs end-to-end on the public surface", () => {
 
   // step 6: replay of a plain (non-derived) claim
   expect(r.replayStatusOfPlainClaim).toBe("integrity_unknown");
+
+  // step 7: a derived claim re-executes to exact
+  expect(r.derivedReplayStatus).toBe("exact");
 });
