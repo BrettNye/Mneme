@@ -1,19 +1,27 @@
 import type { Claim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
 import type { StorageAdapter } from "../adapters/adapter.js";
+import type { Catalog } from "../catalog/catalog.js";
 import { similarityFn } from "../algebra/similarity.js";
+import { compile, UnsupportedExprOp } from "../algebra/compile.js";
+import { parseExpr } from "../algebra/serialize.js";
+import { MissingRule } from "../algebra/registries.js";
+import * as expression from "../algebra/expression.js";
+import type { Corpus } from "../algebra/types.js";
+import type { Value } from "../core/value.js";
 
 export interface MissingDependency {
   // "embedding_version" is intentionally absent: embedding-version checking is deferred until
   // embedding models and an embedding registry exist (arrives with the deferred `exact`
   // re-execution engine in a later slice). Only the variants this function actually produces
   // are declared here.
-  kind: "input" | "similarity_version";
+  kind: "input" | "similarity_version" | "rule";
   id: string;
 }
 
 export type ReplayStatus =
   | "exact"
+  | "mismatch"
   | "unavailable_models"
   | "missing_inputs"
   | "integrity_unknown"
@@ -25,13 +33,75 @@ export interface ReplayResult {
   missingDependencies: MissingDependency[];
 }
 
-// NOTE: "exact" requires re-EXECUTING the serialized query — deferred (serializable query AST is a
-// later slice). This function reports only the degraded statuses from recorded provenance metadata.
-// A derived claim whose inputs and versions all resolve returns "failed" as a placeholder until the
-// replay engine (serializable query AST) lands and can verify re-execution.
-export function replayStatus(claim: Claim, adapter: StorageAdapter): ReplayResult {
+/**
+ * Compare two Values deeply, treating numeric leaves as equal within epsilon.
+ */
+function valuesEquivalent(a: Value, b: Value, eps: number): boolean {
+  if (a === b) return true;
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= eps;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return a === b;
+  if (typeof a === "object" && typeof b === "object") {
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false;
+      return a.every((v, i) => valuesEquivalent(v, (b as Value[])[i], eps));
+    }
+    // Both plain objects
+    const aObj = a as Record<string, Value>;
+    const bObj = b as Record<string, Value>;
+    const aKeys = Object.keys(aObj);
+    const bKeys = Object.keys(bObj);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((k) => k in bObj && valuesEquivalent(aObj[k], bObj[k], eps));
+  }
+  return false;
+}
+
+/**
+ * Compare two claims for semantic equivalence (value + confidence parameters) within eps.
+ * Ignores id, recorded, valid, provenance, tags.
+ */
+function claimsEquivalent(a: Claim, b: Claim, eps = 1e-9): boolean {
+  if (!valuesEquivalent(a.value, b.value, eps)) return false;
+  const ca = a.confidence;
+  const cb = b.confidence;
+  if (ca.distribution !== cb.distribution) return false;
+  if (ca.distribution === "beta" && cb.distribution === "beta") {
+    return (
+      Math.abs(ca.parameters.alpha - cb.parameters.alpha) <= eps &&
+      Math.abs(ca.parameters.beta - cb.parameters.beta) <= eps
+    );
+  }
+  if (ca.distribution === "scalar" && cb.distribution === "scalar") {
+    return Math.abs(ca.parameters.p - cb.parameters.p) <= eps;
+  }
+  return false;
+}
+
+/**
+ * Evaluate the serialized query expression under a pinned evaluationClock, compare the
+ * last claim of the recomputed corpus against the recorded claim, and return the replay status.
+ *
+ * Degraded-path order (unchanged):
+ *   1. No derivedFrom or no evaluationClock → integrity_unknown
+ *   2. queryExpression === "" (v0.1-era, no AST recorded) → integrity_unknown
+ *   3. Missing input claims → missing_inputs
+ *   4. Unavailable similarity versions → unavailable_models
+ *   5. Re-execute → exact | mismatch | unavailable_models (MissingRule) | failed
+ */
+export function replayStatus(
+  claim: Claim,
+  adapter: StorageAdapter,
+  catalog?: Catalog,
+): ReplayResult {
   const d = claim.provenance?.derivedFrom;
   if (!d || d.evaluationClock === undefined) {
+    return { status: "integrity_unknown", missingDependencies: [] };
+  }
+
+  // v0.1-era claims: no query AST recorded — cannot re-execute
+  if (d.queryExpression === "") {
     return { status: "integrity_unknown", missingDependencies: [] };
   }
 
@@ -63,6 +133,32 @@ export function replayStatus(claim: Claim, adapter: StorageAdapter): ReplayResul
     return { status: "unavailable_models", missingDependencies: missing };
   }
 
-  // Cannot verify exact without re-executing the serialized query (deferred slice)
-  return { status: "failed", missingDependencies: [] };
+  // Re-execute the serialized query under the pinned evaluationClock
+  const effectiveCatalog: Catalog = catalog ?? ({
+    getCorpus: (id: string) => { throw new Error(`unknown corpus "${id}"`); },
+  } as unknown as Catalog);
+
+  try {
+    const stages = compile(parseExpr(d.queryExpression));
+    const recomputed = expression.evaluate<Corpus>(stages, {
+      adapter,
+      catalog: effectiveCatalog,
+      evaluationClock: d.evaluationClock,
+    });
+    const rep = recomputed.claims[recomputed.claims.length - 1];
+    return claimsEquivalent(rep, claim)
+      ? { status: "exact", result: rep, missingDependencies: [] }
+      : { status: "mismatch", result: rep, missingDependencies: [] };
+  } catch (e) {
+    if (e instanceof MissingRule) {
+      return {
+        status: "unavailable_models",
+        missingDependencies: [{ kind: "rule", id: `${e.family}:${e.ruleName}` }],
+      };
+    }
+    if (e instanceof UnsupportedExprOp) {
+      return { status: "failed", missingDependencies: [] };
+    }
+    return { status: "failed", missingDependencies: [] };
+  }
 }
