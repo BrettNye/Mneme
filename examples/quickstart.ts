@@ -152,6 +152,9 @@ export function runQuickstart(): QuickstartResult {
   );
   const decayedClaim = decayed.claims[0];
   const rawConfidence = decayedClaim.confidence.raw;
+  // effective is always populated by delta.exponential; the ?? rawConfidence guard only
+  // matters if a future engine regression omits it — in which case the assertion below
+  // (effective < raw) fails loudly rather than throwing on undefined.
   const effectiveAfterDecay = decayedClaim.confidence.effective ?? rawConfidence;
 
   // 6. Reproducibility / replay. A normal committed claim has no recorded query, so replay
