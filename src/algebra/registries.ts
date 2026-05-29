@@ -23,16 +23,19 @@ export class MissingRule extends Error {
   }
 }
 
-const RESOLUTIONS: Record<string, unknown> = {
-  resolveDeprecateLower,
-  resolveKeepBoth,
-  resolveFlagForReview,
-  resolveDeprecateMinority,
-  resolvePromoteConsensus,
-  resolveSynthesizeBelief,
+export type ResolutionInput = "pairs" | "clusters";
+export interface ResolutionEntry { fn: unknown; input: ResolutionInput; }
+
+const RESOLUTIONS: Record<string, ResolutionEntry> = {
+  resolveDeprecateLower:    { fn: resolveDeprecateLower,    input: "pairs" },
+  resolveKeepBoth:          { fn: resolveKeepBoth,          input: "pairs" },
+  resolveFlagForReview:     { fn: resolveFlagForReview,     input: "pairs" },
+  resolveDeprecateMinority: { fn: resolveDeprecateMinority, input: "clusters" },
+  resolvePromoteConsensus:  { fn: resolvePromoteConsensus,  input: "clusters" },
+  resolveSynthesizeBelief:  { fn: resolveSynthesizeBelief,  input: "clusters" },
 };
 
-export function resolutionRegistry(name: string): unknown {
+export function resolutionRegistry(name: string): ResolutionEntry {
   if (!Object.hasOwn(RESOLUTIONS, name)) throw new MissingRule("resolution", name);
   return RESOLUTIONS[name];
 }

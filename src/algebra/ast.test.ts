@@ -1,4 +1,4 @@
-import { leaf, sigma, tau, delta, pi, rho, gamma, kappa, combine, synthesize, resolve, aggregate } from "./ast.js";
+import { leaf, sigma, tau, delta, pi, rho, gamma, kappa, combine, synthesize, resolve, aggregate, DEFAULT_RESOLVE_THRESHOLD } from "./ast.js";
 import type { ExprNode } from "./ast.js";
 
 it("leaf constructor builds leaf shape", () => {
@@ -118,6 +118,7 @@ it("resolve constructor builds resolution shape with optional rule", () => {
   expect(withoutRule).toEqual({
     op: "resolve",
     policy: "latestWins",
+    threshold: 0.5,
     src: { op: "leaf", corpusId: "c" },
   });
 
@@ -125,9 +126,29 @@ it("resolve constructor builds resolution shape with optional rule", () => {
   expect(withRule).toEqual({
     op: "resolve",
     policy: "latestWins",
+    threshold: 0.5,
     rule: "deprecate_lower",
     src: { op: "leaf", corpusId: "c" },
   });
+});
+
+it("resolve records a default threshold", () => {
+  expect(resolve("resolveKeepBoth", leaf("c"))).toEqual({
+    op: "resolve", policy: "resolveKeepBoth", threshold: 0.5, src: { op: "leaf", corpusId: "c" },
+  });
+});
+
+it("resolve records an explicit threshold when supplied", () => {
+  expect(resolve("resolveKeepBoth", leaf("c"), undefined, 0.75)).toEqual({
+    op: "resolve", policy: "resolveKeepBoth", threshold: 0.75, src: { op: "leaf", corpusId: "c" },
+  });
+  expect(resolve("latestWins", leaf("c"), "deprecate_lower", 0.9)).toEqual({
+    op: "resolve", policy: "latestWins", threshold: 0.9, rule: "deprecate_lower", src: { op: "leaf", corpusId: "c" },
+  });
+});
+
+it("DEFAULT_RESOLVE_THRESHOLD is 0.5", () => {
+  expect(DEFAULT_RESOLVE_THRESHOLD).toBe(0.5);
 });
 
 it("aggregate constructor builds aggregation shape with optional fields", () => {

@@ -10,8 +10,18 @@ it("resolutionRegistry resolves all six shipped resolution policies as functions
     "resolveSynthesizeBelief",
   ];
   for (const name of names) {
-    expect(resolutionRegistry(name), `expected ${name} to be a function`).toBeTypeOf("function");
+    expect(typeof resolutionRegistry(name).fn, `expected ${name}.fn to be a function`).toBe("function");
   }
+});
+
+it("resolutionRegistry returns fn + input-kind per policy", () => {
+  expect(resolutionRegistry("resolveKeepBoth").input).toBe("pairs");
+  expect(resolutionRegistry("resolveDeprecateLower").input).toBe("pairs");
+  expect(resolutionRegistry("resolveFlagForReview").input).toBe("pairs");
+  expect(resolutionRegistry("resolveDeprecateMinority").input).toBe("clusters");
+  expect(resolutionRegistry("resolvePromoteConsensus").input).toBe("clusters");
+  expect(resolutionRegistry("resolveSynthesizeBelief").input).toBe("clusters");
+  expect(typeof resolutionRegistry("resolveSynthesizeBelief").fn).toBe("function");
 });
 
 it("resolutionRegistry throws MissingRule on unknown name", () => {
