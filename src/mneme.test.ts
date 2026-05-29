@@ -5,6 +5,9 @@ import type { ComposedContext } from "./algebra/types.js";
 import type { Corpus as CorpusDef } from "./catalog/corpus.js";
 import type { ClaimSchema } from "./catalog/schema.js";
 import type { AggregateResult } from "./algebra/aggregation.js";
+import { leaf as astLeaf } from "./algebra/ast.js";
+import { serializeExpr } from "./algebra/serialize.js";
+import type { Claim } from "./core/claim.js";
 
 const schema: ClaimSchema = {
   version: "1",
@@ -695,6 +698,57 @@ it("promote on an unknown corpus throws", () => {
 });
 
 // ── read / readByIds surface ──────────────────────────────────────────────────
+
+// ── replay surface (threads the internal catalog) ────────────────────────────
+
+it("replay re-executes a derived claim's recorded query and returns exact", () => {
+  const adapter = createSqliteAdapter();
+  const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  // Commit one input claim into the corpus.
+  const { id } = m.commit("workspace:canopy", {
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject: "replay-subject",
+    key: "fact",
+    scope: {},
+    value: "replay value",
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+  }, { writer: "test-writer" });
+
+  // The stored input claim is the representative leaf("workspace:canopy") will reproduce.
+  const stored = m.readByIds("workspace:canopy", [id as any])[0];
+
+  // A derived claim whose recorded query is leaf(corpus); not itself committed,
+  // so it never pollutes re-execution. Its payload equals the representative.
+  const derived = {
+    ...stored,
+    id: "derived-replay",
+    corpusId: undefined,
+    provenance: {
+      derivedFrom: {
+        queryExpression: serializeExpr(astLeaf("workspace:canopy")),
+        corpusState: 1,
+        inputClaims: [id],
+        similarityVersions: {},
+        embeddingModelVersions: {},
+        evaluationClock: 1234,
+      },
+    },
+  } as unknown as Claim;
+
+  // m.replay threads the instance's own catalog so re-execution can resolve the corpus.
+  const result = m.replay(derived);
+  expect(result.status).toBe("exact");
+  expect(result.result).toBeDefined();
+});
 
 it("read returns claims by ExecutionPlan; readByIds by id; unknown corpus throws", () => {
   const adapter = createSqliteAdapter();
