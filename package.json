@@ -1,11 +1,18 @@
 {
   "name": "mneme",
   "type": "module",
+  "bin": { "mneme": "./bin/mneme.ts" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./surface": "./src/surface/index.ts",
+    "./cli": "./src/cli/index.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "example": "tsx examples/quickstart.ts",
-    "example:bio": "tsx examples/bio-quickstart.ts"
+    "example:bio": "tsx examples/bio-quickstart.ts",
+    "mneme": "tsx bin/mneme.ts"
   },
   "dependencies": {
     "zod": "^3.23.0",
