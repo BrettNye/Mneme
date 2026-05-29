@@ -4,7 +4,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "example": "tsx examples/quickstart.ts"
+    "example": "tsx examples/quickstart.ts",
+    "example:bio": "tsx examples/bio-quickstart.ts"
   },
   "dependencies": {
     "zod": "^3.23.0",

@@ -105,7 +105,39 @@ mneme.replay(claim).status;
 // Claims derived from a recorded query re-execute to "exact" / "mismatch".
 ```
 
+## Bio layer (cognitive memory)
+
+The **bio layer** is a cognitive overlay on the claim store. It doesn't replace claims — it
+learns *which* claims matter from how episodes (tasks) turn out: it **recalls** relevant
+memories, **reinforces** the ones that led to success, and **consolidates** them. The full
+runnable version is in [`examples/bio-quickstart.ts`](examples/bio-quickstart.ts)
+(`npm run example:bio`).
+
+```ts
+import { createMneme, createSqliteAdapter, createBioMemory } from "mneme";
+
+const mneme = createMneme({
+  adapter: createSqliteAdapter(":memory:"),
+  availableTiers: [{ kind: "core" }],
+});
+mneme.createCorpus(corpusDef); // see examples/bio-quickstart.ts for the full definition
+const bio = createBioMemory({ mneme, corpusId: "agent:memory" });
+
+// Recall the agent's memories for a task (an "episode"), then report how the task went.
+const ep = bio.openEpisode();
+bio.recall({ corpusId: "agent:memory" }, [], { now: Date.now(), decay: () => 1 }, ep.id);
+
+// A successful outcome reinforces the recalled memories — their Beta alpha rises.
+const report = bio.recordOutcome(ep.id, "success");
+// report.opsApplied > 0 — the cognitive cycle strengthened the surfaced memories
+
+bio.consolidate(ep.id); // fold / promote consolidated memories
+```
+
+`summarize` and `dream` are deeper bio processes that take an injected model function — see
+the bio-layer design docs.
+
 ## Where to go next
 
 - Replay re-execution engine: `docs/superpowers/specs/2026-05-28-replay-reexecution-engine-design.md`
-- The bio (cognitive) layer ships with its own quickstart (coming next).
+- Bio layer: see [Bio layer (cognitive memory)](#bio-layer-cognitive-memory) above and [`examples/bio-quickstart.ts`](examples/bio-quickstart.ts).
