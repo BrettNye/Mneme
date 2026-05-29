@@ -47,3 +47,29 @@ export { createConsolidatePass } from "./bio/processes/consolidation.js";
 export type { SummarizeFn, ProposedSummary, SummarizeInput, SummarizeReport } from "./bio/processes/summarize-types.js";
 export { SUMMARY_WORKFLOW } from "./bio/processes/summarize-types.js";
 export { createSummarizePass } from "./bio/processes/summarize.js";
+
+// Replay re-execution engine — AST
+// Names that clash with the existing stage-builder exports from mneme.js are
+// aliased with an "ast" prefix (leaf→astLeaf, sigma→astSigma, etc.).
+export {
+  leaf as astLeaf,
+  sigma as astSigma,
+  tau as astTau,
+  delta as astDelta,
+  rho as astRho,
+  gamma as astGamma,
+  kappa as astKappa,
+  pi,
+  combine,
+  synthesize,
+  resolve,
+  aggregate,
+} from "./algebra/ast.js";
+export type { ExprNode } from "./algebra/ast.js";
+
+// Replay re-execution engine — serialization
+export { serializeExpr, parseExpr } from "./algebra/serialize.js";
+
+// Replay re-execution engine — replay
+export { replayStatus } from "./write/replay.js";
+export type { ReplayStatus, ReplayResult } from "./write/replay.js";
