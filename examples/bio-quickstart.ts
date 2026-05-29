@@ -94,6 +94,8 @@ export function runBioQuickstart(): BioQuickstartResult {
 
   // 6. Observe reinforcement: the seeded memory was superseded; read the active replacement
   //    and check its alpha rose above the seeded value.
+  //    mneme.read with no `status` filter returns ALL claims (including the deprecated
+  //    originals), so we exclude `deprecated` to find the live, reinforced replacement.
   const active = mneme
     .read(CORPUS, { corpusId: CORPUS })
     .filter(
@@ -102,7 +104,8 @@ export function runBioQuickstart(): BioQuickstartResult {
   const reinforcedAlpha =
     (active[0]?.confidence as { parameters?: { alpha: number } })?.parameters?.alpha ?? SEEDED_ALPHA;
 
-  // 7. Consolidate the episode (model-free: fold/promote/deprecate per policy).
+  // 7. Consolidate the episode (model-free: fold/promote/deprecate per policy). In this
+  //    minimal scenario consolidation is a no-op; see BioPolicy for promotion/fold rules.
   const consolidation = bio.consolidate(ep.id);
 
   return {
