@@ -1036,6 +1036,9 @@ describe("staged-promote (§7.1)", () => {
     expect(res.results).toHaveLength(2);
     expect(res.results.every((r) => r.status === "committed")).toBe(true);
     expect(m.listStaged("workspace:canopy")).toEqual([]);
+    // read-back: the promoted claims are actually readable from the store, not just reported committed
+    const out = m.query<AlgCorpus>("workspace:canopy", pipe(leaf("workspace:canopy")));
+    expect(out.claims).toHaveLength(2);
   });
 
   it("discardStaged drops an entry without committing and returns true; false if absent", () => {

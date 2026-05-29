@@ -65,12 +65,19 @@ export type { Stage, EvalContext } from "./algebra/expression.js";
 export type { Format } from "./algebra/composition.js";
 export type { QueryWarning } from "./algebra/value-routing.js";
 
+/**
+ * Default working-set size above which a `fallback_in_memory` value predicate emits a
+ * §10.2 warning. Applied by the query/sigma layer when `EvalContext.fallbackWarnThreshold`
+ * is unset (EvalContext itself enforces no default — see expression.ts).
+ */
+export const DEFAULT_FALLBACK_WARN_THRESHOLD = 10_000;
+
 // ── Stage-producing builders ────────────────────────────────────────────────
 
 export const sigma = (p: Predicate): Stage<Corpus, Corpus> => (c, ctx) => {
   routeValuePredicates(p, ctx.adapter.capabilities(), {
     workingSetSize: c.claims.length,
-    threshold: ctx.fallbackWarnThreshold ?? 10_000,
+    threshold: ctx.fallbackWarnThreshold ?? DEFAULT_FALLBACK_WARN_THRESHOLD,
     onWarning: ctx.onWarning ?? ((w) => console.warn(w.message)),
   });
   return sigmaOp(p)(c);

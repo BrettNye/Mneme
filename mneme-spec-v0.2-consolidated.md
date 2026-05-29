@@ -1828,7 +1828,7 @@ ValuePredicateLevel =
   | native_indexed           -- adapter has indexes that accelerate this predicate kind
   | native_unindexed         -- adapter evaluates this predicate kind via scan
   | fallback_in_memory       -- library retrieves candidates and filters after retrieval
-  | unsupported              -- adapter rejects queries with this predicate kind
+  | unsupported              -- the library rejects queries containing this predicate kind
 ```
 
 The six `PredicateKind`s correspond directly to the value-predicate forms of the selection operator σ (§4.2): the path/whole-value equality, comparison, set-membership, regex, structural-pattern, and null/existence predicates declared there.
@@ -1852,13 +1852,13 @@ The query optimizer chooses an evaluation strategy per predicate kind and per ad
 - `native_indexed`: push the predicate to the adapter, accept index cost.
 - `native_unindexed`: push the predicate to the adapter, accept full-scan cost.
 - `fallback_in_memory`: retrieve candidates via indexed predicates first, filter the unindexed value predicates in memory; emit a warning if the working set is large.
-- `unsupported`: reject the query at parse time.
+- `unsupported`: reject the query before returning results (the reference implementation checks adapter capabilities at query-evaluation entry).
 
 **Important consumer-facing implication:** reading "Postgres supports `native_indexed` value predicates" as "all value predicates are cheap on Postgres" is wrong. Postgres equality on JSONB paths is fast; regex on the same paths is a full scan. Production query planning MUST consult the per-kind matrix, not just the adapter summary.
 
 Consumers should structure queries to use indexed predicate kinds where possible. A logical filter that can be expressed as either equality or regex should use equality. A logical filter that requires regex should expect scan performance regardless of adapter.
 
-Consumers MUST be informed of fallback-mode costs. Production queries against `fallback_in_memory` adapters that retrieve large working sets are operational hazards and should be visible in query plan output. The library delivers these warnings via an `onWarning` callback registered on the query context; consumers that do not register a callback receive warnings as structured log entries. Queries containing `unsupported` predicate kinds are **rejected before returning results** — the library raises an error at plan-validation time so consumers receive a clear failure rather than silently incomplete results.
+Consumers MUST be informed of fallback-mode costs. Production queries against `fallback_in_memory` adapters that retrieve large working sets are operational hazards and should be visible in query plan output. The library delivers these warnings via an `onWarning` callback registered on the query context; consumers that do not register a callback receive warnings as structured log entries. Queries containing `unsupported` predicate kinds are **rejected before returning results** — the library raises an error at query-evaluation entry so consumers receive a clear failure rather than silently incomplete results.
 
 ### 10.3 Backend choice guidance
 
