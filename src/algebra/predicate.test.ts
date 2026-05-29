@@ -1,4 +1,4 @@
-import { matches, type Predicate } from "./predicate.js";
+import { matches, isValuePredicate, predicateKindOf, type Predicate } from "./predicate.js";
 import type { Claim } from "../core/claim.js";
 
 // Helper to build minimal claim-like objects
@@ -274,6 +274,144 @@ it("nested compound: or([not(subjectEq), statusEq]) is true when status matches"
       { op: "not", pred: { op: "subjectEq", value: "alice" } }, // bob != alice → true
       { op: "statusEq", value: "validated" },
     ],
+  };
+  expect(matches(claim, p)).toBe(true);
+});
+
+// ── ValuePredicate flattened into Predicate union ─────────────────────────
+
+it("matches a valueEq predicate via the flattened union", () => {
+  const claim = makeClaim({ value: { amount: 5 } as any });
+  expect(matches(claim, { op: "valueEq", path: "amount", value: 5 })).toBe(true);
+  expect(matches(claim, { op: "valueEq", path: "amount", value: 6 })).toBe(false);
+});
+
+it("matches a valueGt predicate via the flattened union", () => {
+  const claim = makeClaim({ value: { score: 10 } as any });
+  expect(matches(claim, { op: "valueGt", path: "score", value: 9 })).toBe(true);
+  expect(matches(claim, { op: "valueGt", path: "score", value: 10 })).toBe(false);
+});
+
+it("matches a valueIn predicate via the flattened union", () => {
+  const claim = makeClaim({ value: { color: "red" } as any });
+  expect(matches(claim, { op: "valueIn", path: "color", values: ["red", "blue"] })).toBe(true);
+  expect(matches(claim, { op: "valueIn", path: "color", values: ["green", "blue"] })).toBe(false);
+});
+
+it("matches a valueExists predicate via the flattened union", () => {
+  const claim = makeClaim({ value: { name: "alice" } as any });
+  expect(matches(claim, { op: "valueExists", path: "name" })).toBe(true);
+  expect(matches(claim, { op: "valueExists", path: "missing" })).toBe(false);
+});
+
+it("matches a valueRegex predicate via the flattened union", () => {
+  const claim = makeClaim({ value: { email: "alice@example.com" } as any });
+  expect(matches(claim, { op: "valueRegex", path: "email", pattern: "@example" })).toBe(true);
+  expect(matches(claim, { op: "valueRegex", path: "email", pattern: "@other" })).toBe(false);
+});
+
+it("matches a valueNull predicate via the flattened union", () => {
+  const claim = makeClaim({ value: { field: null } as any });
+  expect(matches(claim, { op: "valueNull", path: "field" })).toBe(true);
+  expect(matches(claim, { op: "valueNull", path: "missing" })).toBe(false);
+});
+
+it("matches a valueMatches predicate via the flattened union", () => {
+  const claim = makeClaim({ value: { a: 1, b: 2 } as any });
+  expect(matches(claim, { op: "valueMatches", pattern: { a: 1 } })).toBe(true);
+  expect(matches(claim, { op: "valueMatches", pattern: { a: 2 } })).toBe(false);
+});
+
+// ── predicateKindOf ────────────────────────────────────────────────────────
+
+it("predicateKindOf returns 'regex' for valueRegex", () => {
+  expect(predicateKindOf({ op: "valueRegex", path: "x", pattern: ".*" })).toBe("regex");
+});
+
+it("predicateKindOf returns 'null_check' for valueExists", () => {
+  expect(predicateKindOf({ op: "valueExists", path: "x" })).toBe("null_check");
+});
+
+it("predicateKindOf returns 'equality' for valueEq", () => {
+  expect(predicateKindOf({ op: "valueEq", path: "x", value: 1 })).toBe("equality");
+});
+
+it("predicateKindOf returns 'range' for valueGt", () => {
+  expect(predicateKindOf({ op: "valueGt", path: "x", value: 1 })).toBe("range");
+});
+
+it("predicateKindOf returns 'set_membership' for valueIn", () => {
+  expect(predicateKindOf({ op: "valueIn", path: "x", values: [1] })).toBe("set_membership");
+});
+
+it("predicateKindOf returns 'structural_pattern' for valueMatches", () => {
+  expect(predicateKindOf({ op: "valueMatches", pattern: {} })).toBe("structural_pattern");
+});
+
+it("predicateKindOf returns 'null_check' for valueNull", () => {
+  expect(predicateKindOf({ op: "valueNull", path: "x" })).toBe("null_check");
+});
+
+// ── isValuePredicate ───────────────────────────────────────────────────────
+
+it("isValuePredicate is true for all value ops", () => {
+  expect(isValuePredicate({ op: "valueEq", path: "x", value: 1 })).toBe(true);
+  expect(isValuePredicate({ op: "valueGt", path: "x", value: 1 })).toBe(true);
+  expect(isValuePredicate({ op: "valueIn", path: "x", values: [1] })).toBe(true);
+  expect(isValuePredicate({ op: "valueExists", path: "x" })).toBe(true);
+  expect(isValuePredicate({ op: "valueRegex", path: "x", pattern: ".*" })).toBe(true);
+  expect(isValuePredicate({ op: "valueNull", path: "x" })).toBe(true);
+  expect(isValuePredicate({ op: "valueMatches", pattern: {} })).toBe(true);
+});
+
+it("isValuePredicate is false for base ops", () => {
+  expect(isValuePredicate({ op: "subjectEq", value: "alice" })).toBe(false);
+  expect(isValuePredicate({ op: "keyEq", value: "email" })).toBe(false);
+  expect(isValuePredicate({ op: "statusEq", value: "validated" })).toBe(false);
+  expect(isValuePredicate({ op: "and", preds: [] })).toBe(false);
+  expect(isValuePredicate({ op: "or", preds: [] })).toBe(false);
+  expect(isValuePredicate({ op: "not", pred: { op: "subjectEq", value: "x" } })).toBe(false);
+});
+
+// ── value predicate nested inside and/or/not ───────────────────────────────
+
+it("valueEq nested inside and evaluates correctly", () => {
+  const claim = makeClaim({ subject: "alice", value: { amount: 5 } as any });
+  const p: Predicate = {
+    op: "and",
+    preds: [
+      { op: "subjectEq", value: "alice" },
+      { op: "valueEq", path: "amount", value: 5 },
+    ],
+  };
+  expect(matches(claim, p)).toBe(true);
+  const pFail: Predicate = {
+    op: "and",
+    preds: [
+      { op: "subjectEq", value: "alice" },
+      { op: "valueEq", path: "amount", value: 99 },
+    ],
+  };
+  expect(matches(claim, pFail)).toBe(false);
+});
+
+it("valueGt nested inside or evaluates correctly", () => {
+  const claim = makeClaim({ subject: "carol", value: { score: 10 } as any });
+  const p: Predicate = {
+    op: "or",
+    preds: [
+      { op: "subjectEq", value: "alice" },
+      { op: "valueGt", path: "score", value: 9 },
+    ],
+  };
+  expect(matches(claim, p)).toBe(true);
+});
+
+it("valueExists nested inside not evaluates correctly", () => {
+  const claim = makeClaim({ value: { name: "alice" } as any });
+  const p: Predicate = {
+    op: "not",
+    pred: { op: "valueExists", path: "missing" },
   };
   expect(matches(claim, p)).toBe(true);
 });
