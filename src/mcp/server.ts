@@ -22,8 +22,12 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
   dbPath: string;
 } {
   const dbPath = opts.dbPath ?? process.env.MNEME_DB ?? "./.mneme/store.db";
+  // Per-repo corpus: prefer Claude Code's CLAUDE_PROJECT_DIR (the stable project
+  // root it sets on spawned MCP servers) over raw cwd, so one user-scoped server
+  // partitions claims by repo automatically. MNEME_CORPUS overrides per repo.
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const defaultCorpus =
-    opts.defaultCorpus ?? process.env.MNEME_CORPUS ?? (basename(process.cwd()) || "default");
+    opts.defaultCorpus ?? process.env.MNEME_CORPUS ?? (basename(projectDir) || "default");
 
   const session = openSession({ dbPath, writer: "mcp" });
   const server = new McpServer({ name: "mneme", version: "0.2.0" });
