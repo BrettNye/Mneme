@@ -307,19 +307,17 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       putIdempotencyStmt.run({ scope, key, result: rec.result, created_at: rec.createdAt });
     },
 
-    capabilities(): AdapterCapabilities {
-      const lvl = "native_unindexed" as const;
-      return {
-        valuePredicateSupport: {
-          equality: lvl,
-          range: lvl,
-          set_membership: lvl,
-          regex: lvl,
-          structural_pattern: lvl,
-          null_check: lvl,
-        },
-      };
-    },
+    capabilities: () => ({
+      valuePredicateSupport: {
+        equality: "fallback_in_memory",
+        range: "fallback_in_memory",
+        set_membership: "fallback_in_memory",
+        regex: "fallback_in_memory",
+        structural_pattern: "fallback_in_memory",
+        null_check: "fallback_in_memory",
+        // JSON1 push-down (→ native_unindexed) is a v0.3 optimization.
+      },
+    }),
 
     transaction<T>(fn: () => T): T {
       return db.transaction(fn)();

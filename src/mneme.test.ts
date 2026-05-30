@@ -9,6 +9,9 @@ import type { AggregateResult } from "./algebra/aggregation.js";
 import { leaf as astLeaf, sigma as astSigma } from "./algebra/ast.js";
 import { serializeExpr } from "./algebra/serialize.js";
 import type { Claim } from "./core/claim.js";
+import type { QueryWarning } from "./algebra/value-routing.js";
+import { UnsupportedValuePredicateError } from "./algebra/value-routing.js";
+import type { Value } from "./core/value.js";
 
 const schema: ClaimSchema = {
   version: "1",
@@ -971,5 +974,161 @@ describe("audience field (§2.1)", () => {
     const r = m.commit("workspace:canopy", aud({ personas: ["reviewer", "architect"] }), { writer: "w" });
     const claim = m.readByIds("workspace:canopy", [r.id as any])[0];
     expect(claim.audience).toEqual({ personas: ["reviewer", "architect"] });
+  });
+});
+
+// ── §7.1 staged-promote ──────────────────────────────────────────────────────
+
+describe("staged-promote (§7.1)", () => {
+  const mk = (subject: string, key: string, value: string) => ({
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject,
+    key,
+    scope: {},
+    value,
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+  });
+
+  it("emitCandidate is invisible to reads until promoted, then committed", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const { stagingId } = m.emitCandidate("workspace:canopy", mk("s", "k", "v"), {});
+    expect(m.query<AlgCorpus>("workspace:canopy", pipe(leaf("workspace:canopy"))).claims).toHaveLength(0);
+    const r = m.promoteStaged(stagingId, { writer: "w" });
+    expect(r.status).toBe("committed");
+    expect(m.listStaged("workspace:canopy")).toEqual([]);
+  });
+
+  it("emitCandidate returns stagingId and appears in listStaged before promotion", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const { stagingId } = m.emitCandidate("workspace:canopy", mk("s2", "k2", "v2"));
+    expect(typeof stagingId).toBe("string");
+    const listed = m.listStaged("workspace:canopy");
+    expect(listed).toHaveLength(1);
+    expect(listed[0].stagingId).toBe(stagingId);
+  });
+
+  it("promoteStaged throws for an unknown stagingId", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    expect(() => m.promoteStaged("nonexistent-staging-id", { writer: "w" })).toThrow(/unknown stagingId/);
+  });
+
+  it("emitCandidate throws for an unknown corpus", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    expect(() => m.emitCandidate("nonexistent-corpus", mk("s", "k", "v"))).toThrow();
+  });
+
+  it("promoteAllStaged returns BatchResult and empties the staged entries for the corpus", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.emitCandidate("workspace:canopy", mk("s3", "k3", "v3"));
+    m.emitCandidate("workspace:canopy", mk("s4", "k4", "v4"));
+    const res = m.promoteAllStaged("workspace:canopy", { writer: "w" });
+    expect(res.results).toHaveLength(2);
+    expect(res.results.every((r) => r.status === "committed")).toBe(true);
+    expect(m.listStaged("workspace:canopy")).toEqual([]);
+    // read-back: the promoted claims are actually readable from the store, not just reported committed
+    const out = m.query<AlgCorpus>("workspace:canopy", pipe(leaf("workspace:canopy")));
+    expect(out.claims).toHaveLength(2);
+  });
+
+  it("discardStaged drops an entry without committing and returns true; false if absent", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const { stagingId } = m.emitCandidate("workspace:canopy", mk("s5", "k5", "v5"));
+    expect(m.discardStaged(stagingId)).toBe(true);
+    expect(m.listStaged("workspace:canopy")).toEqual([]);
+    // After discard, the claim is NOT committed
+    expect(m.query<AlgCorpus>("workspace:canopy", pipe(leaf("workspace:canopy"))).claims).toHaveLength(0);
+    // Discard again returns false
+    expect(m.discardStaged(stagingId)).toBe(false);
+  });
+
+  it("listStaged without corpusId returns all staged entries across corpora", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.emitCandidate("workspace:canopy", mk("sA", "kA", "vA"));
+    m.emitCandidate("workspace:canopy", mk("sB", "kB", "vB"));
+    const all = m.listStaged();
+    expect(all).toHaveLength(2);
+  });
+});
+
+// ── sigma capability-aware routing (§10.2) ───────────────────────────────────
+
+describe("sigma capability-aware routing", () => {
+  const mk = (subject: string, key: string, value: Value, scope: Record<string, string> = {}) => ({
+    profile: "profile-1" as any,
+    workspace: "workspace:canopy" as any,
+    subject,
+    key,
+    scope,
+    value,
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: "workspace:canopy@1",
+  });
+
+  it("query invokes onWarning for a fallback value predicate over the threshold", () => {
+    const warnings: QueryWarning[] = [];
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mk("s", "k", { amount: 1 }), { writer: "w" });
+    m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), sigma({ op: "valueEq", path: "amount", value: 1 })),
+      { fallbackWarnThreshold: 0, onWarning: (w) => warnings.push(w) }
+    );
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("query with sigma on an unsupported value predicate kind throws UnsupportedValuePredicateError", () => {
+    // Use a custom adapter that declares 'equality' as unsupported
+    const base = createSqliteAdapter();
+    const unsupportingAdapter = {
+      ...base,
+      capabilities: () => ({
+        valuePredicateSupport: {
+          ...base.capabilities().valuePredicateSupport,
+          equality: "unsupported" as const,
+        },
+      }),
+    };
+    const m = createMneme({ adapter: unsupportingAdapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mk("s", "k", "hello"), { writer: "w" });
+    expect(() =>
+      m.query<any>(
+        "workspace:canopy",
+        pipe(leaf("workspace:canopy"), sigma({ op: "valueEq", path: "x", value: "hello" }))
+      )
+    ).toThrow(UnsupportedValuePredicateError);
+  });
+
+  it("sigma with only base predicates triggers no warning and no throw", () => {
+    const warnings: QueryWarning[] = [];
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mk("subj-a", "key-1", "value-a"), { writer: "w" });
+    const out = m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), sigma({ op: "subjectEq", value: "subj-a" })),
+      { fallbackWarnThreshold: 0, onWarning: (w) => warnings.push(w) }
+    );
+    expect(warnings).toHaveLength(0);
+    expect(out.claims).toHaveLength(1);
   });
 });

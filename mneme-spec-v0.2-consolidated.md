@@ -1430,6 +1430,8 @@ Two modes are supported:
 
 Most writers use immediate-promote. Staged-promote is for high-throughput ingestion (telemetry, observability) where batching saves cost.
 
+**Reference implementation note.** The reference implementation uses **immediate-promote as the default mode**: emission, promotion, and commit occur in a single call. **Staged-promote** is available via an in-memory staging buffer: callers emit candidates that are held in the buffer, then promote them as a deferred, batched flush. This keeps the common case simple while enabling the high-throughput path without requiring a separate API surface.
+
 **Correctness vs. performance.** The pipeline described above is a *correctness* model, not a prescription of physical execution. Implementations MAY batch, parallelize, or pipeline the stages provided that the observable behavior — atomic visibility, durability, and contradiction-checking semantics — is preserved. High-throughput consumer workloads (>1000 writes/sec) typically require batched promotion with parallel commit threads. The reference SQLite adapter is single-writer and is not appropriate for such workloads; the reference Postgres adapter supports parallel writers via MVCC.
 
 ### 7.2 Visibility guarantees
@@ -1776,14 +1778,9 @@ StorageAdapter {
   insertBatch(claims: List<Claim>) → BatchResult
   query(plan: ExecutionPlan) → ClaimIterator
 
-  -- Indexes
-  ensureIndex(spec: IndexSpec) → Result
-  dropIndex(id: IndexId) → Result
-
-  -- Transactions
-  beginTransaction() → TransactionHandle
-  commit(tx: TransactionHandle) → Result
-  rollback(tx: TransactionHandle) → Result
+  -- Transactions (closure form)
+  transaction<T>(fn: () → T) → T
+  -- closure form: unbalanced/leaked transactions are structurally impossible — the library owns the boundaries
 
   -- Subscriptions (optional; adapter may not support push)
   subscribeChanges(filter: ChangeFilter, callback: ChangeCallback) → SubscriptionHandle?
@@ -1794,6 +1791,10 @@ StorageAdapter {
 ```
 
 `subscribeChanges` is optional: an adapter that cannot push change notifications returns no handle, and the library supplies the durable, at-least-once subscription semantics of §8 over that adapter's polling interface.
+
+**Index management** (`ensureIndex` / `dropIndex`) is deferred to v0.3, where the cost-based query planner will manage index lifecycle. Adapters are not required to expose these methods in v0.2.
+
+**Reference method set.** Beyond the core protocol above, the reference implementation relies on a richer set of adapter methods: an idempotency store (key→result cache for dedup across restarts), an append-only event log (for replay support), and a `maxRecordedSeq()` accessor (returns the highest recorded sequence number, used by the replay engine to detect gaps). These are implementation contracts between the library core and the bundled adapters; third-party adapters need not implement them unless they intend to support the full replay/idempotency features.
 
 ### 10.1 Standard adapters
 
@@ -1827,7 +1828,7 @@ ValuePredicateLevel =
   | native_indexed           -- adapter has indexes that accelerate this predicate kind
   | native_unindexed         -- adapter evaluates this predicate kind via scan
   | fallback_in_memory       -- library retrieves candidates and filters after retrieval
-  | unsupported              -- adapter rejects queries with this predicate kind
+  | unsupported              -- the library rejects queries containing this predicate kind
 ```
 
 The six `PredicateKind`s correspond directly to the value-predicate forms of the selection operator σ (§4.2): the path/whole-value equality, comparison, set-membership, regex, structural-pattern, and null/existence predicates declared there.
@@ -1838,24 +1839,26 @@ Reference adapter capability matrix:
 |---|---|---|---|---|---|---|
 | Postgres (JSONB+GIN) | native_indexed | native_unindexed* | native_unindexed | native_unindexed | native_unindexed | native_indexed |
 | DuckDB | native_indexed | native_indexed | native_indexed | native_unindexed | native_unindexed | native_indexed |
-| SQLite (JSON1) | native_unindexed | native_unindexed | native_unindexed | native_unindexed | native_unindexed | native_unindexed |
+| SQLite | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory |
 | ChromaDB | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory |
 | Markdown vault | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory | fallback_in_memory |
 
 *Postgres range queries on JSONB paths can be indexed via expression indexes (`CREATE INDEX ... ON corpus ((value->>'amount')::numeric)`) but require explicit setup per path.
+
+†SQLite value-predicate push-down via JSON1 (→ `native_unindexed`) is a v0.3 optimization. In v0.2 the library retrieves candidates and filters all value predicates in memory (`fallback_in_memory`).
 
 The query optimizer chooses an evaluation strategy per predicate kind and per adapter:
 
 - `native_indexed`: push the predicate to the adapter, accept index cost.
 - `native_unindexed`: push the predicate to the adapter, accept full-scan cost.
 - `fallback_in_memory`: retrieve candidates via indexed predicates first, filter the unindexed value predicates in memory; emit a warning if the working set is large.
-- `unsupported`: reject the query at parse time.
+- `unsupported`: reject the query before returning results (the reference implementation checks adapter capabilities at query-evaluation entry).
 
 **Important consumer-facing implication:** reading "Postgres supports `native_indexed` value predicates" as "all value predicates are cheap on Postgres" is wrong. Postgres equality on JSONB paths is fast; regex on the same paths is a full scan. Production query planning MUST consult the per-kind matrix, not just the adapter summary.
 
 Consumers should structure queries to use indexed predicate kinds where possible. A logical filter that can be expressed as either equality or regex should use equality. A logical filter that requires regex should expect scan performance regardless of adapter.
 
-Consumers MUST be informed of fallback-mode costs. Production queries against `fallback_in_memory` adapters that retrieve large working sets are operational hazards and should be visible in query plan output.
+Consumers MUST be informed of fallback-mode costs. Production queries against `fallback_in_memory` adapters that retrieve large working sets are operational hazards and should be visible in query plan output. The library delivers these warnings via an `onWarning` callback registered on the query context; consumers that do not register a callback receive warnings as structured log entries. Queries containing `unsupported` predicate kinds are **rejected before returning results** — the library raises an error at query-evaluation entry so consumers receive a clear failure rather than silently incomplete results.
 
 ### 10.3 Backend choice guidance
 
