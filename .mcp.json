@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mneme": {
+      "command": "npx",
+      "args": ["tsx", "bin/mneme-mcp.ts"],
+      "env": {
+        "MNEME_DB": "${USERPROFILE}/.mneme/knowledge.db",
+        "MNEME_CORPUS": "knowledge"
+      }
+    }
+  }
+}

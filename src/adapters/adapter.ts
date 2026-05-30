@@ -59,6 +59,8 @@ export interface StorageAdapter {
   maxRecordedSeq(): number;
   appendEvent(e: ClaimEvent): void;
   readEvents(filter?: { corpusId?: string; claimId?: string; since?: number }): ClaimEvent[];
+  /** Release any underlying resources (e.g. file handles). Optional; in-memory adapters may omit it. */
+  close?(): void;
 }
 
 export const valuePredicateLevel = (
