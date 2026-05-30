@@ -13,3 +13,6 @@ mneme.db.corpora.json
 
 # Benchmark raw/converted datasets (downloaded on demand, not tracked)
 bench/datasets/
+
+# Mneme MCP local store (per-project claims db)
+.mneme/
