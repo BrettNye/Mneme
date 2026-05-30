@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import type {
   StorageAdapter,
   ExecutionPlan,
@@ -6,6 +7,7 @@ import type {
   IdempotencyRecord,
   ClaimEvent,
   AdapterScope,
+  AnchoredRootRow,
 } from "./adapter.js";
 import type { Claim, Status, Source } from "../core/claim.js";
 import type { ClaimId, ProfileId, WorkspaceId } from "../core/ids.js";
@@ -63,6 +65,17 @@ interface ClaimEventRow {
   reason: string | null;
   recorded: number;
   recorded_seq: number;
+  entry_hash: string | null;
+  prev_hash: string | null;
+}
+
+interface AnchorRow {
+  corpus_id: string;
+  epoch_id: string;
+  root: string;
+  signature: string | null;
+  guarantee: string;
+  at: number;
 }
 
 function toRow(c: Claim, corpusId: string | null = null): ClaimRow {
@@ -148,7 +161,7 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       conf_raw REAL,
       conf_effective REAL,
       valid_from REAL,
-      valid_to REAL,  -- JS Infinity round-trips correctly: IEEE-754 REAL stores +Inf, so open intervals survive a db reload
+      valid_to REAL,
       recorded REAL,
       recorded_seq INTEGER,
       status TEXT,
@@ -163,9 +176,6 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     CREATE INDEX IF NOT EXISTS idx_claims_pks ON claims(profile, key, scope_hash);
     CREATE INDEX IF NOT EXISTS idx_claims_subject ON claims(subject);
     CREATE INDEX IF NOT EXISTS idx_claims_run_id ON claims(run_id);
-    -- maxRecordedSeq() runs SELECT MAX(recorded_seq) on every commit; without this
-    -- index that is a full-table scan (O(n) per insert → O(n^2) import). With it,
-    -- SQLite reads the max from the index tail in O(log n).
     CREATE INDEX IF NOT EXISTS idx_claims_recorded_seq ON claims(recorded_seq);
     CREATE TABLE IF NOT EXISTS idempotency (
       scope TEXT,
@@ -184,12 +194,23 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       to_status TEXT,
       reason TEXT,
       recorded REAL,
-      recorded_seq INTEGER
+      recorded_seq INTEGER,
+      entry_hash TEXT,
+      prev_hash TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_events_claim ON claim_events(claim_id);
+    CREATE TABLE IF NOT EXISTS audit_anchors (
+      corpus_id TEXT,
+      epoch_id TEXT,
+      root TEXT,
+      signature TEXT,
+      guarantee TEXT,
+      at REAL,
+      PRIMARY KEY(corpus_id, epoch_id)
+    );
   `);
 
-  // Idempotent migration: add corpus_id column if it doesn't exist yet
+  // Idempotent migration: add corpus_id column to claims if it does not exist yet
   const claimColumns = (db.pragma("table_info(claims)") as Array<{ name: string }>).map(
     (col) => col.name
   );
@@ -197,6 +218,30 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     db.exec("ALTER TABLE claims ADD COLUMN corpus_id TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_claims_corpus ON claims(corpus_id)");
+
+  // Idempotent migration: add entry_hash / prev_hash to claim_events if not yet present
+  const eventColumns = (db.pragma("table_info(claim_events)") as Array<{ name: string }>).map(
+    (col) => col.name
+  );
+  if (!eventColumns.includes("entry_hash")) {
+    db.exec("ALTER TABLE claim_events ADD COLUMN entry_hash TEXT");
+  }
+  if (!eventColumns.includes("prev_hash")) {
+    db.exec("ALTER TABLE claim_events ADD COLUMN prev_hash TEXT");
+  }
+
+  // Idempotent migration: create audit_anchors table if it does not exist yet
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_anchors (
+      corpus_id TEXT,
+      epoch_id TEXT,
+      root TEXT,
+      signature TEXT,
+      guarantee TEXT,
+      at REAL,
+      PRIMARY KEY(corpus_id, epoch_id)
+    )
+  `);
 
   const insertStmt = db.prepare<ClaimRow>(`
     INSERT OR REPLACE INTO claims (
@@ -235,13 +280,36 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
   );
 
   const eventInsertStmt = db.prepare<Omit<ClaimEventRow, "seq_pk">>(
-    `INSERT INTO claim_events (op, corpus_id, writer, claim_id, deprecated_id, to_status, reason, recorded, recorded_seq)
-     VALUES (@op, @corpus_id, @writer, @claim_id, @deprecated_id, @to_status, @reason, @recorded, @recorded_seq)`
+    `INSERT INTO claim_events (op, corpus_id, writer, claim_id, deprecated_id, to_status, reason, recorded, recorded_seq, entry_hash, prev_hash)
+     VALUES (@op, @corpus_id, @writer, @claim_id, @deprecated_id, @to_status, @reason, @recorded, @recorded_seq, @entry_hash, @prev_hash)`
+  );
+
+  const headHashStmt = db.prepare<[string], { entry_hash: string | null }>(
+    `SELECT entry_hash FROM claim_events WHERE corpus_id = ? ORDER BY seq_pk DESC LIMIT 1`
+  );
+
+  const putAnchorStmt = db.prepare<AnchorRow>(
+    `INSERT OR REPLACE INTO audit_anchors (corpus_id, epoch_id, root, signature, guarantee, at)
+     VALUES (@corpus_id, @epoch_id, @root, @signature, @guarantee, @at)`
   );
 
   const maxRecordedSeqStmt = db.prepare<[], { m: number }>(
     "SELECT COALESCE(MAX(recorded_seq), 0) AS m FROM claims"
   );
+
+  /** Canonical serialization for hash-chain computation. */
+  function canonicalEvent(e: ClaimEvent): string {
+    return JSON.stringify([
+      e.op,
+      e.corpusId,
+      e.writer,
+      e.claimId,
+      e.deprecatedId ?? null,
+      e.toStatus ?? null,
+      e.recorded,
+      e.recordedSeq,
+    ]);
+  }
 
   function executeQuery(plan: ExecutionPlan, force?: AdapterScope): Claim[] {
     const conditions: string[] = [];
@@ -345,7 +413,7 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
         regex: "fallback_in_memory",
         structural_pattern: "fallback_in_memory",
         null_check: "fallback_in_memory",
-        // JSON1 push-down (→ native_unindexed) is a v0.3 optimization.
+        // JSON1 push-down (native_unindexed) is a v0.3 optimization.
       },
     }),
 
@@ -358,6 +426,11 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     },
 
     appendEvent(e: ClaimEvent): void {
+      const headRow = headHashStmt.get(e.corpusId);
+      const prevHash = headRow?.entry_hash ?? "";
+      const entryHash = createHash("sha256")
+        .update(canonicalEvent(e) + prevHash)
+        .digest("hex");
       eventInsertStmt.run({
         op: e.op,
         corpus_id: e.corpusId,
@@ -368,6 +441,8 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
         reason: e.reason ?? null,
         recorded: e.recorded,
         recorded_seq: e.recordedSeq,
+        entry_hash: entryHash,
+        prev_hash: prevHash,
       });
     },
 
@@ -405,8 +480,51 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
         if (row.deprecated_id != null) event.deprecatedId = row.deprecated_id;
         if (row.to_status != null) event.toStatus = row.to_status;
         if (row.reason != null) event.reason = row.reason;
+        // entry_hash/prev_hash are NULL only for rows that predate the chain migration.
+        // Empty string means genesis (no prior event in this corpus).
+        if (row.entry_hash != null) event.entryHash = row.entry_hash;
+        if (row.prev_hash != null) event.prevHash = row.prev_hash;
         return event;
       });
+    },
+
+    putAnchoredRoot(row: AnchoredRootRow): void {
+      putAnchorStmt.run({
+        corpus_id: row.corpusId,
+        epoch_id: row.epochId,
+        root: row.root,
+        signature: row.signature,
+        guarantee: row.guarantee,
+        at: row.at,
+      });
+    },
+
+    getAnchoredRoots(corpusId: string, range?: { epochId?: string; since?: string }): AnchoredRootRow[] {
+      const conditions: string[] = ["corpus_id = ?"];
+      const params: (string | number)[] = [corpusId];
+
+      if (range?.epochId !== undefined) {
+        conditions.push("epoch_id = ?");
+        params.push(range.epochId);
+      }
+      if (range?.since !== undefined) {
+        conditions.push("at >= ?");
+        params.push(Number(range.since));
+      }
+
+      const where = `WHERE ${conditions.join(" AND ")}`;
+      const sql = `SELECT * FROM audit_anchors ${where} ORDER BY at ASC`;
+      const stmt = db.prepare<unknown[], AnchorRow>(sql);
+      const rows = stmt.all(...params);
+
+      return rows.map((r) => ({
+        corpusId: r.corpus_id,
+        epochId: r.epoch_id,
+        root: r.root,
+        signature: r.signature,
+        guarantee: r.guarantee,
+        at: r.at,
+      }));
     },
 
     scoped(scope: AdapterScope): StorageAdapter {

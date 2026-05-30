@@ -1,7 +1,7 @@
 import { createSqliteAdapter } from "./sqlite.js";
 import type { Claim } from "../core/claim.js";
 import type { ClaimId, ProfileId, WorkspaceId } from "../core/ids.js";
-import type { ClaimEvent } from "./adapter.js";
+import type { ClaimEvent, AnchoredRootRow } from "./adapter.js";
 import Database from "better-sqlite3";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -702,4 +702,154 @@ it("migration adds corpus_id to a pre-existing db without error and scoped ops w
   const results = adapter!.scoped!({ corpus: "X" }).query({} as any);
   expect(results).toHaveLength(1);
   expect(results[0].value).toBe("migrated-claim");
+});
+
+// --- Hash-chain tests (task-events-chain) ---
+
+it("appendEvent sets entryHash on the first event (genesis: prevHash = '')", () => {
+  const a = createSqliteAdapter();
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-1", recorded: 1000, recordedSeq: 1 });
+  const evs = a.readEvents({ corpusId: "c1" });
+  expect(evs).toHaveLength(1);
+  expect(typeof evs[0].entryHash).toBe("string");
+  expect(evs[0].entryHash!.length).toBeGreaterThan(0);
+  expect(evs[0].prevHash).toBe("");
+});
+
+it("chains claim_events per corpus so consecutive events link (e[i+1].prevHash === e[i].entryHash)", () => {
+  const a = createSqliteAdapter();
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-1", recorded: 1000, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-2", recorded: 2000, recordedSeq: 2 });
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-3", recorded: 3000, recordedSeq: 3 });
+  const evs = a.readEvents({ corpusId: "c1" });
+  expect(evs).toHaveLength(3);
+  expect(evs[1].prevHash).toBe(evs[0].entryHash);
+  expect(evs[2].prevHash).toBe(evs[1].entryHash);
+});
+
+it("events in different corpora form independent chains (cross-corpus inserts do not affect each other's prevHash)", () => {
+  const a = createSqliteAdapter();
+  // Interleave events from two corpora
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "c1-e1", recorded: 1000, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "c2", writer: "w", claimId: "c2-e1", recorded: 1100, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "c1-e2", recorded: 2000, recordedSeq: 2 });
+  a.appendEvent({ op: "commit", corpusId: "c2", writer: "w", claimId: "c2-e2", recorded: 2100, recordedSeq: 2 });
+
+  const c1evs = a.readEvents({ corpusId: "c1" });
+  const c2evs = a.readEvents({ corpusId: "c2" });
+
+  // Each chain must link internally
+  expect(c1evs[1].prevHash).toBe(c1evs[0].entryHash);
+  expect(c2evs[1].prevHash).toBe(c2evs[0].entryHash);
+
+  // The two chains' hashes must be distinct (independent)
+  expect(c1evs[0].entryHash).not.toBe(c2evs[0].entryHash);
+});
+
+it("entryHash is deterministic: sha256(canon(event) + prevHash)", () => {
+  // Two adapters inserting identical events should produce identical hashes
+  const a = createSqliteAdapter();
+  const b = createSqliteAdapter();
+  const ev = { op: "commit" as const, corpusId: "c1", writer: "w", claimId: "cl-1", recorded: 1000, recordedSeq: 1 };
+  a.appendEvent(ev);
+  b.appendEvent(ev);
+  const aHash = a.readEvents({ corpusId: "c1" })[0].entryHash;
+  const bHash = b.readEvents({ corpusId: "c1" })[0].entryHash;
+  expect(aHash).toBe(bHash);
+});
+
+// --- AnchoredRoot tests ---
+
+it("putAnchoredRoot / getAnchoredRoots round-trips a root row scoped by corpusId", () => {
+  const a = createSqliteAdapter();
+  const row: AnchoredRootRow = {
+    corpusId: "c1",
+    epochId: "epoch-1",
+    root: "deadbeef1234",
+    signature: "sig-abc",
+    guarantee: "sha256-merkle",
+    at: 1716000000000,
+  };
+  a.putAnchoredRoot!(row);
+  const results = a.getAnchoredRoots!("c1");
+  expect(results).toHaveLength(1);
+  expect(results[0]).toEqual(row);
+});
+
+it("getAnchoredRoots is scoped: another corpus sees no rows", () => {
+  const a = createSqliteAdapter();
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
+  expect(a.getAnchoredRoots!("c2")).toHaveLength(0);
+});
+
+it("getAnchoredRoots filters by epochId when supplied", () => {
+  const a = createSqliteAdapter();
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e2", root: "r2", signature: null, guarantee: "g", at: 2 });
+  const results = a.getAnchoredRoots!("c1", { epochId: "e1" });
+  expect(results).toHaveLength(1);
+  expect(results[0].epochId).toBe("e1");
+});
+
+it("getAnchoredRoots filters by since when supplied", () => {
+  const a = createSqliteAdapter();
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1000 });
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e2", root: "r2", signature: null, guarantee: "g", at: 2000 });
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e3", root: "r3", signature: null, guarantee: "g", at: 3000 });
+  const results = a.getAnchoredRoots!("c1", { since: "2000" });
+  expect(results).toHaveLength(2);
+  expect(results.map((r) => r.epochId).sort()).toEqual(["e2", "e3"]);
+});
+
+it("putAnchoredRoot is idempotent (INSERT OR REPLACE)", () => {
+  const a = createSqliteAdapter();
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1-updated", signature: "sig", guarantee: "g2", at: 2 });
+  const results = a.getAnchoredRoots!("c1");
+  expect(results).toHaveLength(1);
+  expect(results[0].root).toBe("r1-updated");
+});
+
+// --- Migration test: entry_hash/prev_hash added to pre-existing db ---
+
+it("migration adds entry_hash/prev_hash columns and audit_anchors table to a pre-existing db without error", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mneme-chain-test-"));
+  const dbPath = join(dir, "legacy-events.db");
+
+  // Create a db that already has claim_events WITHOUT the new columns
+  const legacyDb = new Database(dbPath);
+  legacyDb.exec(`
+    CREATE TABLE claims (
+      id TEXT PRIMARY KEY,
+      profile TEXT, workspace TEXT, subject TEXT, key TEXT,
+      scope_hash TEXT, scope_json TEXT, value_json TEXT, value_hash TEXT,
+      conf_distribution TEXT, conf_params TEXT, conf_raw REAL, conf_effective REAL,
+      valid_from REAL, valid_to REAL, recorded REAL, recorded_seq INTEGER,
+      status TEXT, source TEXT, provenance_json TEXT, evidence_json TEXT,
+      audience_json TEXT, tags_json TEXT, schema TEXT, run_id TEXT
+    );
+    CREATE TABLE claim_events (
+      seq_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+      op TEXT, corpus_id TEXT, writer TEXT, claim_id TEXT,
+      deprecated_id TEXT, to_status TEXT, reason TEXT,
+      recorded REAL, recorded_seq INTEGER
+    );
+  `);
+  legacyDb.close();
+
+  // createSqliteAdapter must not throw
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+  expect(() => {
+    adapter = createSqliteAdapter(dbPath);
+  }).not.toThrow();
+
+  // Should be able to append events with hashes
+  adapter!.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-1", recorded: 1000, recordedSeq: 1 });
+  const evs = adapter!.readEvents({ corpusId: "c1" });
+  expect(evs).toHaveLength(1);
+  expect(typeof evs[0].entryHash).toBe("string");
+
+  // Should be able to use anchor store
+  adapter!.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
+  expect(adapter!.getAnchoredRoots!("c1")).toHaveLength(1);
 });
