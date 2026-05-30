@@ -4,7 +4,7 @@
       "command": "npx",
       "args": ["tsx", "bin/mneme-mcp.ts"],
       "env": {
-        "MNEME_DB": "./.mneme/store.db"
+        "MNEME_DB": "${USERPROFILE}/.mneme/store.db"
       }
     }
   }
