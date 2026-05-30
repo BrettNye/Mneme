@@ -8,8 +8,21 @@ import type { EvalContext } from "../algebra/expression.js";
 
 /** Minimal EvalContext stub — enough for sigma/delta/rho/kappa/alpha stages. */
 function makeCtx(opts: { now?: number } = {}): EvalContext {
+  // sigma is capability-aware: it calls ctx.adapter.capabilities() to route value
+  // predicates. The stub declares everything fallback_in_memory (matching the SQLite
+  // adapter), so routing is a no-op and the stage filters in memory as these tests expect.
+  const capabilities = () => ({
+    valuePredicateSupport: {
+      equality: "fallback_in_memory",
+      range: "fallback_in_memory",
+      set_membership: "fallback_in_memory",
+      regex: "fallback_in_memory",
+      structural_pattern: "fallback_in_memory",
+      null_check: "fallback_in_memory",
+    },
+  });
   return {
-    adapter: null as any,
+    adapter: { capabilities } as any,
     catalog: null as any,
     evaluationClock: opts.now ?? 1_000_000,
     usedSimilarityVersions: {},
