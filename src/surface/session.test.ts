@@ -141,6 +141,16 @@ describe("openSession", () => {
     expect(result.claims).toHaveLength(2);
   });
 
+  it("creates a missing parent directory for a nested dbPath", () => {
+    const base = mkdtempSync(join(tmpdir(), "mneme-"));
+    const db = join(base, "nested", "deep", "store.db"); // parent dirs do not exist yet
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "c", subjects: [] });
+    const out = s.write("c", { subject: "x", key: "y", value: "v" });
+    expect(out.status).toBe("committed");
+    s.close();
+  });
+
   it("threads a reject_on_contradiction policy into the corpus default", () => {
     const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
     const s = openSession({ dbPath: db });

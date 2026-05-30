@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { createMneme, createSqliteAdapter } from "../index.js";
 import type { CorpusDef, CandidateClaim, Confidence, BatchResult } from "../index.js";
 import { parseDsl } from "./dsl.js";
@@ -45,6 +47,9 @@ function normalizeDsl(dsl: string): string {
 export function openSession(opts: SessionOptions = {}): Session {
   const dbPath = opts.dbPath ?? SURFACE_DEFAULTS.dbPath;
   const writer = opts.writer ?? SURFACE_DEFAULTS.writer;
+  // better-sqlite3 won't create a missing parent directory; ensure it exists so a
+  // nested dbPath (e.g. "./.mneme/store.db") doesn't fail with SQLITE_CANTOPEN.
+  if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
   const adapter = createSqliteAdapter(dbPath);
   const mneme = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
 
