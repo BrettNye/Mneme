@@ -1,9 +1,8 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { createMneme, createSqliteAdapter } from "../index.js";
 import type { CorpusDef, CandidateClaim, Confidence, BatchResult } from "../index.js";
-import { parseDsl } from "./dsl.js";
-import { loadCorpora, saveCorpora } from "./corpus-store.js";
+import { scalarConfidence } from "../core/confidence.js";
+import { parseDsl, normalizeDsl } from "./dsl.js";
+import { loadCorpora, saveCorpora, ensureDir } from "./corpus-store.js";
 import { SURFACE_DEFAULTS, defaultConfidence } from "./types.js";
 import type {
   Session,
@@ -15,41 +14,10 @@ import type {
   QueryResult,
 } from "./types.js";
 
-/**
- * Normalize a DSL string so it is valid for the full pipeline evaluation.
- *
- * The algebra requires a rank (rho) stage before any compose (kappa) stage.
- * When callers write `where … | as text N` without an explicit `rank` clause,
- * this helper inserts `rank exact ""` immediately before the first `as` clause
- * so the Corpus→RankedCorpus promotion happens transparently.
- */
-function normalizeDsl(dsl: string): string {
-  const clauses = dsl
-    .split("|")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  if (clauses.length === 0) return dsl;
-
-  const hasRank = clauses.some((c) => /^rank\s+(jaccard|exact)\s+/.test(c));
-  const hasKappa = clauses.some((c) => /^as\s+(markdown|xml|json|text)\s+\d+/.test(c));
-
-  if (hasKappa && !hasRank) {
-    // Insert `rank exact ""` just before the first `as` clause.
-    const firstAs = clauses.findIndex((c) => /^as\s+(markdown|xml|json|text)\s+\d+/.test(c));
-    clauses.splice(firstAs, 0, `rank exact ""`);
-    return clauses.join(" | ");
-  }
-
-  return dsl;
-}
-
 export function openSession(opts: SessionOptions = {}): Session {
   const dbPath = opts.dbPath ?? SURFACE_DEFAULTS.dbPath;
   const writer = opts.writer ?? SURFACE_DEFAULTS.writer;
-  // better-sqlite3 won't create a missing parent directory; ensure it exists so a
-  // nested dbPath (e.g. "./.mneme/store.db") doesn't fail with SQLITE_CANTOPEN.
-  if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
+  ensureDir(dbPath);
   const adapter = createSqliteAdapter(dbPath);
   const mneme = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
 
@@ -63,7 +31,7 @@ export function openSession(opts: SessionOptions = {}): Session {
   function toConfidence(c: WriteRecord["confidence"]): Confidence {
     if (c == null) return defaultConfidence();
     if (typeof c === "number") {
-      return { distribution: "scalar", parameters: { p: c }, raw: c };
+      return scalarConfidence(c);
     }
     return c;
   }

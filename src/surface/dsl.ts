@@ -40,6 +40,35 @@ export function parseDsl(corpusId: string, dsl: string): Stage<any, any>[] {
   return pipe(...stages);
 }
 
+/**
+ * Normalize a DSL string so it is valid for the full pipeline evaluation.
+ *
+ * The algebra requires a rank (rho) stage before any compose (kappa) stage.
+ * When callers write `where … | as text N` without an explicit `rank` clause,
+ * this helper inserts `rank exact ""` immediately before the first `as` clause
+ * so the Corpus→RankedCorpus promotion happens transparently.
+ */
+export function normalizeDsl(dsl: string): string {
+  const clauses = dsl
+    .split("|")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (clauses.length === 0) return dsl;
+
+  const hasRank = clauses.some((c) => /^rank\s+(jaccard|exact)\s+/.test(c));
+  const hasKappa = clauses.some((c) => /^as\s+(markdown|xml|json|text)\s+\d+/.test(c));
+
+  if (hasKappa && !hasRank) {
+    // Insert `rank exact ""` just before the first `as` clause.
+    const firstAs = clauses.findIndex((c) => /^as\s+(markdown|xml|json|text)\s+\d+/.test(c));
+    clauses.splice(firstAs, 0, `rank exact ""`);
+    return clauses.join(" | ");
+  }
+
+  return dsl;
+}
+
 function compileClause(clause: string): Stage<any, any> {
   const m = (re: RegExp): RegExpMatchArray | null => clause.match(re);
   let g: RegExpMatchArray | null;

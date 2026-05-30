@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { scalarConfidence } from "../core/confidence.js";
 import type { Session, WriteRecord, ImportStats } from "./types.js";
 
 export type RowMapper = (row: unknown) => WriteRecord | null; // null => skip row
@@ -16,7 +17,7 @@ export const mappers: Record<"jsonl" | "conceptnet" | "icews", RowMapper> = {
       key: r.rel,
       value: r.end,
       source: "imported",
-      confidence: { distribution: "scalar", parameters: { p }, raw: p },
+      confidence: scalarConfidence(p),
     };
   },
   icews: (row) => {
@@ -69,6 +70,9 @@ export async function importFile(
   const rl = createInterface({
     input: createReadStream(filePath, "utf8"),
     crlfDelay: Infinity,
+  });
+  rl.on("error", (err) => {
+    throw new Error(`failed to read ${filePath}: ${(err as Error).message}`);
   });
 
   for await (const line of rl) {

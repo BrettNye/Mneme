@@ -13,6 +13,14 @@ export function pointEstimate(c: Confidence): number {
     : c.parameters.p;
 }
 
+export function scalarConfidence(p: number): Confidence {
+  return { distribution: "scalar", parameters: { p }, raw: p };
+}
+
+export function betaConfidence(alpha: number, beta: number): Confidence {
+  return { distribution: "beta", parameters: { alpha, beta }, raw: alpha / (alpha + beta) };
+}
+
 export function scalarToBeta(
   scalar: number,
   pseudocount: number,
