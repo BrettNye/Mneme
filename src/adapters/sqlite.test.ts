@@ -621,6 +621,36 @@ it("re-scoping via scoped().scoped() uses the new scope, not the outer scope", (
   expect(a.scoped!({ corpus: "B" }).query({} as any)).toHaveLength(1);
 });
 
+// --- scoped deleteClaim corpus-guard tests ---
+
+it("scoped deleteClaim does NOT deprecate a claim from another corpus (cross-corpus write is no-op)", () => {
+  const a = createSqliteAdapter();
+  const claimA = makeValidatedClaim({ value: "in-A" });
+  a.scoped!({ corpus: "A" }).insertClaim(claimA);
+
+  // corpus-B handle attempts to delete corpus-A's claim — must be a no-op
+  a.scoped!({ corpus: "B" }).deleteClaim(claimA.id);
+
+  // claim should still be validated in corpus A
+  const fetched = a.scoped!({ corpus: "A" }).getClaim(claimA.id);
+  expect(fetched).toBeDefined();
+  expect(fetched!.status).toBe("validated");
+});
+
+it("scoped deleteClaim DOES deprecate a claim in the same corpus", () => {
+  const a = createSqliteAdapter();
+  const claimA = makeValidatedClaim({ value: "in-A" });
+  a.scoped!({ corpus: "A" }).insertClaim(claimA);
+
+  // same-corpus delete should work
+  a.scoped!({ corpus: "A" }).deleteClaim(claimA.id);
+
+  // now fetch via base (which has no corpus guard) to confirm status changed
+  const fetched = a.getClaim(claimA.id);
+  expect(fetched).toBeDefined();
+  expect(fetched!.status).toBe("deprecated");
+});
+
 // --- Migration test: corpus_id added to pre-existing db ---
 
 it("migration adds corpus_id to a pre-existing db without error and scoped ops work", () => {

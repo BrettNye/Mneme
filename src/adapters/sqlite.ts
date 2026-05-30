@@ -222,6 +222,10 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     "UPDATE claims SET status = 'deprecated' WHERE id = ?"
   );
 
+  const scopedDeleteStmt = db.prepare<[string, string]>(
+    "UPDATE claims SET status = 'deprecated' WHERE id = ? AND corpus_id = ?"
+  );
+
   const getIdempotencyStmt = db.prepare<[string, string], IdempotencyRow>(
     "SELECT * FROM idempotency WHERE scope = ? AND key = ?"
   );
@@ -423,10 +427,13 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
           // Ignore caller-supplied corpusId; force our bound scope (bypass-proof)
           return executeQuery(_plan, scope);
         },
+        deleteClaim(id: ClaimId): void {
+          scopedDeleteStmt.run(id, scope.corpus);
+        },
         getClaim(id: ClaimId): Claim | undefined {
           const row = getStmt.get(id);
           if (!row) return undefined;
-          // Only return the claim if it belongs to this corpus
+          // corpus_id is null for base (un-scoped) inserts; null !== any string, so base claims are invisible to scoped handles
           if (row.corpus_id !== scope.corpus) return undefined;
           return fromRow(row);
         },
