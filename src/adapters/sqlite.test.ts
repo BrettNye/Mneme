@@ -2,6 +2,10 @@ import { createSqliteAdapter } from "./sqlite.js";
 import type { Claim } from "../core/claim.js";
 import type { ClaimId, ProfileId, WorkspaceId } from "../core/ids.js";
 import type { ClaimEvent } from "./adapter.js";
+import Database from "better-sqlite3";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function makeValidatedClaim(overrides: Partial<Claim> = {}): Claim {
   const base: Claim = {
@@ -615,4 +619,57 @@ it("re-scoping via scoped().scoped() uses the new scope, not the outer scope", (
   const claimB = makeValidatedClaim({ value: "in-B" });
   rescopedB.insertClaim(claimB);
   expect(a.scoped!({ corpus: "B" }).query({} as any)).toHaveLength(1);
+});
+
+// --- Migration test: corpus_id added to pre-existing db ---
+
+it("migration adds corpus_id to a pre-existing db without error and scoped ops work", () => {
+  // Step 1: create a db file with OLD claims schema that lacks corpus_id
+  const dir = mkdtempSync(join(tmpdir(), "mneme-test-"));
+  const dbPath = join(dir, "legacy.db");
+
+  const legacyDb = new Database(dbPath);
+  legacyDb.exec(`
+    CREATE TABLE claims (
+      id TEXT PRIMARY KEY,
+      profile TEXT,
+      workspace TEXT,
+      subject TEXT,
+      key TEXT,
+      scope_hash TEXT,
+      scope_json TEXT,
+      value_json TEXT,
+      value_hash TEXT,
+      conf_distribution TEXT,
+      conf_params TEXT,
+      conf_raw REAL,
+      conf_effective REAL,
+      valid_from REAL,
+      valid_to REAL,
+      recorded REAL,
+      recorded_seq INTEGER,
+      status TEXT,
+      source TEXT,
+      provenance_json TEXT,
+      evidence_json TEXT,
+      audience_json TEXT,
+      tags_json TEXT,
+      schema TEXT,
+      run_id TEXT
+    );
+  `);
+  legacyDb.close();
+
+  // Step 2: createSqliteAdapter should NOT throw (migration runs idempotently)
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+  expect(() => {
+    adapter = createSqliteAdapter(dbPath);
+  }).not.toThrow();
+
+  // Step 3: scoped insert + scoped query works on the migrated db
+  const claim = makeValidatedClaim({ value: "migrated-claim" });
+  adapter!.scoped!({ corpus: "X" }).insertClaim(claim);
+  const results = adapter!.scoped!({ corpus: "X" }).query({} as any);
+  expect(results).toHaveLength(1);
+  expect(results[0].value).toBe("migrated-claim");
 });
