@@ -10,4 +10,12 @@ describe("merkleRoot", () => {
   it("distinguishes leaf-set membership", () => {
     expect(merkleRoot([new Uint8Array([1])])).not.toEqual(merkleRoot([new Uint8Array([2])]));
   });
+  it("detects an appended duplicate leaf (no odd-node collapse)", () => {
+    const a = new Uint8Array([1]);
+    expect(merkleRoot([a, a, a])).not.toEqual(merkleRoot([a, a]));
+  });
+  it("domain-separates leaves from internal nodes", () => {
+    const ab = new Uint8Array([0xab]);
+    expect(merkleRoot([ab, ab])).not.toEqual(merkleRoot([merkleRoot([ab])]));
+  });
 });
