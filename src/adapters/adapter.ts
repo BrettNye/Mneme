@@ -1,6 +1,11 @@
 import type { Claim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
 
+export interface AdapterScope {
+  corpus: string;
+  profile?: string;
+}
+
 export interface ClaimEvent {
   op: "commit" | "supersede" | "promote";
   corpusId: string;
@@ -59,6 +64,8 @@ export interface StorageAdapter {
   maxRecordedSeq(): number;
   appendEvent(e: ClaimEvent): void;
   readEvents(filter?: { corpusId?: string; claimId?: string; since?: number }): ClaimEvent[];
+  /** Return a scope-bound view: reads force corpus (and profile if set); writes stamp corpus. */
+  scoped?(scope: AdapterScope): StorageAdapter;
   /** Release any underlying resources (e.g. file handles). Optional; in-memory adapters may omit it. */
   close?(): void;
 }

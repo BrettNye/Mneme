@@ -5,6 +5,7 @@ import type {
   AdapterCapabilities,
   IdempotencyRecord,
   ClaimEvent,
+  AdapterScope,
 } from "./adapter.js";
 import type { Claim, Status, Source } from "../core/claim.js";
 import type { ClaimId, ProfileId, WorkspaceId } from "../core/ids.js";
@@ -41,6 +42,7 @@ interface ClaimRow {
   tags_json: string;
   schema: string;
   run_id: string | null;
+  corpus_id: string | null;
 }
 
 interface IdempotencyRow {
@@ -63,7 +65,7 @@ interface ClaimEventRow {
   recorded_seq: number;
 }
 
-function toRow(c: Claim): ClaimRow {
+function toRow(c: Claim, corpusId: string | null = null): ClaimRow {
   return {
     id: c.id,
     profile: c.profile,
@@ -90,6 +92,7 @@ function toRow(c: Claim): ClaimRow {
     tags_json: JSON.stringify(c.tags),
     schema: c.schema,
     run_id: c.provenance.runId ?? null,
+    corpus_id: corpusId,
   };
 }
 
@@ -186,19 +189,28 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     CREATE INDEX IF NOT EXISTS idx_events_claim ON claim_events(claim_id);
   `);
 
+  // Idempotent migration: add corpus_id column if it doesn't exist yet
+  const claimColumns = (db.pragma("table_info(claims)") as Array<{ name: string }>).map(
+    (col) => col.name
+  );
+  if (!claimColumns.includes("corpus_id")) {
+    db.exec("ALTER TABLE claims ADD COLUMN corpus_id TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_claims_corpus ON claims(corpus_id)");
+
   const insertStmt = db.prepare<ClaimRow>(`
     INSERT OR REPLACE INTO claims (
       id, profile, workspace, subject, key, scope_hash, scope_json,
       value_json, value_hash, conf_distribution, conf_params, conf_raw,
       conf_effective, valid_from, valid_to, recorded, recorded_seq,
       status, source, provenance_json, evidence_json, audience_json, tags_json, schema,
-      run_id
+      run_id, corpus_id
     ) VALUES (
       @id, @profile, @workspace, @subject, @key, @scope_hash, @scope_json,
       @value_json, @value_hash, @conf_distribution, @conf_params, @conf_raw,
       @conf_effective, @valid_from, @valid_to, @recorded, @recorded_seq,
       @status, @source, @provenance_json, @evidence_json, @audience_json, @tags_json, @schema,
-      @run_id
+      @run_id, @corpus_id
     )
   `);
 
@@ -227,13 +239,65 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     "SELECT COALESCE(MAX(recorded_seq), 0) AS m FROM claims"
   );
 
-  return {
+  function executeQuery(plan: ExecutionPlan, force?: AdapterScope): Claim[] {
+    const conditions: string[] = [];
+    const params: (string | number | string[])[] = [];
+
+    // Forced scope overrides any caller-supplied corpus (bypass-proof isolation)
+    if (force !== undefined) {
+      conditions.push("corpus_id = ?");
+      params.push(force.corpus);
+      if (force.profile !== undefined) {
+        conditions.push("profile = ?");
+        params.push(force.profile);
+      }
+    }
+
+    if (plan.subject !== undefined) {
+      conditions.push("subject = ?");
+      params.push(plan.subject);
+    }
+    if (plan.key !== undefined) {
+      conditions.push("key = ?");
+      params.push(plan.key);
+    }
+    if (plan.scopeHash !== undefined) {
+      conditions.push("scope_hash = ?");
+      params.push(plan.scopeHash);
+    }
+    if (plan.recordedAtMost !== undefined) {
+      conditions.push("recorded <= ?");
+      params.push(plan.recordedAtMost);
+    }
+
+    if (plan.status !== undefined && plan.status.length > 0) {
+      const placeholders = plan.status.map(() => "?").join(", ");
+      conditions.push(`status IN (${placeholders})`);
+      params.push(...plan.status);
+    }
+
+    if (plan.runIds !== undefined && plan.runIds.length > 0) {
+      const placeholders = plan.runIds.map(() => "?").join(", ");
+      conditions.push(`run_id IN (${placeholders})`);
+      params.push(...plan.runIds);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const sql = `SELECT * FROM claims ${where}`;
+
+    const flatParams = params.flatMap((p) => (Array.isArray(p) ? p : [p]));
+    const stmt = db.prepare<unknown[], ClaimRow>(sql);
+    const rows = stmt.all(...flatParams);
+    return rows.map(fromRow);
+  }
+
+  const base: StorageAdapter = {
     close(): void {
       db.close();
     },
 
     insertClaim(c: Claim): void {
-      insertStmt.run(toRow(c));
+      insertStmt.run(toRow(c, null));
     },
 
     getClaim(id: ClaimId): Claim | undefined {
@@ -249,52 +313,14 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     insertBatch(cs: Claim[]): void {
       const tx = db.transaction((rows: Claim[]) => {
         for (const r of rows) {
-          insertStmt.run(toRow(r));
+          insertStmt.run(toRow(r, null));
         }
       });
       tx(cs);
     },
 
     query(plan: ExecutionPlan): Claim[] {
-      const conditions: string[] = [];
-      const params: (string | number | string[])[] = [];
-
-      if (plan.subject !== undefined) {
-        conditions.push("subject = ?");
-        params.push(plan.subject);
-      }
-      if (plan.key !== undefined) {
-        conditions.push("key = ?");
-        params.push(plan.key);
-      }
-      if (plan.scopeHash !== undefined) {
-        conditions.push("scope_hash = ?");
-        params.push(plan.scopeHash);
-      }
-      if (plan.recordedAtMost !== undefined) {
-        conditions.push("recorded <= ?");
-        params.push(plan.recordedAtMost);
-      }
-
-      if (plan.status !== undefined && plan.status.length > 0) {
-        const placeholders = plan.status.map(() => "?").join(", ");
-        conditions.push(`status IN (${placeholders})`);
-        params.push(...plan.status);
-      }
-
-      if (plan.runIds !== undefined && plan.runIds.length > 0) {
-        const placeholders = plan.runIds.map(() => "?").join(", ");
-        conditions.push(`run_id IN (${placeholders})`);
-        params.push(...plan.runIds);
-      }
-
-      const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-      const sql = `SELECT * FROM claims ${where}`;
-
-      const flatParams = params.flatMap((p) => (Array.isArray(p) ? p : [p]));
-      const stmt = db.prepare<unknown[], ClaimRow>(sql);
-      const rows = stmt.all(...flatParams);
-      return rows.map(fromRow);
+      return executeQuery(plan, undefined);
     },
 
     getIdempotencyRecord(scope: string, key: string): IdempotencyRecord | undefined {
@@ -378,5 +404,42 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
         return event;
       });
     },
+
+    scoped(scope: AdapterScope): StorageAdapter {
+      return {
+        ...base,
+        insertClaim(c: Claim): void {
+          insertStmt.run(toRow(c, scope.corpus));
+        },
+        insertBatch(cs: Claim[]): void {
+          const tx = db.transaction((rows: Claim[]) => {
+            for (const r of rows) {
+              insertStmt.run(toRow(r, scope.corpus));
+            }
+          });
+          tx(cs);
+        },
+        query(_plan: ExecutionPlan): Claim[] {
+          // Ignore caller-supplied corpusId; force our bound scope (bypass-proof)
+          return executeQuery(_plan, scope);
+        },
+        getClaim(id: ClaimId): Claim | undefined {
+          const row = getStmt.get(id);
+          if (!row) return undefined;
+          // Only return the claim if it belongs to this corpus
+          if (row.corpus_id !== scope.corpus) return undefined;
+          return fromRow(row);
+        },
+        readEvents(filter?: { corpusId?: string; claimId?: string; since?: number }): ClaimEvent[] {
+          return base.readEvents({ ...filter, corpusId: scope.corpus });
+        },
+        scoped(s: AdapterScope): StorageAdapter {
+          // Re-scoping delegates to base so it uses the new scope, not this scope
+          return base.scoped!(s);
+        },
+      };
+    },
   };
+
+  return base;
 }

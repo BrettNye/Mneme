@@ -525,3 +525,94 @@ it("transaction returns the value from fn", () => {
   const result = a.transaction(() => 42);
   expect(result).toBe(42);
 });
+
+// --- scoped() adapter tests ---
+
+it("scoped insertClaim stamps corpus_id; base insertClaim stores null corpus_id", () => {
+  const a = createSqliteAdapter();
+  const claimA = makeValidatedClaim({ value: "a" });
+  const claimBase = makeValidatedClaim({ value: "base" });
+  a.scoped!({ corpus: "A" }).insertClaim(claimA);
+  a.insertClaim(claimBase);
+  // scoped query for A returns only corpus-A claim
+  const resultsA = a.scoped!({ corpus: "A" }).query({} as any);
+  expect(resultsA).toHaveLength(1);
+  expect(resultsA[0].value).toBe("a");
+  // base query returns both (no corpus filter)
+  const allResults = a.query({ corpusId: "any" });
+  expect(allResults).toHaveLength(2);
+});
+
+it("scoped query never returns another corpus's claims", () => {
+  const a = createSqliteAdapter();
+  a.scoped!({ corpus: "A" }).insertClaim(makeValidatedClaim({ value: "a" }));
+  a.scoped!({ corpus: "B" }).insertClaim(makeValidatedClaim({ value: "b" }));
+  expect(a.scoped!({ corpus: "A" }).query({} as any)).toHaveLength(1);
+  // passing corpusId:"B" to a corpus-A scope is ignored (force-injection is bypass-proof)
+  expect(a.scoped!({ corpus: "A" }).query({ corpusId: "B" } as any)).toHaveLength(1);
+});
+
+it("scoped with profile filters by both corpus and profile", () => {
+  const a = createSqliteAdapter();
+  const claimP1 = makeValidatedClaim({ profile: "p1" as any });
+  const claimP2 = makeValidatedClaim({ profile: "p2" as any });
+  a.scoped!({ corpus: "A" }).insertClaim(claimP1);
+  a.scoped!({ corpus: "A" }).insertClaim(claimP2);
+  const results = a.scoped!({ corpus: "A", profile: "p1" }).query({} as any);
+  expect(results).toHaveLength(1);
+  expect(results[0].profile).toBe("p1");
+});
+
+it("scoped getClaim returns undefined for a claim from another corpus", () => {
+  const a = createSqliteAdapter();
+  const claimB = makeValidatedClaim({ value: "b" });
+  a.scoped!({ corpus: "B" }).insertClaim(claimB);
+  // corpus-A scope should not see corpus-B's claim
+  expect(a.scoped!({ corpus: "A" }).getClaim(claimB.id)).toBeUndefined();
+});
+
+it("scoped getClaim returns the claim when corpus matches", () => {
+  const a = createSqliteAdapter();
+  const claim = makeValidatedClaim({ value: "mine" });
+  a.scoped!({ corpus: "A" }).insertClaim(claim);
+  expect(a.scoped!({ corpus: "A" }).getClaim(claim.id)).toBeDefined();
+});
+
+it("scoped insertBatch stamps all claims with corpus_id", () => {
+  const a = createSqliteAdapter();
+  const c1 = makeValidatedClaim({ value: "x" });
+  const c2 = makeValidatedClaim({ value: "y" });
+  a.scoped!({ corpus: "A" }).insertBatch([c1, c2]);
+  expect(a.scoped!({ corpus: "A" }).query({} as any)).toHaveLength(2);
+  expect(a.scoped!({ corpus: "B" }).query({} as any)).toHaveLength(0);
+});
+
+it("scoped delegates capabilities, transaction, maxRecordedSeq, and close to base", () => {
+  const a = createSqliteAdapter();
+  const scoped = a.scoped!({ corpus: "X" });
+  // capabilities must be delegated
+  const caps = scoped.capabilities();
+  expect(caps.valuePredicateSupport.equality).toBe("fallback_in_memory");
+  // transaction must work
+  const claim = makeValidatedClaim();
+  const result = scoped.transaction(() => {
+    scoped.insertClaim(claim);
+    return 99;
+  });
+  expect(result).toBe(99);
+  expect(scoped.getClaim(claim.id)).toBeDefined();
+  // maxRecordedSeq is delegated
+  expect(typeof scoped.maxRecordedSeq()).toBe("number");
+});
+
+it("re-scoping via scoped().scoped() uses the new scope, not the outer scope", () => {
+  const a = createSqliteAdapter();
+  const claimA = makeValidatedClaim({ value: "in-A" });
+  a.scoped!({ corpus: "A" }).insertClaim(claimA);
+  // re-scope to B via A's scoped handle — should act as scope B
+  const rescopedB = a.scoped!({ corpus: "A" }).scoped!({ corpus: "B" });
+  expect(rescopedB.query({} as any)).toHaveLength(0);
+  const claimB = makeValidatedClaim({ value: "in-B" });
+  rescopedB.insertClaim(claimB);
+  expect(a.scoped!({ corpus: "B" }).query({} as any)).toHaveLength(1);
+});
