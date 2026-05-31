@@ -5,12 +5,12 @@ created: 2026-05-31
 
 ```mermaid
 flowchart TD
-    task-1["task-1: Claim carries corpusId<br/>files: src/core/claim.ts +1 more"]
-    task-2["task-2: fromRow populates corpusId<br/>files: src/adapters/sqlite.ts +1 more"]
-    task-3["task-3: Promoter stamps corpusId<br/>files: src/write/pipeline.ts +1 more"]
-    task-4["task-4: findValidatedConflict assertion<br/>files: src/write/contradiction.ts +1 more"]
-    task-5["task-5: replay corpus assertion<br/>files: src/mneme.ts +1 more"]
-    task-6["task-6: full-suite + tsc green gate<br/>files: (verification)"]
+    task-1["task-1: Claim carries corpusId<br/>files: src/core/claim.ts +1 more"]:::done
+    task-2["task-2: fromRow populates corpusId<br/>files: src/adapters/sqlite.ts +1 more"]:::done
+    task-3["task-3: Promoter stamps corpusId<br/>files: src/write/pipeline.ts +1 more"]:::done
+    task-4["task-4: findValidatedConflict assertion<br/>files: src/write/contradiction.ts +1 more"]:::done
+    task-5["task-5: replay corpus assertion<br/>files: src/mneme.ts +1 more"]:::done
+    task-6["task-6: full-suite + tsc green gate<br/>files: (verification)"]:::done
 
     task-1 --> task-2
     task-1 --> task-3
@@ -65,7 +65,7 @@ depends_on: []
 files:
   - src/core/claim.ts
   - src/core/claim.test.ts
-status: pending
+status: done
 ```
 
 Add an optional, branded `corpusId?: CorpusId` to the `Claim` interface and exclude it
@@ -133,7 +133,7 @@ depends_on: [task-1]
 files:
   - src/adapters/sqlite.ts
   - src/adapters/sqlite.test.ts
-status: pending
+status: done
 ```
 
 Populate `corpusId` in `fromRow` from the `corpus_id` column when non-null; leave it
@@ -195,7 +195,7 @@ depends_on: [task-1]
 files:
   - src/write/pipeline.ts
   - src/write/pipeline.test.ts
-status: pending
+status: done
 ```
 
 Stamp the Promoter's bound `corpusId` onto the full claims it builds (`commit`'s
@@ -259,7 +259,7 @@ depends_on: [task-1]
 files:
   - src/write/contradiction.ts
   - src/write/contradiction.test.ts
-status: pending
+status: done
 ```
 
 Add a defensive assertion to `findValidatedConflict`: if the candidate carries a
@@ -333,7 +333,7 @@ depends_on: [task-1]
 files:
   - src/mneme.ts
   - src/mneme.test.ts
-status: pending
+status: done
 ```
 
 Add a defensive assertion to `Mneme.replay(corpusId, claim)`: if the claim carries a
@@ -387,7 +387,7 @@ Test file: `src/mneme.test.ts`.
 id: task-6
 depends_on: [task-2, task-3, task-4, task-5]
 files: []
-status: pending
+status: done
 single_threaded: true
 is_wiring_task: true
 ```
