@@ -153,7 +153,7 @@ export class Promoter {
       audience: candidate.audience ?? {},   // persona-targeting hints default to none (§2.1)
     } as Claim;
 
-    const outcome = enforce(candidateForEnforce, opts.policy, this.adapter);
+    const outcome = enforce(candidateForEnforce, opts.policy, this.adapter, this.corpusId);
 
     if (outcome.decision === "reject") {
       // Reject path: no event, no idempotency record

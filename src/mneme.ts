@@ -228,7 +228,7 @@ export interface Mneme {
    * store, threading this instance's adapter and catalog. Returns the §7.6 replay
    * status (`exact`/`mismatch`/`missing_inputs`/`unavailable_models`/`integrity_unknown`/`failed`).
    */
-  replay(claim: Claim): ReplayResult;
+  replay(corpusId: string, claim: Claim): ReplayResult;
   /**
    * Derive and commit a claim from an algebra expression, recording the serialized query
    * as provenance so it can later be re-executed via `replay`. Threads this instance's
@@ -371,9 +371,11 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
       return ids.map(id => s.getClaim(id)).filter((c): c is Claim => c !== undefined);
     },
 
-    replay(claim: Claim): ReplayResult {
-      // Derive the corpus from claim.workspace (== corpusId by convention throughout this codebase)
-      const corpusId = String(claim.workspace);
+    replay(corpusId: string, claim: Claim): ReplayResult {
+      // Scope by the ENFORCED corpus supplied by the caller, never claim.workspace:
+      // workspace is caller-supplied and can be decoupled from corpus_id (e.g. a pinned
+      // session workspace), which would replay the claim against the wrong corpus.
+      catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
       return replayStatus(claim, scopedFor(corpusId), catalog);
     },
 

@@ -749,7 +749,7 @@ it("replay re-executes a derived claim's recorded query and returns exact", () =
   } as unknown as Claim;
 
   // m.replay threads the instance's own catalog so re-execution can resolve the corpus.
-  const result = m.replay(derived);
+  const result = m.replay("workspace:canopy", derived);
   expect(result.status).toBe("exact");
   expect(result.result).toBeDefined();
 });
@@ -834,7 +834,21 @@ it("derive commits a derived claim that replays to exact", () => {
   expect(typeof res.id).toBe("string");
 
   const claim = m.readByIds("workspace:canopy", [res.id as any])[0];
-  expect(m.replay(claim).status).toBe("exact");
+  expect(m.replay("workspace:canopy", claim).status).toBe("exact");
+});
+
+it("replay scopes by the passed corpusId, not claim.workspace (isolation)", () => {
+  // Regression for the audit finding: replay used to derive its corpus from
+  // String(claim.workspace). workspace is caller-supplied and can be decoupled from the
+  // enforced corpus, so a claim must be replayed against the corpus the CALLER names.
+  const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef); // "workspace:canopy" exists
+
+  // A claim whose workspace points at the VALID corpus — but we replay it against a
+  // corpus that does not exist. Old code keyed off workspace and would NOT throw; the
+  // fix keys off the passed corpusId, so the unknown-corpus existence check must fire.
+  const claim = { id: "x", workspace: "workspace:canopy", subject: "s", key: "k" } as unknown as Claim;
+  expect(() => m.replay("no-such-corpus", claim)).toThrow();
 });
 
 it("derive throws on an unknown corpus", () => {
@@ -1284,7 +1298,7 @@ describe("corpus isolation", () => {
       },
     } as unknown as Claim;
 
-    const result = m.replay(derived);
+    const result = m.replay("corpus:A", derived);
     expect(result.status).toBe("exact");
   });
 

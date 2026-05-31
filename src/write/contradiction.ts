@@ -13,11 +13,15 @@ export interface ContradictionOutcome {
 
 export function findValidatedConflict(
   candidate: Claim,
-  adapter: StorageAdapter
+  adapter: StorageAdapter,
+  corpusId: string
 ): Claim | undefined {
   return adapter
     .query({
-      corpusId: candidate.workspace,
+      // The ENFORCED corpus, not candidate.workspace: workspace is caller-supplied and may
+      // be decoupled from corpus_id. (A scoped adapter force-overrides this anyway, but we
+      // key off the boundary by construction rather than relying on that masking.)
+      corpusId,
       subject: candidate.subject,
       key: candidate.key,
       status: ["validated"],
@@ -29,9 +33,10 @@ export function findValidatedConflict(
 export function enforce(
   candidate: Claim,
   policy: ContradictionPolicy,
-  adapter: StorageAdapter
+  adapter: StorageAdapter,
+  corpusId: string
 ): ContradictionOutcome {
-  const conflict = findValidatedConflict(candidate, adapter);
+  const conflict = findValidatedConflict(candidate, adapter, corpusId);
   if (!conflict) return { decision: "accept" };
 
   switch (policy.kind) {

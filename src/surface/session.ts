@@ -151,7 +151,7 @@ export function openSession(opts: SessionOptions = {}): Session {
     replay(corpusId: string, claimId: string): { status: string } {
       const c = mneme.readByIds(corpusId, [claimId as never])[0];
       if (!c) return { status: "missing" };
-      return { status: mneme.replay(c).status };
+      return { status: mneme.replay(corpusId, c).status };
     },
 
     close(): void {
