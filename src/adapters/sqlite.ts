@@ -145,6 +145,9 @@ function fromRow(row: ClaimRow): Claim {
 export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
+  // Wait for the write lock instead of immediately failing with SQLITE_BUSY when another
+  // process/connection is writing (multi-process: MCP server + CLI, concurrent agents).
+  db.pragma("busy_timeout = 5000");
   db.exec(`
     CREATE TABLE IF NOT EXISTS claims (
       id TEXT PRIMARY KEY,
@@ -386,7 +389,9 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
           insertStmt.run(toRow(r, null));
         }
       });
-      tx(cs);
+      // IMMEDIATE: take the write lock at BEGIN so a concurrent writer can't interleave
+      // mid-batch — matches the single-claim commit path's locking discipline.
+      tx.immediate(cs);
     },
 
     query(plan: ExecutionPlan): Claim[] {
@@ -416,7 +421,10 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     }),
 
     transaction<T>(fn: () => T): T {
-      return db.transaction(fn)();
+      // IMMEDIATE acquires the write lock at BEGIN, before the body reads maxRecordedSeq /
+      // the chain head — so under concurrent writers the read is consistent with the write
+      // and the per-corpus hash chain cannot fork from a stale-head read.
+      return db.transaction(fn).immediate();
     },
 
     maxRecordedSeq(): number {
@@ -537,7 +545,9 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
               insertStmt.run(toRow(r, scope.corpus));
             }
           });
-          tx(cs);
+          // IMMEDIATE: take the write lock at BEGIN so a concurrent writer can't interleave
+          // mid-batch — matches the single-claim commit path's locking discipline.
+          tx.immediate(cs);
         },
         query(_plan: ExecutionPlan): Claim[] {
           // Ignore caller-supplied corpusId; force our bound scope (bypass-proof)
