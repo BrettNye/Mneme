@@ -80,7 +80,7 @@ export interface StorageAdapter {
   /** Store an anchored Merkle root for a corpus+epoch. Optional: not all adapters implement anchoring. */
   putAnchoredRoot?(row: AnchoredRootRow): void;
   /** Retrieve anchored roots for a corpus, optionally filtered by epochId or since timestamp. */
-  getAnchoredRoots?(corpusId: string, range?: { epochId?: string; since?: string }): AnchoredRootRow[];
+  getAnchoredRoots?(corpusId: string, range?: { epochId?: string; since?: number }): AnchoredRootRow[];
   /** Return a scope-bound view: reads force corpus (and profile if set); writes stamp corpus. */
   scoped?(scope: AdapterScope): StorageAdapter;
   /** Release any underlying resources (e.g. file handles). Optional; in-memory adapters may omit it. */

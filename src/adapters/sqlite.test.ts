@@ -796,9 +796,20 @@ it("getAnchoredRoots filters by since when supplied", () => {
   a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1000 });
   a.putAnchoredRoot!({ corpusId: "c1", epochId: "e2", root: "r2", signature: null, guarantee: "g", at: 2000 });
   a.putAnchoredRoot!({ corpusId: "c1", epochId: "e3", root: "r3", signature: null, guarantee: "g", at: 3000 });
-  const results = a.getAnchoredRoots!("c1", { since: "2000" });
+  const results = a.getAnchoredRoots!("c1", { since: 2000 });
   expect(results).toHaveLength(2);
   expect(results.map((r) => r.epochId).sort()).toEqual(["e2", "e3"]);
+});
+
+it("two genesis events identical except reason produce distinct entryHash", () => {
+  const a = createSqliteAdapter();
+  const b = createSqliteAdapter();
+  const base = { op: "promote" as const, corpusId: "c1", writer: "w", claimId: "cl-1", toStatus: "validated", recorded: 1000, recordedSeq: 1 };
+  a.appendEvent({ ...base, reason: "reason-A" });
+  b.appendEvent({ ...base, reason: "reason-B" });
+  const aHash = a.readEvents({ corpusId: "c1" })[0].entryHash;
+  const bHash = b.readEvents({ corpusId: "c1" })[0].entryHash;
+  expect(aHash).not.toBe(bHash);
 });
 
 it("putAnchoredRoot is idempotent (INSERT OR REPLACE)", () => {

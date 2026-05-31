@@ -199,6 +199,7 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       prev_hash TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_events_claim ON claim_events(claim_id);
+    CREATE INDEX IF NOT EXISTS idx_events_corpus_seq ON claim_events(corpus_id, seq_pk);
     CREATE TABLE IF NOT EXISTS audit_anchors (
       corpus_id TEXT,
       epoch_id TEXT,
@@ -229,19 +230,6 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
   if (!eventColumns.includes("prev_hash")) {
     db.exec("ALTER TABLE claim_events ADD COLUMN prev_hash TEXT");
   }
-
-  // Idempotent migration: create audit_anchors table if it does not exist yet
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS audit_anchors (
-      corpus_id TEXT,
-      epoch_id TEXT,
-      root TEXT,
-      signature TEXT,
-      guarantee TEXT,
-      at REAL,
-      PRIMARY KEY(corpus_id, epoch_id)
-    )
-  `);
 
   const insertStmt = db.prepare<ClaimRow>(`
     INSERT OR REPLACE INTO claims (
@@ -306,6 +294,7 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       e.claimId,
       e.deprecatedId ?? null,
       e.toStatus ?? null,
+      e.reason ?? null,
       e.recorded,
       e.recordedSeq,
     ]);
@@ -499,7 +488,7 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       });
     },
 
-    getAnchoredRoots(corpusId: string, range?: { epochId?: string; since?: string }): AnchoredRootRow[] {
+    getAnchoredRoots(corpusId: string, range?: { epochId?: string; since?: number }): AnchoredRootRow[] {
       const conditions: string[] = ["corpus_id = ?"];
       const params: (string | number)[] = [corpusId];
 
@@ -509,7 +498,7 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       }
       if (range?.since !== undefined) {
         conditions.push("at >= ?");
-        params.push(Number(range.since));
+        params.push(range.since);
       }
 
       const where = `WHERE ${conditions.join(" AND ")}`;
