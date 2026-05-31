@@ -5,16 +5,16 @@ created: 2026-05-30
 
 ```mermaid
 flowchart TD
-    task-scoped-adapter["task-scoped-adapter: scoped() + corpus_id<br/>files: src/adapters/adapter.ts +2 more"]
-    task-mneme-wiring["task-mneme-wiring: scope facade through Mneme<br/>files: src/mneme.ts +1 more"]
-    task-audit-contract["task-audit-contract: Signer/AuditAnchor shape<br/>files: src/audit/types.ts +1 more"]
-    task-merkle["task-merkle: merkle root + proof<br/>files: src/audit/merkle.ts +1 more"]
-    task-signers["task-signers: None/Local signers<br/>files: src/audit/signers.ts +1 more"]
-    task-events-chain["task-events-chain: hash-chained claim_events<br/>files: src/adapters/sqlite.ts +2 more"]
-    task-local-anchor["task-local-anchor: LocalAnchor (detect)<br/>files: src/audit/local-anchor.ts +1 more"]
-    task-aws-anchor["task-aws-anchor: S3ObjectLock + KMS (optional)<br/>files: src/audit/aws/s3-object-lock-anchor.ts +2 more"]
-    task-audit-log["task-audit-log: verifyChain + anchorEpoch + report<br/>files: src/audit/audit-log.ts +1 more"]
-    task-package-audit-exports["task-package-audit-exports: subpath exports + optional deps<br/>files: package.json"]
+    task-scoped-adapter["task-scoped-adapter: scoped() + corpus_id<br/>files: src/adapters/adapter.ts +2 more"]:::done
+    task-mneme-wiring["task-mneme-wiring: scope facade through Mneme<br/>files: src/mneme.ts +1 more"]:::done
+    task-audit-contract["task-audit-contract: Signer/AuditAnchor shape<br/>files: src/audit/types.ts +1 more"]:::done
+    task-merkle["task-merkle: merkle root + proof<br/>files: src/audit/merkle.ts +1 more"]:::done
+    task-signers["task-signers: None/Local signers<br/>files: src/audit/signers.ts +1 more"]:::done
+    task-events-chain["task-events-chain: hash-chained claim_events<br/>files: src/adapters/sqlite.ts +2 more"]:::done
+    task-local-anchor["task-local-anchor: LocalAnchor (detect)<br/>files: src/audit/local-anchor.ts +1 more"]:::done
+    task-aws-anchor["task-aws-anchor: S3ObjectLock + KMS (optional)<br/>files: src/audit/aws/s3-object-lock-anchor.ts +2 more"]:::done
+    task-audit-log["task-audit-log: verifyChain + anchorEpoch + report<br/>files: src/audit/audit-log.ts +1 more"]:::done
+    task-package-audit-exports["task-package-audit-exports: subpath exports + optional deps<br/>files: package.json"]:::done
 
     task-scoped-adapter --> task-mneme-wiring
     task-scoped-adapter --> task-events-chain
@@ -107,7 +107,7 @@ files:
   - src/adapters/adapter.ts
   - src/adapters/sqlite.ts
   - src/adapters/sqlite.test.ts
-status: pending
+status: done
 ```
 
 Add a scope-bound adapter handle. `adapter.scoped({corpus, profile?})` returns a
@@ -200,7 +200,7 @@ depends_on: [task-scoped-adapter]
 files:
   - src/mneme.ts
   - src/mneme.test.ts
-status: pending
+status: done
 ```
 
 Make the Mneme facade construct a corpus-scoped adapter per corpus so commit,
@@ -264,7 +264,7 @@ depends_on: []
 files:
   - src/audit/types.ts
   - src/audit/types.test.ts
-status: pending
+status: done
 ```
 
 The shared tamper-evidence contract, mirroring agora verbatim (shared shape, no
@@ -318,7 +318,7 @@ depends_on: []
 files:
   - src/audit/merkle.ts
   - src/audit/merkle.test.ts
-status: pending
+status: done
 ```
 
 Pure Merkle tree over a list of leaf hashes: deterministic root + inclusion
@@ -374,7 +374,7 @@ depends_on: [task-audit-contract]
 files:
   - src/audit/signers.ts
   - src/audit/signers.test.ts
-status: pending
+status: done
 ```
 
 Two core `Signer` implementations: `NoneSigner` (no signature) and `LocalSigner`
@@ -436,7 +436,7 @@ files:
   - src/adapters/adapter.ts
   - src/adapters/sqlite.ts
   - src/adapters/sqlite.test.ts
-status: pending
+status: done
 ```
 
 Make `claim_events` a per-corpus hash chain and add an anchor-root store.
@@ -504,7 +504,7 @@ depends_on: [task-audit-contract, task-events-chain]
 files:
   - src/audit/local-anchor.ts
   - src/audit/local-anchor.test.ts
-status: pending
+status: done
 ```
 
 The default `AuditAnchor`: stores signed roots in the same db via the adapter's
@@ -574,7 +574,7 @@ files:
   - src/audit/aws/s3-object-lock-anchor.ts
   - src/audit/aws/kms-signer.ts
   - src/audit/aws/aws.test.ts
-status: pending
+status: done
 ```
 
 The optional strong path, isolated in `src/audit/aws/` so AWS SDKs are only
@@ -636,7 +636,7 @@ depends_on: [task-audit-contract, task-merkle, task-signers, task-events-chain, 
 files:
   - src/audit/audit-log.ts
   - src/audit/audit-log.test.ts
-status: pending
+status: done
 ```
 
 The engine glue: `verifyChain(corpus)` recomputes the per-corpus chain and
@@ -707,7 +707,7 @@ depends_on: [task-audit-log, task-aws-anchor]
 is_wiring_task: true
 files:
   - package.json
-status: pending
+status: done
 ```
 
 Expose the audit surface and confine AWS to optional deps. Adds `./audit` and
