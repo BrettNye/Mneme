@@ -1,5 +1,5 @@
 import type { CandidateClaim, Claim, Status } from "../core/claim.js";
-import { newClaimId, type ClaimId } from "../core/ids.js";
+import { newClaimId, asCorpusId, type ClaimId } from "../core/ids.js";
 import { scopeHash } from "../core/scope.js";
 import { valueHash } from "../core/value.js";
 import { INFINITY } from "../core/time.js";
@@ -104,6 +104,7 @@ export class Promoter {
       id: newClaimId(),
       profile: accepted.profile,
       workspace: accepted.workspace,
+      ...(accepted.corpusId ? { corpusId: accepted.corpusId } : {}),
       subject: "contradiction" as Claim["subject"],
       key: "contradiction.mark" as Claim["key"],
       scope: accepted.scope,
@@ -145,6 +146,7 @@ export class Promoter {
     const candidateForEnforce = {
       ...candidate,
       id: claimId,
+      ...(this.corpusId ? { corpusId: asCorpusId(this.corpusId) } : {}),
       scopeHash: scopeHash(candidate.scope),
       valueHash: valueHash(candidate.value),
       recorded: 0,       // placeholder — will be overwritten after accept
@@ -260,6 +262,7 @@ export class Promoter {
         const newClaim: Claim = {
           ...replacement,
           id: newId,
+          ...(this.corpusId ? { corpusId: asCorpusId(this.corpusId) } : {}),
           scopeHash: scopeHash(replacement.scope),
           valueHash: valueHash(replacement.value),
           recorded,
