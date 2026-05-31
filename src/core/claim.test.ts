@@ -1,3 +1,4 @@
+import { asCorpusId } from "./ids.js";
 import type { Claim, CandidateClaim, Status, Source } from "./claim.js";
 
 it("a fully-populated claim satisfies the Claim shape", () => {
@@ -88,4 +89,16 @@ it("CandidateClaim allows optional status to be set", () => {
   };
 
   expect(candidate.status).toBe("candidate");
+});
+
+it("Claim carries an optional branded corpusId", () => {
+  const c = { corpusId: asCorpusId("corpus-a") } as Claim;
+  expect(c.corpusId).toBe("corpus-a");
+});
+
+it("CandidateClaim cannot carry corpusId (force-stamped)", () => {
+  const _cand = {} as CandidateClaim;
+  // @ts-expect-error corpusId is enforced, not caller-supplied
+  _cand.corpusId = asCorpusId("x");
+  expect(true).toBe(true);
 });
