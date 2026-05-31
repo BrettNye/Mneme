@@ -704,6 +704,55 @@ it("migration adds corpus_id to a pre-existing db without error and scoped ops w
   expect(results[0].value).toBe("migrated-claim");
 });
 
+it("migration backfills corpus_id from workspace so pre-existing claims survive the upgrade", () => {
+  // A real legacy store (pre-corpus_id) carries the corpus in `workspace`. Without a backfill,
+  // post-migration rows have corpus_id = NULL and the now-scoped facade filters them out
+  // ("upgrade ate my data"). The migration must stamp corpus_id from workspace.
+  const dir = mkdtempSync(join(tmpdir(), "mneme-test-"));
+  const dbPath = join(dir, "legacy-backfill.db");
+  const legacyDb = new Database(dbPath);
+  legacyDb.exec(`
+    CREATE TABLE claims (
+      id TEXT PRIMARY KEY, profile TEXT, workspace TEXT, subject TEXT, key TEXT,
+      scope_hash TEXT, scope_json TEXT, value_json TEXT, value_hash TEXT,
+      conf_distribution TEXT, conf_params TEXT, conf_raw REAL, conf_effective REAL,
+      valid_from REAL, valid_to REAL, recorded REAL, recorded_seq INTEGER,
+      status TEXT, source TEXT, provenance_json TEXT, evidence_json TEXT,
+      audience_json TEXT, tags_json TEXT, schema TEXT, run_id TEXT
+    );
+  `);
+  legacyDb.prepare("INSERT INTO claims (id, workspace) VALUES (?, ?)").run("legacy-1", "tenant-a");
+  legacyDb.prepare("INSERT INTO claims (id, workspace) VALUES (?, ?)").run("legacy-2", "tenant-b");
+  legacyDb.close();
+
+  createSqliteAdapter(dbPath); // migration: ADD COLUMN corpus_id + backfill from workspace
+
+  const raw = new Database(dbPath, { readonly: true });
+  const rows = raw.prepare("SELECT id, corpus_id FROM claims ORDER BY id").all();
+  raw.close();
+  expect(rows).toEqual([
+    { id: "legacy-1", corpus_id: "tenant-a" },
+    { id: "legacy-2", corpus_id: "tenant-b" },
+  ]);
+});
+
+it("corpus-scoped contradiction lookup uses the composite identity index (guards O(n^2) writes)", () => {
+  // The contradiction-detection query is corpus_id + subject + key + scope_hash. If SQLite falls back
+  // to the corpus_id-only index it scans the whole growing corpus per insert (O(n^2)). The composite
+  // idx_claims_corpus_identity must cover it as an index seek.
+  const dir = mkdtempSync(join(tmpdir(), "mneme-test-"));
+  const dbPath = join(dir, "plan.db");
+  createSqliteAdapter(dbPath).close!(); // build schema + indexes, then release the file
+  const raw = new Database(dbPath, { readonly: true });
+  const plan = raw
+    .prepare(
+      "EXPLAIN QUERY PLAN SELECT * FROM claims WHERE corpus_id=? AND subject=? AND key=? AND scope_hash=? AND status IN ('validated')"
+    )
+    .all("c", "s", "k", "h") as Array<{ detail: string }>;
+  raw.close();
+  expect(plan.map((p) => p.detail).join(" ")).toContain("idx_claims_corpus_identity");
+});
+
 // --- Hash-chain tests (task-events-chain) ---
 
 it("appendEvent sets entryHash on the first event (genesis: prevHash = '')", () => {

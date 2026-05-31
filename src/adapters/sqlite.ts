@@ -217,8 +217,17 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
   );
   if (!claimColumns.includes("corpus_id")) {
     db.exec("ALTER TABLE claims ADD COLUMN corpus_id TEXT");
+    // Backfill legacy rows: pre-corpus_id claims carry their corpus in `workspace`
+    // (every Mneme write set workspace = corpusId), so the now-scoped facade still
+    // sees them after the upgrade instead of silently filtering them out. New rows
+    // are stamped with corpus_id at insert. Runs once, when the column is first added.
+    db.exec("UPDATE claims SET corpus_id = workspace WHERE corpus_id IS NULL");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_claims_corpus ON claims(corpus_id)");
+  // Covers the corpus-scoped contradiction-detection lookup (corpus_id + subject + key + scope_hash).
+  // Without it the scoped query falls back to the corpus_id-only index and scans the whole (growing)
+  // corpus per insert -> O(n^2) writes. This makes contradiction detection an O(log n) index seek.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_claims_corpus_identity ON claims(corpus_id, subject, key, scope_hash)");
 
   // Idempotent migration: add entry_hash / prev_hash to claim_events if not yet present
   const eventColumns = (db.pragma("table_info(claim_events)") as Array<{ name: string }>).map(
