@@ -9,7 +9,9 @@
     ".": "./src/index.ts",
     "./surface": "./src/surface/index.ts",
     "./cli": "./src/cli/index.ts",
-    "./mcp": "./src/mcp/index.ts"
+    "./mcp": "./src/mcp/index.ts",
+    "./audit": "./src/audit/index.ts",
+    "./audit/aws": "./src/audit/aws/index.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -30,5 +32,13 @@
     "tsx": "^4.19.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "*",
+    "@aws-sdk/client-kms": "*"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": { "optional": true },
+    "@aws-sdk/client-kms": { "optional": true }
   }
 }

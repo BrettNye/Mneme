@@ -228,7 +228,7 @@ export interface Mneme {
    * store, threading this instance's adapter and catalog. Returns the §7.6 replay
    * status (`exact`/`mismatch`/`missing_inputs`/`unavailable_models`/`integrity_unknown`/`failed`).
    */
-  replay(claim: Claim): ReplayResult;
+  replay(corpusId: string, claim: Claim): ReplayResult;
   /**
    * Derive and commit a claim from an algebra expression, recording the serialized query
    * as provenance so it can later be re-executed via `replay`. Threads this instance's
@@ -269,10 +269,18 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
   const promoters = new Map<string, Promoter>();
   const staging = new StagingBuffer();
 
+  function scopedFor(corpusId: string): StorageAdapter {
+    const s = adapter.scoped!({ corpus: corpusId });
+    // Propagate the outer adapter's capabilities override (e.g. custom adapters in tests
+    // may override capabilities() but still delegate scoped() to the base implementation
+    // which captures the base capabilities in its closure — so we re-stamp here).
+    return { ...s, capabilities: () => adapter.capabilities() };
+  }
+
   function promoterFor(corpusId: string): Promoter {
     let p = promoters.get(corpusId);
     if (!p) {
-      p = new Promoter(adapter, catalog.getCorpusSchema(corpusId), corpusId);
+      p = new Promoter(scopedFor(corpusId), catalog.getCorpusSchema(corpusId), corpusId);
       promoters.set(corpusId, p);
     }
     return p;
@@ -323,7 +331,7 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
     query<O>(corpusId: string, pipeline: Stage<any, any>[], opts?: { evaluationClock?: number; onWarning?: (w: QueryWarning) => void; fallbackWarnThreshold?: number }): O {
       catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
       const ctx: EvalContext = {
-        adapter,
+        adapter: scopedFor(corpusId),
         catalog,
         evaluationClock: opts?.evaluationClock ?? Date.now(),
         usedSimilarityVersions: {},
@@ -354,16 +362,21 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
 
     read(corpusId: string, plan: ExecutionPlan): Claim[] {
       catalog.getCorpus(corpusId);
-      return adapter.query({ ...plan, corpusId });
+      return scopedFor(corpusId).query({ ...plan, corpusId });
     },
 
     readByIds(corpusId: string, ids: ClaimId[]): Claim[] {
       catalog.getCorpus(corpusId);
-      return ids.map(id => adapter.getClaim(id)).filter((c): c is Claim => c !== undefined);
+      const s = scopedFor(corpusId);
+      return ids.map(id => s.getClaim(id)).filter((c): c is Claim => c !== undefined);
     },
 
-    replay(claim: Claim): ReplayResult {
-      return replayStatus(claim, adapter, catalog);
+    replay(corpusId: string, claim: Claim): ReplayResult {
+      // Scope by the ENFORCED corpus supplied by the caller, never claim.workspace:
+      // workspace is caller-supplied and can be decoupled from corpus_id (e.g. a pinned
+      // session workspace), which would replay the claim against the wrong corpus.
+      catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
+      return replayStatus(claim, scopedFor(corpusId), catalog);
     },
 
     derive(
@@ -381,7 +394,7 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
       },
     ): { id: string; status: string } {
       catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
-      const candidate = deriveClaimFrom(adapter, catalog, expr, {
+      const candidate = deriveClaimFrom(scopedFor(corpusId), catalog, expr, {
         subject: opts.subject,
         key: opts.key,
         scope: opts.scope,

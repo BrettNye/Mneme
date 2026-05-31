@@ -132,7 +132,11 @@ export class Promoter {
       idempotencyKey?: string;
     }
   ): { id: string; status: "committed" | "rejected" | "duplicate" } {
-    const scope = idempotencyScope(candidate.workspace, opts.writer, candidate.key);
+    // Scope idempotency by the ENFORCED corpus boundary, not the caller-supplied
+    // candidate.workspace. workspace is untrusted for isolation (the scoped adapter
+    // force-stamps corpus_id for exactly this reason); keying off it lets a pinned
+    // workspace suppress one corpus's write as another corpus's "duplicate".
+    const scope = idempotencyScope(this.corpusId, opts.writer, candidate.key);
 
     validateScope(candidate.scope, this.schema);
 
@@ -149,7 +153,7 @@ export class Promoter {
       audience: candidate.audience ?? {},   // persona-targeting hints default to none (§2.1)
     } as Claim;
 
-    const outcome = enforce(candidateForEnforce, opts.policy, this.adapter);
+    const outcome = enforce(candidateForEnforce, opts.policy, this.adapter, this.corpusId);
 
     if (outcome.decision === "reject") {
       // Reject path: no event, no idempotency record
@@ -246,7 +250,8 @@ export class Promoter {
   ): { id: string; status: "superseded" | "duplicate" } {
     validateScope(replacement.scope, this.schema);
 
-    const idemScope = idempotencyScope(replacement.workspace, opts.writer, replacement.key);
+    // Enforced corpus boundary, not caller-supplied workspace (see commit()).
+    const idemScope = idempotencyScope(this.corpusId, opts.writer, replacement.key);
 
     return this.write(
       opts.idempotencyKey ? { scope: idemScope, key: opts.idempotencyKey } : undefined,
@@ -299,7 +304,8 @@ export class Promoter {
       return { id: targetId, status: "invalid_transition" };
     }
 
-    const idemScope = idempotencyScope(target.workspace, opts.writer, target.key);
+    // Enforced corpus boundary, not caller-supplied workspace (see commit()).
+    const idemScope = idempotencyScope(this.corpusId, opts.writer, target.key);
 
     return this.write(
       opts.idempotencyKey ? { scope: idemScope, key: opts.idempotencyKey } : undefined,

@@ -749,7 +749,7 @@ it("replay re-executes a derived claim's recorded query and returns exact", () =
   } as unknown as Claim;
 
   // m.replay threads the instance's own catalog so re-execution can resolve the corpus.
-  const result = m.replay(derived);
+  const result = m.replay("workspace:canopy", derived);
   expect(result.status).toBe("exact");
   expect(result.result).toBeDefined();
 });
@@ -834,7 +834,21 @@ it("derive commits a derived claim that replays to exact", () => {
   expect(typeof res.id).toBe("string");
 
   const claim = m.readByIds("workspace:canopy", [res.id as any])[0];
-  expect(m.replay(claim).status).toBe("exact");
+  expect(m.replay("workspace:canopy", claim).status).toBe("exact");
+});
+
+it("replay scopes by the passed corpusId, not claim.workspace (isolation)", () => {
+  // Regression for the audit finding: replay used to derive its corpus from
+  // String(claim.workspace). workspace is caller-supplied and can be decoupled from the
+  // enforced corpus, so a claim must be replayed against the corpus the CALLER names.
+  const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef); // "workspace:canopy" exists
+
+  // A claim whose workspace points at the VALID corpus — but we replay it against a
+  // corpus that does not exist. Old code keyed off workspace and would NOT throw; the
+  // fix keys off the passed corpusId, so the unknown-corpus existence check must fire.
+  const claim = { id: "x", workspace: "workspace:canopy", subject: "s", key: "k" } as unknown as Claim;
+  expect(() => m.replay("no-such-corpus", claim)).toThrow();
 });
 
 it("derive throws on an unknown corpus", () => {
@@ -1130,5 +1144,199 @@ describe("sigma capability-aware routing", () => {
     );
     expect(warnings).toHaveLength(0);
     expect(out.claims).toHaveLength(1);
+  });
+});
+
+// ── corpus isolation (the leak fix) ─────────────────────────────────────────
+
+describe("corpus isolation", () => {
+  const mkClaim = (corpusId: string, subject: string, value: string) => ({
+    profile: "profile-1" as any,
+    workspace: corpusId as any,
+    subject,
+    key: "k",
+    scope: {},
+    value,
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: `${corpusId}@1`,
+  });
+
+  const corpusA: CorpusDef = {
+    id: "corpus:A",
+    displayName: "Corpus A",
+    schema: {
+      version: "1",
+      subjects: ["corpus:A"],
+      scopeFields: {},
+      required: [],
+      scalarPseudocount: { manual: 2 },
+    },
+    defaults: {
+      decayPolicy: { kind: "none" },
+      confidenceThreshold: 0.5,
+      contradictionPolicy: { kind: "always_accept" },
+      defaultStatus: ["validated"],
+    },
+    requiredTiers: [{ kind: "core" }],
+    metadata: {},
+    createdAt: 0,
+    updatedAt: 0,
+  };
+
+  const corpusB: CorpusDef = {
+    ...corpusA,
+    id: "corpus:B",
+    displayName: "Corpus B",
+    schema: {
+      ...corpusA.schema,
+      subjects: ["corpus:B"],
+    },
+  };
+
+  it("query on corpus A returns only corpus A claims (count == 1, not 2)", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusA);
+    m.createCorpus(corpusB);
+
+    m.commit("corpus:A", mkClaim("corpus:A", "x", "a-only"), { writer: "t" });
+    m.commit("corpus:B", mkClaim("corpus:B", "y", "b-only"), { writer: "t" });
+
+    const out = m.query<AggregateResult>("corpus:A", pipe(leaf("corpus:A"), alpha.count()));
+    const entry = [...out.groups.values()][0];
+    expect((entry.value as any).n).toBe(1); // not 2
+  });
+
+  it("read on corpus A returns only corpus A claims", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusA);
+    m.createCorpus(corpusB);
+
+    m.commit("corpus:A", mkClaim("corpus:A", "x", "a-only"), { writer: "t" });
+    m.commit("corpus:B", mkClaim("corpus:B", "y", "b-only"), { writer: "t" });
+
+    const claims = m.read("corpus:A", { corpusId: "corpus:A" });
+    expect(claims).toHaveLength(1);
+    expect(claims[0].value).toBe("a-only");
+  });
+
+  it("readByIds on corpus A cannot retrieve a claim from corpus B", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusA);
+    m.createCorpus(corpusB);
+
+    m.commit("corpus:A", mkClaim("corpus:A", "x", "a-only"), { writer: "t" });
+    const { id: bId } = m.commit("corpus:B", mkClaim("corpus:B", "y", "b-only"), { writer: "t" });
+
+    // Trying to read a corpus:B claim via corpus:A scope should return nothing
+    const byId = m.readByIds("corpus:A", [bId as any]);
+    expect(byId).toHaveLength(0);
+  });
+
+  it("contradiction detection in corpus A does not see corpus B claims", () => {
+    // Under 'reject_on_contradiction' policy, a same-identity claim in B should NOT block a write in A
+    const rejectCorpusA: CorpusDef = {
+      ...corpusA,
+      defaults: {
+        ...corpusA.defaults,
+        contradictionPolicy: { kind: "reject_on_contradiction" },
+      },
+    };
+    const rejectCorpusB: CorpusDef = {
+      ...corpusB,
+      defaults: {
+        ...corpusB.defaults,
+        contradictionPolicy: { kind: "reject_on_contradiction" },
+      },
+    };
+
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(rejectCorpusA);
+    m.createCorpus(rejectCorpusB);
+
+    // Commit a claim to corpus B with the same subject/key/scope
+    m.commit("corpus:B", mkClaim("corpus:B", "shared-subject", "b-value"), { writer: "t" });
+
+    // A commit to corpus A with the same subject/key should succeed (not be blocked by B's claim)
+    const result = m.commit("corpus:A", mkClaim("corpus:A", "shared-subject", "a-value"), { writer: "t" });
+    expect(result.status).toBe("committed");
+
+    // Now commit another to corpus A with same identity — that SHOULD be rejected by corpus A's own policy
+    const result2 = m.commit("corpus:A", mkClaim("corpus:A", "shared-subject", "a-value-2"), { writer: "t" });
+    expect(result2.status).toBe("rejected");
+  });
+
+  it("replay re-executes against the claim's own corpus scope", () => {
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusA);
+    m.createCorpus(corpusB);
+
+    // Commit to corpus A
+    const { id } = m.commit("corpus:A", mkClaim("corpus:A", "replay-subj", "replay-value"), { writer: "t" });
+    // Commit something different to corpus B (should not pollute replay)
+    m.commit("corpus:B", mkClaim("corpus:B", "other-subj", "other-value"), { writer: "t" });
+
+    const stored = m.readByIds("corpus:A", [id as any])[0];
+
+    // Build a synthetic derived claim whose workspace = "corpus:A"
+    const derived = {
+      ...stored,
+      id: "derived-isolation-replay",
+      provenance: {
+        derivedFrom: {
+          queryExpression: serializeExpr(astLeaf("corpus:A")),
+          corpusState: 1,
+          inputClaims: [id],
+          similarityVersions: {},
+          embeddingModelVersions: {},
+          evaluationClock: 1234,
+        },
+      },
+    } as unknown as Claim;
+
+    const result = m.replay("corpus:A", derived);
+    expect(result.status).toBe("exact");
+  });
+
+  it("derive on corpus A sees only corpus A claims (alpha.count returns 1, not 2)", () => {
+    // Regression: derive() was passing the raw unscoped adapter, causing the
+    // algebra expression to run against ALL corpora. This test ensures isolation.
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusA);
+    m.createCorpus(corpusB);
+
+    // Commit one claim to corpus A and one to corpus B with same subject/key so an
+    // unscoped count would return 2 if the bug is present.
+    m.commit("corpus:A", mkClaim("corpus:A", "shared-subj", "a-value"), { writer: "t" });
+    m.commit("corpus:B", mkClaim("corpus:B", "shared-subj", "b-value"), { writer: "t" });
+
+    // Derive a result over corpus A's claims only; use key=k filter to exclude the
+    // derived claim itself from re-evaluation.
+    const expr = astSigma({ op: "keyEq", value: "k" }, astLeaf("corpus:A"));
+    const res = m.derive("corpus:A", expr, {
+      subject: "derived-count",
+      key: "count.k",
+      scope: {},
+      writer: "test",
+      evaluationClock: 1234,
+    });
+    expect(res.status).toBe("committed");
+
+    // The derived claim's workspace must be corpus A (the scoped adapter sources its claims)
+    const derived = m.readByIds("corpus:A", [res.id as any])[0];
+    expect(derived.workspace).toBe("corpus:A" as any);
+
+    // More directly: count the key="k" claims visible to corpus A — must be 1, not 2
+    const directCount = m.query<AggregateResult>("corpus:A", pipe(
+      leaf("corpus:A"),
+      sigma({ op: "keyEq", value: "k" }),
+      alpha.count()
+    ));
+    const entry = [...directCount.groups.values()][0];
+    expect((entry.value as any).n).toBe(1);
   });
 });

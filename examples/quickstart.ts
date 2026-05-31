@@ -162,7 +162,7 @@ export function runQuickstart(): QuickstartResult {
 
   // 6. Reproducibility / replay. A normal committed claim has no recorded query, so replay
   //    reports integrity_unknown.
-  const replayStatusOfPlainClaim = mneme.replay(web02).status;
+  const replayStatusOfPlainClaim = mneme.replay(CORPUS, web02).status;
 
   // 7. Derive a claim from a recorded query, then verify it re-executes to "exact".
   //    The query selects host:web-02's "status"; the derived key is "status.summary", so
@@ -176,6 +176,7 @@ export function runQuickstart(): QuickstartResult {
     { subject: "host:web-02", key: "status.summary", scope: {}, writer: "rollup", evaluationClock: 1234 },
   );
   const derivedReplayStatus = mneme.replay(
+    CORPUS,
     mneme.readByIds(CORPUS, [derived.id as never])[0],
   ).status;
 

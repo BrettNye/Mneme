@@ -1,7 +1,11 @@
 import { createSqliteAdapter } from "./sqlite.js";
 import type { Claim } from "../core/claim.js";
 import type { ClaimId, ProfileId, WorkspaceId } from "../core/ids.js";
-import type { ClaimEvent } from "./adapter.js";
+import type { ClaimEvent, AnchoredRootRow } from "./adapter.js";
+import Database from "better-sqlite3";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function makeValidatedClaim(overrides: Partial<Claim> = {}): Claim {
   const base: Claim = {
@@ -524,4 +528,388 @@ it("transaction returns the value from fn", () => {
   const a = createSqliteAdapter();
   const result = a.transaction(() => 42);
   expect(result).toBe(42);
+});
+
+// --- scoped() adapter tests ---
+
+it("scoped insertClaim stamps corpus_id; base insertClaim stores null corpus_id", () => {
+  const a = createSqliteAdapter();
+  const claimA = makeValidatedClaim({ value: "a" });
+  const claimBase = makeValidatedClaim({ value: "base" });
+  a.scoped!({ corpus: "A" }).insertClaim(claimA);
+  a.insertClaim(claimBase);
+  // scoped query for A returns only corpus-A claim
+  const resultsA = a.scoped!({ corpus: "A" }).query({} as any);
+  expect(resultsA).toHaveLength(1);
+  expect(resultsA[0].value).toBe("a");
+  // base query returns both (no corpus filter)
+  const allResults = a.query({ corpusId: "any" });
+  expect(allResults).toHaveLength(2);
+});
+
+it("scoped query never returns another corpus's claims", () => {
+  const a = createSqliteAdapter();
+  a.scoped!({ corpus: "A" }).insertClaim(makeValidatedClaim({ value: "a" }));
+  a.scoped!({ corpus: "B" }).insertClaim(makeValidatedClaim({ value: "b" }));
+  expect(a.scoped!({ corpus: "A" }).query({} as any)).toHaveLength(1);
+  // passing corpusId:"B" to a corpus-A scope is ignored (force-injection is bypass-proof)
+  expect(a.scoped!({ corpus: "A" }).query({ corpusId: "B" } as any)).toHaveLength(1);
+});
+
+it("scoped with profile filters by both corpus and profile", () => {
+  const a = createSqliteAdapter();
+  const claimP1 = makeValidatedClaim({ profile: "p1" as any });
+  const claimP2 = makeValidatedClaim({ profile: "p2" as any });
+  a.scoped!({ corpus: "A" }).insertClaim(claimP1);
+  a.scoped!({ corpus: "A" }).insertClaim(claimP2);
+  const results = a.scoped!({ corpus: "A", profile: "p1" }).query({} as any);
+  expect(results).toHaveLength(1);
+  expect(results[0].profile).toBe("p1");
+});
+
+it("scoped getClaim returns undefined for a claim from another corpus", () => {
+  const a = createSqliteAdapter();
+  const claimB = makeValidatedClaim({ value: "b" });
+  a.scoped!({ corpus: "B" }).insertClaim(claimB);
+  // corpus-A scope should not see corpus-B's claim
+  expect(a.scoped!({ corpus: "A" }).getClaim(claimB.id)).toBeUndefined();
+});
+
+it("scoped getClaim returns the claim when corpus matches", () => {
+  const a = createSqliteAdapter();
+  const claim = makeValidatedClaim({ value: "mine" });
+  a.scoped!({ corpus: "A" }).insertClaim(claim);
+  expect(a.scoped!({ corpus: "A" }).getClaim(claim.id)).toBeDefined();
+});
+
+it("scoped insertBatch stamps all claims with corpus_id", () => {
+  const a = createSqliteAdapter();
+  const c1 = makeValidatedClaim({ value: "x" });
+  const c2 = makeValidatedClaim({ value: "y" });
+  a.scoped!({ corpus: "A" }).insertBatch([c1, c2]);
+  expect(a.scoped!({ corpus: "A" }).query({} as any)).toHaveLength(2);
+  expect(a.scoped!({ corpus: "B" }).query({} as any)).toHaveLength(0);
+});
+
+it("scoped delegates capabilities, transaction, maxRecordedSeq, and close to base", () => {
+  const a = createSqliteAdapter();
+  const scoped = a.scoped!({ corpus: "X" });
+  // capabilities must be delegated
+  const caps = scoped.capabilities();
+  expect(caps.valuePredicateSupport.equality).toBe("fallback_in_memory");
+  // transaction must work
+  const claim = makeValidatedClaim();
+  const result = scoped.transaction(() => {
+    scoped.insertClaim(claim);
+    return 99;
+  });
+  expect(result).toBe(99);
+  expect(scoped.getClaim(claim.id)).toBeDefined();
+  // maxRecordedSeq is delegated
+  expect(typeof scoped.maxRecordedSeq()).toBe("number");
+});
+
+it("re-scoping via scoped().scoped() uses the new scope, not the outer scope", () => {
+  const a = createSqliteAdapter();
+  const claimA = makeValidatedClaim({ value: "in-A" });
+  a.scoped!({ corpus: "A" }).insertClaim(claimA);
+  // re-scope to B via A's scoped handle — should act as scope B
+  const rescopedB = a.scoped!({ corpus: "A" }).scoped!({ corpus: "B" });
+  expect(rescopedB.query({} as any)).toHaveLength(0);
+  const claimB = makeValidatedClaim({ value: "in-B" });
+  rescopedB.insertClaim(claimB);
+  expect(a.scoped!({ corpus: "B" }).query({} as any)).toHaveLength(1);
+});
+
+// --- scoped deleteClaim corpus-guard tests ---
+
+it("scoped deleteClaim does NOT deprecate a claim from another corpus (cross-corpus write is no-op)", () => {
+  const a = createSqliteAdapter();
+  const claimA = makeValidatedClaim({ value: "in-A" });
+  a.scoped!({ corpus: "A" }).insertClaim(claimA);
+
+  // corpus-B handle attempts to delete corpus-A's claim — must be a no-op
+  a.scoped!({ corpus: "B" }).deleteClaim(claimA.id);
+
+  // claim should still be validated in corpus A
+  const fetched = a.scoped!({ corpus: "A" }).getClaim(claimA.id);
+  expect(fetched).toBeDefined();
+  expect(fetched!.status).toBe("validated");
+});
+
+it("scoped deleteClaim DOES deprecate a claim in the same corpus", () => {
+  const a = createSqliteAdapter();
+  const claimA = makeValidatedClaim({ value: "in-A" });
+  a.scoped!({ corpus: "A" }).insertClaim(claimA);
+
+  // same-corpus delete should work
+  a.scoped!({ corpus: "A" }).deleteClaim(claimA.id);
+
+  // now fetch via base (which has no corpus guard) to confirm status changed
+  const fetched = a.getClaim(claimA.id);
+  expect(fetched).toBeDefined();
+  expect(fetched!.status).toBe("deprecated");
+});
+
+// --- Migration test: corpus_id added to pre-existing db ---
+
+it("migration adds corpus_id to a pre-existing db without error and scoped ops work", () => {
+  // Step 1: create a db file with OLD claims schema that lacks corpus_id
+  const dir = mkdtempSync(join(tmpdir(), "mneme-test-"));
+  const dbPath = join(dir, "legacy.db");
+
+  const legacyDb = new Database(dbPath);
+  legacyDb.exec(`
+    CREATE TABLE claims (
+      id TEXT PRIMARY KEY,
+      profile TEXT,
+      workspace TEXT,
+      subject TEXT,
+      key TEXT,
+      scope_hash TEXT,
+      scope_json TEXT,
+      value_json TEXT,
+      value_hash TEXT,
+      conf_distribution TEXT,
+      conf_params TEXT,
+      conf_raw REAL,
+      conf_effective REAL,
+      valid_from REAL,
+      valid_to REAL,
+      recorded REAL,
+      recorded_seq INTEGER,
+      status TEXT,
+      source TEXT,
+      provenance_json TEXT,
+      evidence_json TEXT,
+      audience_json TEXT,
+      tags_json TEXT,
+      schema TEXT,
+      run_id TEXT
+    );
+  `);
+  legacyDb.close();
+
+  // Step 2: createSqliteAdapter should NOT throw (migration runs idempotently)
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+  expect(() => {
+    adapter = createSqliteAdapter(dbPath);
+  }).not.toThrow();
+
+  // Step 3: scoped insert + scoped query works on the migrated db
+  const claim = makeValidatedClaim({ value: "migrated-claim" });
+  adapter!.scoped!({ corpus: "X" }).insertClaim(claim);
+  const results = adapter!.scoped!({ corpus: "X" }).query({} as any);
+  expect(results).toHaveLength(1);
+  expect(results[0].value).toBe("migrated-claim");
+});
+
+it("migration backfills corpus_id from workspace so pre-existing claims survive the upgrade", () => {
+  // A real legacy store (pre-corpus_id) carries the corpus in `workspace`. Without a backfill,
+  // post-migration rows have corpus_id = NULL and the now-scoped facade filters them out
+  // ("upgrade ate my data"). The migration must stamp corpus_id from workspace.
+  const dir = mkdtempSync(join(tmpdir(), "mneme-test-"));
+  const dbPath = join(dir, "legacy-backfill.db");
+  const legacyDb = new Database(dbPath);
+  legacyDb.exec(`
+    CREATE TABLE claims (
+      id TEXT PRIMARY KEY, profile TEXT, workspace TEXT, subject TEXT, key TEXT,
+      scope_hash TEXT, scope_json TEXT, value_json TEXT, value_hash TEXT,
+      conf_distribution TEXT, conf_params TEXT, conf_raw REAL, conf_effective REAL,
+      valid_from REAL, valid_to REAL, recorded REAL, recorded_seq INTEGER,
+      status TEXT, source TEXT, provenance_json TEXT, evidence_json TEXT,
+      audience_json TEXT, tags_json TEXT, schema TEXT, run_id TEXT
+    );
+  `);
+  legacyDb.prepare("INSERT INTO claims (id, workspace) VALUES (?, ?)").run("legacy-1", "tenant-a");
+  legacyDb.prepare("INSERT INTO claims (id, workspace) VALUES (?, ?)").run("legacy-2", "tenant-b");
+  legacyDb.close();
+
+  createSqliteAdapter(dbPath); // migration: ADD COLUMN corpus_id + backfill from workspace
+
+  const raw = new Database(dbPath, { readonly: true });
+  const rows = raw.prepare("SELECT id, corpus_id FROM claims ORDER BY id").all();
+  raw.close();
+  expect(rows).toEqual([
+    { id: "legacy-1", corpus_id: "tenant-a" },
+    { id: "legacy-2", corpus_id: "tenant-b" },
+  ]);
+});
+
+it("corpus-scoped contradiction lookup uses the composite identity index (guards O(n^2) writes)", () => {
+  // The contradiction-detection query is corpus_id + subject + key + scope_hash. If SQLite falls back
+  // to the corpus_id-only index it scans the whole growing corpus per insert (O(n^2)). The composite
+  // idx_claims_corpus_identity must cover it as an index seek.
+  const dir = mkdtempSync(join(tmpdir(), "mneme-test-"));
+  const dbPath = join(dir, "plan.db");
+  createSqliteAdapter(dbPath).close!(); // build schema + indexes, then release the file
+  const raw = new Database(dbPath, { readonly: true });
+  const plan = raw
+    .prepare(
+      "EXPLAIN QUERY PLAN SELECT * FROM claims WHERE corpus_id=? AND subject=? AND key=? AND scope_hash=? AND status IN ('validated')"
+    )
+    .all("c", "s", "k", "h") as Array<{ detail: string }>;
+  raw.close();
+  expect(plan.map((p) => p.detail).join(" ")).toContain("idx_claims_corpus_identity");
+});
+
+// --- Hash-chain tests (task-events-chain) ---
+
+it("appendEvent sets entryHash on the first event (genesis: prevHash = '')", () => {
+  const a = createSqliteAdapter();
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-1", recorded: 1000, recordedSeq: 1 });
+  const evs = a.readEvents({ corpusId: "c1" });
+  expect(evs).toHaveLength(1);
+  expect(typeof evs[0].entryHash).toBe("string");
+  expect(evs[0].entryHash!.length).toBeGreaterThan(0);
+  expect(evs[0].prevHash).toBe("");
+});
+
+it("chains claim_events per corpus so consecutive events link (e[i+1].prevHash === e[i].entryHash)", () => {
+  const a = createSqliteAdapter();
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-1", recorded: 1000, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-2", recorded: 2000, recordedSeq: 2 });
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-3", recorded: 3000, recordedSeq: 3 });
+  const evs = a.readEvents({ corpusId: "c1" });
+  expect(evs).toHaveLength(3);
+  expect(evs[1].prevHash).toBe(evs[0].entryHash);
+  expect(evs[2].prevHash).toBe(evs[1].entryHash);
+});
+
+it("events in different corpora form independent chains (cross-corpus inserts do not affect each other's prevHash)", () => {
+  const a = createSqliteAdapter();
+  // Interleave events from two corpora
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "c1-e1", recorded: 1000, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "c2", writer: "w", claimId: "c2-e1", recorded: 1100, recordedSeq: 1 });
+  a.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "c1-e2", recorded: 2000, recordedSeq: 2 });
+  a.appendEvent({ op: "commit", corpusId: "c2", writer: "w", claimId: "c2-e2", recorded: 2100, recordedSeq: 2 });
+
+  const c1evs = a.readEvents({ corpusId: "c1" });
+  const c2evs = a.readEvents({ corpusId: "c2" });
+
+  // Each chain must link internally
+  expect(c1evs[1].prevHash).toBe(c1evs[0].entryHash);
+  expect(c2evs[1].prevHash).toBe(c2evs[0].entryHash);
+
+  // The two chains' hashes must be distinct (independent)
+  expect(c1evs[0].entryHash).not.toBe(c2evs[0].entryHash);
+});
+
+it("entryHash is deterministic: sha256(canon(event) + prevHash)", () => {
+  // Two adapters inserting identical events should produce identical hashes
+  const a = createSqliteAdapter();
+  const b = createSqliteAdapter();
+  const ev = { op: "commit" as const, corpusId: "c1", writer: "w", claimId: "cl-1", recorded: 1000, recordedSeq: 1 };
+  a.appendEvent(ev);
+  b.appendEvent(ev);
+  const aHash = a.readEvents({ corpusId: "c1" })[0].entryHash;
+  const bHash = b.readEvents({ corpusId: "c1" })[0].entryHash;
+  expect(aHash).toBe(bHash);
+});
+
+// --- AnchoredRoot tests ---
+
+it("putAnchoredRoot / getAnchoredRoots round-trips a root row scoped by corpusId", () => {
+  const a = createSqliteAdapter();
+  const row: AnchoredRootRow = {
+    corpusId: "c1",
+    epochId: "epoch-1",
+    root: "deadbeef1234",
+    signature: "sig-abc",
+    guarantee: "sha256-merkle",
+    at: 1716000000000,
+  };
+  a.putAnchoredRoot!(row);
+  const results = a.getAnchoredRoots!("c1");
+  expect(results).toHaveLength(1);
+  expect(results[0]).toEqual(row);
+});
+
+it("getAnchoredRoots is scoped: another corpus sees no rows", () => {
+  const a = createSqliteAdapter();
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
+  expect(a.getAnchoredRoots!("c2")).toHaveLength(0);
+});
+
+it("getAnchoredRoots filters by epochId when supplied", () => {
+  const a = createSqliteAdapter();
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e2", root: "r2", signature: null, guarantee: "g", at: 2 });
+  const results = a.getAnchoredRoots!("c1", { epochId: "e1" });
+  expect(results).toHaveLength(1);
+  expect(results[0].epochId).toBe("e1");
+});
+
+it("getAnchoredRoots filters by since when supplied", () => {
+  const a = createSqliteAdapter();
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1000 });
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e2", root: "r2", signature: null, guarantee: "g", at: 2000 });
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e3", root: "r3", signature: null, guarantee: "g", at: 3000 });
+  const results = a.getAnchoredRoots!("c1", { since: 2000 });
+  expect(results).toHaveLength(2);
+  expect(results.map((r) => r.epochId).sort()).toEqual(["e2", "e3"]);
+});
+
+it("two genesis events identical except reason produce distinct entryHash", () => {
+  const a = createSqliteAdapter();
+  const b = createSqliteAdapter();
+  const base = { op: "promote" as const, corpusId: "c1", writer: "w", claimId: "cl-1", toStatus: "validated", recorded: 1000, recordedSeq: 1 };
+  a.appendEvent({ ...base, reason: "reason-A" });
+  b.appendEvent({ ...base, reason: "reason-B" });
+  const aHash = a.readEvents({ corpusId: "c1" })[0].entryHash;
+  const bHash = b.readEvents({ corpusId: "c1" })[0].entryHash;
+  expect(aHash).not.toBe(bHash);
+});
+
+it("putAnchoredRoot is idempotent (INSERT OR REPLACE)", () => {
+  const a = createSqliteAdapter();
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
+  a.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1-updated", signature: "sig", guarantee: "g2", at: 2 });
+  const results = a.getAnchoredRoots!("c1");
+  expect(results).toHaveLength(1);
+  expect(results[0].root).toBe("r1-updated");
+});
+
+// --- Migration test: entry_hash/prev_hash added to pre-existing db ---
+
+it("migration adds entry_hash/prev_hash columns and audit_anchors table to a pre-existing db without error", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mneme-chain-test-"));
+  const dbPath = join(dir, "legacy-events.db");
+
+  // Create a db that already has claim_events WITHOUT the new columns
+  const legacyDb = new Database(dbPath);
+  legacyDb.exec(`
+    CREATE TABLE claims (
+      id TEXT PRIMARY KEY,
+      profile TEXT, workspace TEXT, subject TEXT, key TEXT,
+      scope_hash TEXT, scope_json TEXT, value_json TEXT, value_hash TEXT,
+      conf_distribution TEXT, conf_params TEXT, conf_raw REAL, conf_effective REAL,
+      valid_from REAL, valid_to REAL, recorded REAL, recorded_seq INTEGER,
+      status TEXT, source TEXT, provenance_json TEXT, evidence_json TEXT,
+      audience_json TEXT, tags_json TEXT, schema TEXT, run_id TEXT
+    );
+    CREATE TABLE claim_events (
+      seq_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+      op TEXT, corpus_id TEXT, writer TEXT, claim_id TEXT,
+      deprecated_id TEXT, to_status TEXT, reason TEXT,
+      recorded REAL, recorded_seq INTEGER
+    );
+  `);
+  legacyDb.close();
+
+  // createSqliteAdapter must not throw
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+  expect(() => {
+    adapter = createSqliteAdapter(dbPath);
+  }).not.toThrow();
+
+  // Should be able to append events with hashes
+  adapter!.appendEvent({ op: "commit", corpusId: "c1", writer: "w", claimId: "cl-1", recorded: 1000, recordedSeq: 1 });
+  const evs = adapter!.readEvents({ corpusId: "c1" });
+  expect(evs).toHaveLength(1);
+  expect(typeof evs[0].entryHash).toBe("string");
+
+  // Should be able to use anchor store
+  adapter!.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
+  expect(adapter!.getAnchoredRoots!("c1")).toHaveLength(1);
 });

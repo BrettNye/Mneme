@@ -32,40 +32,42 @@ const equalConfidence: Claim["confidence"] = { distribution: "beta", parameters:
 it("findValidatedConflict returns undefined when no claims exist", () => {
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [] } as any;
-  expect(findValidatedConflict(candidate, adapter)).toBeUndefined();
+  expect(findValidatedConflict(candidate, adapter, "corp")).toBeUndefined();
 });
 
 it("findValidatedConflict returns undefined when existing claim has same valueHash", () => {
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h1", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  expect(findValidatedConflict(candidate, adapter)).toBeUndefined();
+  expect(findValidatedConflict(candidate, adapter, "corp")).toBeUndefined();
 });
 
 it("findValidatedConflict returns conflicting claim when valueHash differs", () => {
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  expect(findValidatedConflict(candidate, adapter)).toBe(existing);
+  expect(findValidatedConflict(candidate, adapter, "corp")).toBe(existing);
 });
 
 it("findValidatedConflict passes status:['validated'] to adapter query", () => {
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   let capturedPlan: any;
   const adapter = { query: (plan: any) => { capturedPlan = plan; return []; } } as any;
-  findValidatedConflict(candidate, adapter);
+  findValidatedConflict(candidate, adapter, "corp");
   expect(capturedPlan.status).toEqual(["validated"]);
 });
 
-it("findValidatedConflict passes subject, key, scopeHash, corpusId to adapter query", () => {
+it("findValidatedConflict queries the passed corpusId, NOT candidate.workspace (isolation)", () => {
+  // workspace is intentionally DIFFERENT from the enforced corpus — the query must scope by
+  // the explicit corpusId so a decoupled workspace can't redirect contradiction detection.
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate", subject: "mySubject" as any, key: "myKey" as any, scopeHash: "myScopeHash", workspace: "myWorkspace" as any });
   let capturedPlan: any;
   const adapter = { query: (plan: any) => { capturedPlan = plan; return []; } } as any;
-  findValidatedConflict(candidate, adapter);
+  findValidatedConflict(candidate, adapter, "enforcedCorpus");
   expect(capturedPlan.subject).toBe("mySubject");
   expect(capturedPlan.key).toBe("myKey");
   expect(capturedPlan.scopeHash).toBe("myScopeHash");
-  expect(capturedPlan.corpusId).toBe("myWorkspace");
+  expect(capturedPlan.corpusId).toBe("enforcedCorpus");
 });
 
 // ── enforce: no conflict ──────────────────────────────────────────────────────
@@ -73,10 +75,10 @@ it("findValidatedConflict passes subject, key, scopeHash, corpusId to adapter qu
 it("enforce returns accept when no conflict exists regardless of policy", () => {
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [] } as any;
-  expect(enforce(candidate, { kind: "always_accept" }, adapter).decision).toBe("accept");
-  expect(enforce(candidate, { kind: "reject_on_contradiction" }, adapter).decision).toBe("accept");
-  expect(enforce(candidate, { kind: "accept_but_mark" }, adapter).decision).toBe("accept");
-  expect(enforce(candidate, { kind: "accept_and_resolve", rule: "deprecate_lower" }, adapter).decision).toBe("accept");
+  expect(enforce(candidate, { kind: "always_accept" }, adapter, "corp").decision).toBe("accept");
+  expect(enforce(candidate, { kind: "reject_on_contradiction" }, adapter, "corp").decision).toBe("accept");
+  expect(enforce(candidate, { kind: "accept_but_mark" }, adapter, "corp").decision).toBe("accept");
+  expect(enforce(candidate, { kind: "accept_and_resolve", rule: "deprecate_lower" }, adapter, "corp").decision).toBe("accept");
 });
 
 // ── enforce: always_accept ────────────────────────────────────────────────────
@@ -85,7 +87,7 @@ it("always_accept accepts even when a validated conflict exists", () => {
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  const outcome = enforce(candidate, { kind: "always_accept" }, adapter);
+  const outcome = enforce(candidate, { kind: "always_accept" }, adapter, "corp");
   expect(outcome.decision).toBe("accept");
 });
 
@@ -95,21 +97,21 @@ it("reject_on_contradiction rejects when existing claim has higher confidence", 
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  expect(enforce(candidate, { kind: "reject_on_contradiction" }, adapter).decision).toBe("reject");
+  expect(enforce(candidate, { kind: "reject_on_contradiction" }, adapter, "corp").decision).toBe("reject");
 });
 
 it("reject_on_contradiction rejects when existing claim has equal confidence", () => {
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: equalConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: equalConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  expect(enforce(candidate, { kind: "reject_on_contradiction" }, adapter).decision).toBe("reject");
+  expect(enforce(candidate, { kind: "reject_on_contradiction" }, adapter, "corp").decision).toBe("reject");
 });
 
 it("reject_on_contradiction accepts when candidate has strictly higher confidence", () => {
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: lowConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: highConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  expect(enforce(candidate, { kind: "reject_on_contradiction" }, adapter).decision).toBe("accept");
+  expect(enforce(candidate, { kind: "reject_on_contradiction" }, adapter, "corp").decision).toBe("accept");
 });
 
 // ── enforce: accept_but_mark ──────────────────────────────────────────────────
@@ -118,7 +120,7 @@ it("accept_but_mark accepts and sets markArtifact=true when conflict exists", ()
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  const outcome = enforce(candidate, { kind: "accept_but_mark" }, adapter);
+  const outcome = enforce(candidate, { kind: "accept_but_mark" }, adapter, "corp");
   expect(outcome.decision).toBe("accept");
   expect(outcome.markArtifact).toBe(true);
 });
@@ -126,7 +128,7 @@ it("accept_but_mark accepts and sets markArtifact=true when conflict exists", ()
 it("accept_but_mark does not set markArtifact when no conflict exists", () => {
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [] } as any;
-  const outcome = enforce(candidate, { kind: "accept_but_mark" }, adapter);
+  const outcome = enforce(candidate, { kind: "accept_but_mark" }, adapter, "corp");
   expect(outcome.decision).toBe("accept");
   expect(outcome.markArtifact).toBeUndefined();
 });
@@ -137,7 +139,7 @@ it("accept_and_resolve(deprecate_lower) deprecates the conflict when candidate h
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: lowConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: highConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  const outcome = enforce(candidate, { kind: "accept_and_resolve", rule: "deprecate_lower" }, adapter);
+  const outcome = enforce(candidate, { kind: "accept_and_resolve", rule: "deprecate_lower" }, adapter, "corp");
   expect(outcome.decision).toBe("accept");
   expect(outcome.deprecateIds).toEqual(["E"]);
 });
@@ -146,7 +148,7 @@ it("accept_and_resolve(deprecate_lower) returns empty deprecateIds when candidat
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  const outcome = enforce(candidate, { kind: "accept_and_resolve", rule: "deprecate_lower" }, adapter);
+  const outcome = enforce(candidate, { kind: "accept_and_resolve", rule: "deprecate_lower" }, adapter, "corp");
   expect(outcome.decision).toBe("accept");
   expect(outcome.deprecateIds).toEqual([]);
 });
@@ -155,7 +157,7 @@ it("accept_and_resolve(keep_newer) accepts without deprecating", () => {
   const existing = makeClaim({ id: "E", valueHash: "h1", confidence: lowConfidence, status: "validated" });
   const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: highConfidence, status: "candidate" });
   const adapter = { query: () => [existing] } as any;
-  const outcome = enforce(candidate, { kind: "accept_and_resolve", rule: "keep_newer" }, adapter);
+  const outcome = enforce(candidate, { kind: "accept_and_resolve", rule: "keep_newer" }, adapter, "corp");
   expect(outcome.decision).toBe("accept");
   // keep_newer doesn't deprecate by pointEstimate; it keeps the newer one
   expect(outcome.deprecateIds).toBeDefined();
