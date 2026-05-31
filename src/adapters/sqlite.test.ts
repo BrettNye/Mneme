@@ -872,6 +872,19 @@ it("putAnchoredRoot is idempotent (INSERT OR REPLACE)", () => {
 
 // --- Migration test: entry_hash/prev_hash added to pre-existing db ---
 
+it("scoped read carries the enforced corpusId; base read leaves it absent (never workspace)", () => {
+  const a = createSqliteAdapter();
+  const scoped = a.scoped!({ corpus: "corpus-x" });
+  // workspace deliberately != corpus to prove corpusId is not workspace-derived
+  const scopedClaim = makeValidatedClaim({ workspace: "ws-other" as WorkspaceId });
+  scoped.insertClaim(scopedClaim);
+  expect(scoped.getClaim(scopedClaim.id)!.corpusId).toBe("corpus-x");
+
+  const baseClaim = makeValidatedClaim({ workspace: "ws-other" as WorkspaceId });
+  a.insertClaim(baseClaim);
+  expect(a.getClaim(baseClaim.id)!.corpusId).toBeUndefined();
+});
+
 it("migration adds entry_hash/prev_hash columns and audit_anchors table to a pre-existing db without error", () => {
   const dir = mkdtempSync(join(tmpdir(), "mneme-chain-test-"));
   const dbPath = join(dir, "legacy-events.db");

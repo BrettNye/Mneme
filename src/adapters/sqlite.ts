@@ -10,6 +10,7 @@ import type {
   AnchoredRootRow,
 } from "./adapter.js";
 import type { Claim, Status, Source } from "../core/claim.js";
+import { asCorpusId } from "../core/ids.js";
 import type { ClaimId, ProfileId, WorkspaceId } from "../core/ids.js";
 import type { Scope } from "../core/scope.js";
 import type { Value } from "../core/value.js";
@@ -139,6 +140,8 @@ function fromRow(row: ClaimRow): Claim {
     audience: row.audience_json ? JSON.parse(row.audience_json) : {},
     tags: JSON.parse(row.tags_json) as string[],
     schema: row.schema,
+    // Null corpus_id (base-adapter rows) => field absent. NO workspace fallback.
+    ...(row.corpus_id != null ? { corpusId: asCorpusId(row.corpus_id) } : {}),
   };
 }
 
