@@ -115,6 +115,14 @@ claim. We *add* assertions so a decoupling bug fails loudly:
   Enforcement still flows through `scopedFor(corpusId)`; the assertion catches a caller
   replaying a claim from corpus A under corpus B.
 
+Both use a plain `throw new Error(...)` (the house convention — custom error classes are
+reserved for structured domain errors like `MissingRule`), phrased to match the
+`unknown corpus "${id}"` style in `catalog.ts`:
+
+```ts
+throw new Error(`corpus mismatch: claim.corpusId "${claim.corpusId}" !== enforced corpusId "${corpusId}"`);
+```
+
 ### 5. Migration / schema (answer to Q4)
 
 **None.** The `corpus_id` column, its backfill, and indexes already shipped in #14.
@@ -143,6 +151,20 @@ those claims to minimize churn.
   whole-`Claim` `toEqual`/`toStrictEqual` against a hand-built claim must be updated to
   add `corpusId` or assert specific fields. (Spot check shows assertions are mostly
   field-level, so breakage is expected to be small.)
+
+## Interconnectivity audit outcomes (2026-05-31)
+
+A targeted pattern/SoC/DRY audit (parallel read-only scan) confirmed:
+- **SoC/DRY clean:** `toRow(c, corpusId)` takes corpus as a separate arg and never reads
+  `c.corpusId`, so the field is read-derived and cannot become a divergent source of
+  truth. No pre-persist consumer reads `claim.corpusId` today, so Promoter-stamping is
+  side-effect-free faithfulness.
+- **Branding (decided):** `corpusId?: CorpusId` is branded, consistent with `Claim`'s
+  sibling id fields and `fromRow`'s existing brand-at-boundary casts. The adapter/transport
+  layer staying unbranded `string` is a pre-existing condition; branding it is a separate
+  refactor, out of scope here.
+- **Idioms adopted:** spread-conditional populate in `fromRow` (matches `conf_effective`
+  in the same function); plain `throw new Error("corpus mismatch: …")` for the assertions.
 
 ## Constraints honored
 
