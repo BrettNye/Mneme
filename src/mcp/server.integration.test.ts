@@ -44,4 +44,23 @@ describe("mneme MCP server (protocol)", () => {
 
     await client.close();
   });
+
+  it("isolates corpora: recall only returns the queried corpus's claims", async () => {
+    // One server / one store, two corpora written and read via real tool calls — the
+    // exact multi-tenant separation a work user relies on (e.g. work vs personal, or
+    // project-A vs project-B). Guards the query-time corpus-isolation contract end-to-end.
+    const client = await connected("A");
+    await client.callTool({ name: "remember", arguments: { subject: "doc", key: "fact", value: "alpha-only-secret", corpus: "A" } });
+    await client.callTool({ name: "remember", arguments: { subject: "doc", key: "fact", value: "bravo-only-secret", corpus: "B" } });
+
+    const recA = (await client.callTool({ name: "recall", arguments: { about: "secret", corpus: "A" } })) as TextContent;
+    expect(recA.content[0].text).toContain("alpha-only-secret");
+    expect(recA.content[0].text).not.toContain("bravo-only-secret");
+
+    const recB = (await client.callTool({ name: "recall", arguments: { about: "secret", corpus: "B" } })) as TextContent;
+    expect(recB.content[0].text).toContain("bravo-only-secret");
+    expect(recB.content[0].text).not.toContain("alpha-only-secret");
+
+    await client.close();
+  });
 });
