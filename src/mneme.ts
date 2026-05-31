@@ -373,7 +373,7 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
 
     replay(claim: Claim): ReplayResult {
       // Derive the corpus from claim.workspace (== corpusId by convention throughout this codebase)
-      const corpusId = claim.workspace as unknown as string;
+      const corpusId = String(claim.workspace);
       return replayStatus(claim, scopedFor(corpusId), catalog);
     },
 
@@ -392,7 +392,7 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
       },
     ): { id: string; status: string } {
       catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
-      const candidate = deriveClaimFrom(adapter, catalog, expr, {
+      const candidate = deriveClaimFrom(scopedFor(corpusId), catalog, expr, {
         subject: opts.subject,
         key: opts.key,
         scope: opts.scope,

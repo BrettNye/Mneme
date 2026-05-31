@@ -1287,4 +1287,42 @@ describe("corpus isolation", () => {
     const result = m.replay(derived);
     expect(result.status).toBe("exact");
   });
+
+  it("derive on corpus A sees only corpus A claims (alpha.count returns 1, not 2)", () => {
+    // Regression: derive() was passing the raw unscoped adapter, causing the
+    // algebra expression to run against ALL corpora. This test ensures isolation.
+    const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusA);
+    m.createCorpus(corpusB);
+
+    // Commit one claim to corpus A and one to corpus B with same subject/key so an
+    // unscoped count would return 2 if the bug is present.
+    m.commit("corpus:A", mkClaim("corpus:A", "shared-subj", "a-value"), { writer: "t" });
+    m.commit("corpus:B", mkClaim("corpus:B", "shared-subj", "b-value"), { writer: "t" });
+
+    // Derive a result over corpus A's claims only; use key=k filter to exclude the
+    // derived claim itself from re-evaluation.
+    const expr = astSigma({ op: "keyEq", value: "k" }, astLeaf("corpus:A"));
+    const res = m.derive("corpus:A", expr, {
+      subject: "derived-count",
+      key: "count.k",
+      scope: {},
+      writer: "test",
+      evaluationClock: 1234,
+    });
+    expect(res.status).toBe("committed");
+
+    // The derived claim's workspace must be corpus A (the scoped adapter sources its claims)
+    const derived = m.readByIds("corpus:A", [res.id as any])[0];
+    expect(derived.workspace).toBe("corpus:A" as any);
+
+    // More directly: count the key="k" claims visible to corpus A — must be 1, not 2
+    const directCount = m.query<AggregateResult>("corpus:A", pipe(
+      leaf("corpus:A"),
+      sigma({ op: "keyEq", value: "k" }),
+      alpha.count()
+    ));
+    const entry = [...directCount.groups.values()][0];
+    expect((entry.value as any).n).toBe(1);
+  });
 });
