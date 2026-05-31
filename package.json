@@ -19,7 +19,15 @@
     "example": "tsx examples/quickstart.ts",
     "example:bio": "tsx examples/bio-quickstart.ts",
     "mneme": "tsx bin/mneme.ts",
-    "mneme-mcp": "tsx bin/mneme-mcp.ts"
+    "mneme-mcp": "tsx bin/mneme-mcp.ts",
+    "pressure": "npm run pressure:corpus-identity && npm run pressure:multitenant && npm run pressure:adversarial && npm run pressure:tamper && npm run pressure:concurrent && npm run pressure:crash",
+    "pressure:corpus-identity": "tsx bench/pressure/corpus-identity.ts",
+    "pressure:multitenant": "tsx bench/pressure/multitenant.ts",
+    "pressure:adversarial": "tsx bench/pressure/adversarial.ts",
+    "pressure:tamper": "tsx bench/pressure/tamper.ts",
+    "pressure:concurrent": "tsx bench/pressure/concurrent.ts",
+    "pressure:crash": "tsx bench/pressure/crash.ts",
+    "pressure:migration": "tsx bench/pressure/migration.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

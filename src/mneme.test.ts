@@ -9,6 +9,7 @@ import type { AggregateResult } from "./algebra/aggregation.js";
 import { leaf as astLeaf, sigma as astSigma } from "./algebra/ast.js";
 import { serializeExpr } from "./algebra/serialize.js";
 import type { Claim } from "./core/claim.js";
+import { asCorpusId } from "./core/ids.js";
 import type { QueryWarning } from "./algebra/value-routing.js";
 import { UnsupportedValuePredicateError } from "./algebra/value-routing.js";
 import type { Value } from "./core/value.js";
@@ -849,6 +850,80 @@ it("replay scopes by the passed corpusId, not claim.workspace (isolation)", () =
   // fix keys off the passed corpusId, so the unknown-corpus existence check must fire.
   const claim = { id: "x", workspace: "workspace:canopy", subject: "s", key: "k" } as unknown as Claim;
   expect(() => m.replay("no-such-corpus", claim)).toThrow();
+});
+
+it("replay throws when the claim's corpusId disagrees with the enforced corpusId", () => {
+  const corpusBDef: CorpusDef = {
+    id: "corpus-b",
+    displayName: "Corpus B",
+    schema: {
+      version: "1",
+      subjects: ["corpus-b"],
+      scopeFields: {},
+      required: [],
+      scalarPseudocount: { manual: 2 },
+    },
+    defaults: {
+      decayPolicy: { kind: "none" },
+      confidenceThreshold: 0.5,
+      contradictionPolicy: { kind: "always_accept" },
+      defaultStatus: ["validated"],
+    },
+    requiredTiers: [{ kind: "core" }],
+    metadata: {},
+    createdAt: 0,
+    updatedAt: 0,
+  };
+
+  const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusBDef);
+
+  // A claim carrying corpusId = "corpus-a" replayed against enforced corpusId "corpus-b" must throw
+  const foreign = {
+    id: "foreign-claim",
+    workspace: "corpus-a" as any,
+    subject: "s",
+    key: "k",
+    corpusId: asCorpusId("corpus-a"),
+    provenance: {},
+  } as unknown as Claim;
+
+  expect(() => m.replay("corpus-b", foreign)).toThrow(/corpus mismatch/);
+});
+
+it("replay does NOT throw when claim.corpusId is undefined", () => {
+  const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  // A claim with no corpusId should not trigger the mismatch guard
+  const claimNoCorpus = {
+    id: "no-corpus-claim",
+    workspace: "workspace:canopy" as any,
+    subject: "s",
+    key: "k",
+    corpusId: undefined,
+    provenance: {},
+  } as unknown as Claim;
+
+  // It won't return "exact" (missing inputs), but must not throw /corpus mismatch/
+  expect(() => m.replay("workspace:canopy", claimNoCorpus)).not.toThrow();
+});
+
+it("replay does NOT throw when claim.corpusId matches the enforced corpusId", () => {
+  const m = createMneme({ adapter: createSqliteAdapter(), availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  const claimMatchingCorpus = {
+    id: "matching-corpus-claim",
+    workspace: "workspace:canopy" as any,
+    subject: "s",
+    key: "k",
+    corpusId: asCorpusId("workspace:canopy"),
+    provenance: {},
+  } as unknown as Claim;
+
+  // Should not throw corpus mismatch — proceeds to replayStatus
+  expect(() => m.replay("workspace:canopy", claimMatchingCorpus)).not.toThrow();
 });
 
 it("derive throws on an unknown corpus", () => {

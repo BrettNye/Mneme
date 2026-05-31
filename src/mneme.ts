@@ -376,6 +376,14 @@ export function createMneme({ adapter, availableTiers }: MnemeOptions): Mneme {
       // workspace is caller-supplied and can be decoupled from corpus_id (e.g. a pinned
       // session workspace), which would replay the claim against the wrong corpus.
       catalog.getCorpus(corpusId); // existence check — throws for unknown corpus
+      // Defense in depth: a claim carrying a different enforced corpus must not be replayed
+      // under this corpus. The explicit corpusId remains the enforced boundary; this only
+      // catches a caller pairing a claim from corpus A with corpus B.
+      if (claim.corpusId !== undefined && claim.corpusId !== corpusId) {
+        throw new Error(
+          `corpus mismatch: claim.corpusId "${claim.corpusId}" !== enforced corpusId "${corpusId}"`
+        );
+      }
       return replayStatus(claim, scopedFor(corpusId), catalog);
     },
 

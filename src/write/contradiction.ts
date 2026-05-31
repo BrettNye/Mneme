@@ -16,6 +16,14 @@ export function findValidatedConflict(
   adapter: StorageAdapter,
   corpusId: string
 ): Claim | undefined {
+  // Defense in depth: the candidate's enforced corpus, when present, MUST match the
+  // corpus we are enforcing under. A mismatch means a decoupling bug upstream — fail
+  // loudly rather than silently scoping the contradiction query to the wrong corpus.
+  if (candidate.corpusId !== undefined && candidate.corpusId !== corpusId) {
+    throw new Error(
+      `corpus mismatch: candidate.corpusId "${candidate.corpusId}" !== enforced corpusId "${corpusId}"`
+    );
+  }
   return adapter
     .query({
       // The ENFORCED corpus, not candidate.workspace: workspace is caller-supplied and may

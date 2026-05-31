@@ -2,7 +2,7 @@ import { Promoter } from "./pipeline.js";
 import type { StorageAdapter, ExecutionPlan, IdempotencyRecord, ClaimEvent } from "../adapters/adapter.js";
 import { createSqliteAdapter } from "../adapters/sqlite.js";
 import type { Claim } from "../core/claim.js";
-import type { ClaimId } from "../core/ids.js";
+import type { ClaimId, WorkspaceId } from "../core/ids.js";
 
 function makeAdapter(preloaded: Claim[] = []): StorageAdapter & { inserted: Claim[]; deleted: ClaimId[]; events: ClaimEvent[] } {
   const store: Claim[] = [...preloaded];
@@ -735,4 +735,88 @@ it("always_accept does NOT write a contradiction artifact", () => {
   p.commit({ ...baseCandidate, value: 2 }, { policy: { kind: "always_accept" }, writer: "w" });
 
   expect(adapter.inserted.filter((c) => c.subject === ("contradiction" as any))).toHaveLength(0);
+});
+
+// ======================================================
+// corpusId stamping (task-3)
+// ======================================================
+
+function makeCandidate(overrides: Partial<typeof baseCandidate> = {}): typeof baseCandidate {
+  return { ...baseCandidate, ...overrides } as any;
+}
+
+it("commit stamps the bound corpusId on the persisted claim", () => {
+  const adapter = makeAdapter();
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any, "corpus-p");
+  p.commit(makeCandidate({ workspace: "ws-other" as WorkspaceId }), { policy: { kind: "always_accept" }, writer: "w" });
+  expect(adapter.inserted[0].corpusId).toBe("corpus-p");
+});
+
+it("commit with empty corpusId does NOT stamp corpusId on the persisted claim", () => {
+  const adapter = makeAdapter();
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any); // default corpusId=""
+  p.commit(makeCandidate(), { policy: { kind: "always_accept" }, writer: "w" });
+  expect(adapter.inserted[0].corpusId).toBeUndefined();
+});
+
+it("supersede stamps the bound corpusId on the new claim", () => {
+  const adapter = makeAdapter();
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any, "corpus-s");
+  const result = p.supersede("dep-id" as ClaimId, makeCandidate(), { writer: "u" });
+  const newClaim = adapter.inserted.find(c => c.id === result.id);
+  expect(newClaim).toBeDefined();
+  expect(newClaim!.corpusId).toBe("corpus-s");
+});
+
+it("supersede with empty corpusId does NOT stamp corpusId on the new claim", () => {
+  const adapter = makeAdapter();
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any); // default corpusId=""
+  const result = p.supersede("dep-id" as ClaimId, makeCandidate(), { writer: "u" });
+  const newClaim = adapter.inserted.find(c => c.id === result.id);
+  expect(newClaim).toBeDefined();
+  expect(newClaim!.corpusId).toBeUndefined();
+});
+
+it("contradictionArtifact carries the accepted claim's corpusId", () => {
+  const existing: Claim = {
+    ...baseCandidate,
+    id: "claim-X" as any,
+    scopeHash: "_",
+    valueHash: "vh-x",
+    value: 1,
+    recorded: 1,
+    recordedSeq: 0,
+    status: "validated",
+  } as unknown as Claim;
+  const adapter = makeAdapter([existing]);
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any, "corpus-artifact");
+
+  const res = p.commit(
+    { ...baseCandidate, value: 99 },
+    { policy: { kind: "accept_but_mark" }, writer: "w" }
+  );
+  expect(res.status).toBe("committed");
+
+  const artifact = adapter.inserted.find(c => c.subject === ("contradiction" as any));
+  expect(artifact).toBeDefined();
+  expect(artifact!.corpusId).toBe("corpus-artifact");
+});
+
+it("promote does NOT change corpusId — inherits from target via spread", () => {
+  const target: Claim = {
+    ...baseCandidate,
+    id: "claim-promote" as any,
+    scopeHash: "_",
+    valueHash: "abcdef1234567890",
+    recorded: 1000,
+    recordedSeq: 0,
+    status: "candidate",
+    corpusId: "inherited-corpus" as any,
+  };
+  const adapter = makeAdapter([target]);
+  const p = new Promoter(adapter, { scopeFields: {}, scalarPseudocount: {} } as any, "some-other-corpus");
+  p.promote("claim-promote" as ClaimId, "validated", { writer: "u" });
+  const promoted = adapter.inserted.find(c => c.id === "claim-promote" && c.status === "validated");
+  expect(promoted).toBeDefined();
+  expect(promoted!.corpusId).toBe("inherited-corpus");
 });
