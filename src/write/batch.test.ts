@@ -114,6 +114,24 @@ it("surfaces duplicate status via idempotency keys per write", () => {
   expect(second.results[0].id).toBe(first.results[0].id);
 });
 
+it("idempotency is scoped by the enforced corpus, not caller-supplied workspace (no cross-corpus suppression)", () => {
+  // Two corpora over one store. A caller pins ONE workspace across both and reuses an
+  // idempotency key. Idempotency must key off the enforced corpus boundary — keying off
+  // candidate.workspace would suppress corpus B's write as corpus A's "duplicate" and hand
+  // back corpus A's claim id (a cross-corpus leak). corpusId is the Promoter's 3rd arg.
+  const adapter = createSqliteAdapter(":memory:");
+  const pinned = { ...baseCandidate, workspace: "shared" as any, key: "repo.idem" };
+  const pA = new Promoter(adapter, SCHEMA, "corpA");
+  const pB = new Promoter(adapter, SCHEMA, "corpB");
+
+  const a = pA.commit({ ...pinned, value: 1 }, { policy: { kind: "always_accept" }, writer: "u", idempotencyKey: "shared-key" });
+  const b = pB.commit({ ...pinned, value: 2 }, { policy: { kind: "always_accept" }, writer: "u", idempotencyKey: "shared-key" });
+
+  expect(a.status).toBe("committed");
+  expect(b.status).toBe("committed"); // NOT "duplicate"
+  expect(b.id).not.toBe(a.id);
+});
+
 it("stopOnError policy halts the batch after the first error", () => {
   const adapter = createSqliteAdapter(":memory:");
   const p = new Promoter(adapter, SCHEMA, "corp");
