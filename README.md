@@ -102,7 +102,7 @@ console.log(c.raw, c.effective); // effective < raw
 A plain committed claim has no recorded query, so `replay` reports `integrity_unknown`:
 
 ```ts
-mneme.replay(claim).status; // "integrity_unknown"
+mneme.replay("infra:prod", claim).status; // "integrity_unknown"
 ```
 
 A claim produced by `mneme.derive` records its query, so it re-executes and is verified —
@@ -123,8 +123,11 @@ const { id } = mneme.derive(
 );
 
 const derived = mneme.readByIds("infra:prod", [id])[0];
-mneme.replay(derived).status; // "exact"
+mneme.replay("infra:prod", derived).status; // "exact"
 ```
+
+`replay` takes the enforced `corpusId` first; it throws `corpus mismatch` if the
+claim carries a different `corpusId` (tenant-isolation guard).
 
 ## Bio layer (cognitive memory)
 
