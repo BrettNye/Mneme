@@ -4,6 +4,7 @@ import { validateScope, type ClaimSchema } from "../../catalog/schema.js";
 import type { AppendOp } from "../types.js";
 import { DREAM_WORKFLOW, DREAM_PRIOR, depthOf, depthTag, type ProposedInsight } from "./dreaming-types.js";
 import { inputHashesOf } from "../../core/provenance.js";
+import { betaConfidence } from "../../core/confidence.js";
 
 export interface AdmitResult {
   ops: AppendOp[];
@@ -51,11 +52,7 @@ export function admitInsights(
       key: ins.key,
       scope: ins.scope ?? {},
       value: ins.value,
-      confidence: {
-        distribution: "beta",
-        parameters: { alpha: prior.alpha, beta: prior.beta },
-        raw: prior.alpha / (prior.alpha + prior.beta),
-      },
+      confidence: betaConfidence(prior.alpha, prior.beta),
       valid: rep.valid,
       status: "candidate",
       source: "llm",

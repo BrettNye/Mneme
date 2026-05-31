@@ -3,6 +3,7 @@ import { newClaimId, type ClaimId } from "../core/ids.js";
 import { scopeHash } from "../core/scope.js";
 import { valueHash } from "../core/value.js";
 import { INFINITY } from "../core/time.js";
+import { scalarConfidence } from "../core/confidence.js";
 import { validateScope, type ClaimSchema } from "../catalog/schema.js";
 import { enforce } from "./contradiction.js";
 import { checkIdempotent, recordIdempotent, idempotencyScope } from "./idempotency.js";
@@ -109,7 +110,7 @@ export class Promoter {
       scopeHash: accepted.scopeHash,
       value,
       valueHash: valueHash(value),
-      confidence: { distribution: "scalar", parameters: { p: 1 }, raw: 1 },
+      confidence: scalarConfidence(1),
       valid: { from: recorded, to: INFINITY },
       recorded,
       recordedSeq: seq,

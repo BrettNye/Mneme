@@ -4,9 +4,8 @@
  * (σ filter → ρ similarity-rank → κ compose) and surfaces confidence, because
  * that composable, principled retrieval is the thing dogfooding is meant to test.
  */
-import { pipe, leaf, sigma, rho, kappa } from "../index.js";
 import type { Predicate, RankedCorpus, ComposedContext } from "../index.js";
-import { pointEstimate } from "../core/confidence.js";
+import { pipe, leaf, sigma, rho, kappa, pointEstimate } from "../surface/index.js";
 import type { Session } from "../surface/index.js";
 
 /** Create the corpus if it doesn't already exist (idempotent). */

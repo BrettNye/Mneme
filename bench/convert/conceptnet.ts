@@ -21,18 +21,32 @@ if (!raw || !out) {
 
 const strip = (uri: string): string => uri.replace(/^\/[a-z]\/(en\/|[a-z]{2}\/)?/, "");
 
-writeFileSync(out, "");
+try {
+  writeFileSync(out, "");
+} catch (err) {
+  console.error(`failed writing ${out}: ${(err as Error).message}`);
+  process.exit(1);
+}
 let buf: string[] = [];
 let n = 0;
 let skipped = 0;
 const flush = (): void => {
   if (buf.length) {
-    appendFileSync(out, buf.join("\n") + "\n");
+    try {
+      appendFileSync(out, buf.join("\n") + "\n");
+    } catch (err) {
+      console.error(`failed writing ${out}: ${(err as Error).message}`);
+      process.exit(1);
+    }
     buf = [];
   }
 };
 
 const rl = createInterface({ input: createReadStream(raw, "utf8"), crlfDelay: Infinity });
+rl.on("error", (err) => {
+  console.error(`read error on ${raw}: ${(err as Error).message}`);
+  process.exit(1);
+});
 for await (const line of rl) {
   if (!line.trim()) continue;
   const parts = line.split("\t");

@@ -33,14 +33,14 @@ function makeCtx(opts: { now?: number } = {}): EvalContext {
 let _counter = 0;
 function makeClaim(overrides: Partial<Claim> = {}): Claim {
   return {
-    id: `id-${++_counter}` as any,
-    profile: "p" as any,
-    workspace: "ws" as any,
-    subject: "alice",
-    key: "email" as any,
+    id: `id-${++_counter}` as Claim["id"],
+    profile: "p" as Claim["profile"],
+    workspace: "ws" as Claim["workspace"],
+    subject: "alice" as Claim["subject"],
+    key: "email" as Claim["key"],
     scope: {},
     scopeHash: "_",
-    value: { type: "string", v: "alice@example.com" } as any,
+    value: { type: "string", v: "alice@example.com" } as Claim["value"],
     valueHash: "vh",
     confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
     valid: { from: 0, to: 9_999_999 },
@@ -48,7 +48,7 @@ function makeClaim(overrides: Partial<Claim> = {}): Claim {
     recordedSeq: 1,
     status: "validated",
     source: "manual",
-    provenance: {} as any,
+    provenance: {} as Claim["provenance"],
     evidence: [],
     audience: {},
     tags: [],
@@ -209,9 +209,9 @@ describe("parseDsl", () => {
 
   it("where key = K routes to keyEq: only key-matching claims survive (not subject-matching)", () => {
     // Claim with matching key but non-matching subject
-    const emailClaim = makeClaim({ subject: "alice", key: "email" as any });
+    const emailClaim = makeClaim({ subject: "alice", key: "email" as Claim["key"] });
     // Claim with matching subject but non-matching key
-    const phoneClaim = makeClaim({ subject: "email", key: "phone" as any });
+    const phoneClaim = makeClaim({ subject: "email", key: "phone" as Claim["key"] });
     const corpus = corpusOf([emailClaim, phoneClaim]);
 
     const result = runClause<Corpus>("where key = email", corpus);
@@ -262,7 +262,7 @@ describe("parseDsl", () => {
   // that jaccard vs exact produce observably different scoring behavior.
 
   it("rank jaccard produces a RankedCorpus with scored entries", () => {
-    const claim = makeClaim({ value: { type: "string", v: "hello world" } as any });
+    const claim = makeClaim({ value: { type: "string", v: "hello world" } as Claim["value"] });
     const corpus = corpusOf([claim]);
 
     const result = runClause<RankedCorpus>(`rank jaccard "hello"`, corpus);
@@ -274,7 +274,7 @@ describe("parseDsl", () => {
   });
 
   it("rank exact produces a RankedCorpus with scored entries", () => {
-    const claim = makeClaim({ value: { type: "string", v: "exact match" } as any });
+    const claim = makeClaim({ value: { type: "string", v: "exact match" } as Claim["value"] });
     const corpus = corpusOf([claim]);
 
     const result = runClause<RankedCorpus>(`rank exact "exact match"`, corpus);
@@ -292,7 +292,7 @@ describe("parseDsl", () => {
 
   it("rank jaccard scores partial overlap higher than zero; rank exact scores partial overlap as zero", () => {
     // "hello world" vs query "hello" → jaccard: partial match > 0; exact: no match = 0
-    const claim = makeClaim({ value: { type: "string", v: "hello world" } as any });
+    const claim = makeClaim({ value: { type: "string", v: "hello world" } as Claim["value"] });
     const corpus = corpusOf([claim]);
 
     const jaccardResult = runClause<RankedCorpus>(`rank jaccard "hello"`, corpus);
@@ -349,7 +349,7 @@ describe("parseDsl", () => {
 
   it("as markdown produces ComposedContext with format='markdown'", () => {
     const rc: RankedCorpus = {
-      scored: [{ claim: makeClaim({ value: { type: "string", v: "hello" } as any }), score: 0.9 }],
+      scored: [{ claim: makeClaim({ value: { type: "string", v: "hello" } as Claim["value"] }), score: 0.9 }],
     };
     const result = runClause<{ format: string; content: string; tokenCount: number }>("as markdown 2000", rc);
     expect(result.format).toBe("markdown");
@@ -358,7 +358,7 @@ describe("parseDsl", () => {
 
   it("as xml produces ComposedContext with format='xml'", () => {
     const rc: RankedCorpus = {
-      scored: [{ claim: makeClaim({ value: { type: "string", v: "hello" } as any }), score: 0.9 }],
+      scored: [{ claim: makeClaim({ value: { type: "string", v: "hello" } as Claim["value"] }), score: 0.9 }],
     };
     const result = runClause<{ format: string; content: string; tokenCount: number }>("as xml 1000", rc);
     expect(result.format).toBe("xml");
@@ -366,7 +366,7 @@ describe("parseDsl", () => {
 
   it("as json produces ComposedContext with format='json'", () => {
     const rc: RankedCorpus = {
-      scored: [{ claim: makeClaim({ value: { type: "string", v: "hello" } as any }), score: 0.9 }],
+      scored: [{ claim: makeClaim({ value: { type: "string", v: "hello" } as Claim["value"] }), score: 0.9 }],
     };
     const result = runClause<{ format: string; content: string; tokenCount: number }>("as json 500", rc);
     expect(result.format).toBe("json");
@@ -374,7 +374,7 @@ describe("parseDsl", () => {
 
   it("as text produces ComposedContext with format='text'", () => {
     const rc: RankedCorpus = {
-      scored: [{ claim: makeClaim({ value: { type: "string", v: "hello" } as any }), score: 0.9 }],
+      scored: [{ claim: makeClaim({ value: { type: "string", v: "hello" } as Claim["value"] }), score: 0.9 }],
     };
     const result = runClause<{ format: string; content: string; tokenCount: number }>("as text 750", rc);
     expect(result.format).toBe("text");

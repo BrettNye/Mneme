@@ -5,6 +5,7 @@ import type { Episode, AppendOp } from "../types.js";
 import { SUMMARY_WORKFLOW, type ProposedSummary } from "./summarize-types.js";
 import { DEFAULT_BIO_POLICY } from "../policy.js";
 import { inputHashesOf } from "../../core/provenance.js";
+import { betaConfidence } from "../../core/confidence.js";
 
 export interface AdmitOpts {
   prior?: { alpha: number; beta: number };
@@ -74,11 +75,7 @@ function buildDigest(
     key: p.key,
     scope: p.scope ?? {},
     value: p.value,
-    confidence: {
-      distribution: "beta",
-      parameters: { alpha: prior.alpha, beta: prior.beta },
-      raw: prior.alpha / (prior.alpha + prior.beta),
-    },
+    confidence: betaConfidence(prior.alpha, prior.beta),
     valid: rep?.valid ?? ({ from: now } as any),
     status: "candidate",
     source: "llm",
