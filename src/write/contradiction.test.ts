@@ -1,5 +1,7 @@
 import { enforce, findValidatedConflict } from "./contradiction.js";
 import type { Claim } from "../core/claim.js";
+import { asCorpusId } from "../core/ids.js";
+import { scalarConfidence } from "../core/confidence.js";
 
 // Helper to make minimal claim-like objects for testing
 function makeClaim(overrides: { id: string; valueHash: string; confidence: Claim["confidence"]; status: Claim["status"] } & Record<string, any>): Claim {
@@ -161,4 +163,20 @@ it("accept_and_resolve(keep_newer) accepts without deprecating", () => {
   expect(outcome.decision).toBe("accept");
   // keep_newer doesn't deprecate by pointEstimate; it keeps the newer one
   expect(outcome.deprecateIds).toBeDefined();
+});
+
+// ── findValidatedConflict: corpus mismatch guard ──────────────────────────────
+
+it("findValidatedConflict throws when candidate.corpusId disagrees with the enforced corpusId", () => {
+  const candidate = makeClaim({ id: "c1", valueHash: "v", confidence: scalarConfidence(1), status: "candidate", corpusId: asCorpusId("corpus-a") });
+  const adapter = { query: () => [] } as any;
+  expect(() => findValidatedConflict(candidate, adapter, "corpus-b")).toThrow(/corpus mismatch/);
+});
+
+it("findValidatedConflict allows an absent or matching candidate corpusId", () => {
+  const adapter = { query: () => [] } as any;
+  const matching = makeClaim({ id: "c2", valueHash: "v", confidence: scalarConfidence(1), status: "candidate", corpusId: asCorpusId("corpus-a") });
+  expect(() => findValidatedConflict(matching, adapter, "corpus-a")).not.toThrow();
+  const absent = makeClaim({ id: "c3", valueHash: "v", confidence: scalarConfidence(1), status: "candidate" }); // no corpusId
+  expect(() => findValidatedConflict(absent, adapter, "corpus-a")).not.toThrow();
 });
