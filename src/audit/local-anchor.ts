@@ -4,15 +4,31 @@ import type { StorageAdapter } from "../adapters/adapter.js";
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
 function reviveSig(json: string): Signature {
-  const parsed = JSON.parse(json) as { alg: string; bytes: string; keyRef?: string };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error(`reviveSig: failed to parse signature JSON — raw: ${json}`);
+  }
+  const p = parsed as { alg?: unknown; bytes?: unknown; keyRef?: unknown };
+  if (typeof p.bytes !== "string" || typeof p.alg !== "string") {
+    throw new Error(
+      `reviveSig: signature missing required string fields — raw: ${json}`
+    );
+  }
   return {
-    alg: parsed.alg,
-    bytes: Uint8Array.from(Buffer.from(parsed.bytes, "hex")),
-    ...(parsed.keyRef !== undefined ? { keyRef: parsed.keyRef } : {}),
+    alg: p.alg,
+    bytes: Uint8Array.from(Buffer.from(p.bytes, "hex")),
+    ...(typeof p.keyRef === "string" ? { keyRef: p.keyRef } : {}),
   };
 }
 
 export function createLocalAnchor(adapter: StorageAdapter, corpusId: string): AuditAnchor {
+  if (!adapter.putAnchoredRoot || !adapter.getAnchoredRoots) {
+    throw new Error(
+      "createLocalAnchor: adapter must implement putAnchoredRoot and getAnchoredRoots"
+    );
+  }
   return {
     id: "local",
     guarantee: "detect",
@@ -39,10 +55,13 @@ export function createLocalAnchor(adapter: StorageAdapter, corpusId: string): Au
     async fetch(range) {
       const adapterRange: { epochId?: string; since?: number } = {};
       if (range.epochId !== undefined) adapterRange.epochId = range.epochId;
-      // `since` in AuditAnchor is typed as string but we try to pass it as a number if possible
+      // `since` in AuditAnchor is typed as string but we pass it as a number to the adapter
       if (range.since !== undefined) {
         const n = Number(range.since);
-        if (!isNaN(n)) adapterRange.since = n;
+        if (isNaN(n)) {
+          throw new Error("since must be a numeric timestamp string");
+        }
+        adapterRange.since = n;
       }
       return adapter.getAnchoredRoots!(corpusId, adapterRange).map((r) => ({
         epochId: r.epochId,
