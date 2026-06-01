@@ -63,4 +63,36 @@ describe("mneme MCP server (protocol)", () => {
 
     await client.close();
   });
+
+  it("ships tool annotations and structured output for AI consumption", async () => {
+    const client = await connected();
+
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    // read-only hints let a client reason about which tools are safe to call freely
+    expect(byName.recall.annotations?.readOnlyHint).toBe(true);
+    expect(byName.list_corpora.annotations?.readOnlyHint).toBe(true);
+    expect(byName.remember.annotations?.readOnlyHint).not.toBe(true); // remember is a write
+    // tools advertise an output schema for typed consumption
+    expect(byName.recall.outputSchema).toBeDefined();
+    expect(byName.remember.outputSchema).toBeDefined();
+
+    // structuredContent is returned alongside the human-readable text blob
+    const rem = (await client.callTool({
+      name: "remember",
+      arguments: { subject: "s", key: "k", value: "v", confidence: 0.8 },
+    })) as { structuredContent?: { id: string; status: string; corpus: string } };
+    expect(rem.structuredContent?.status).toBe("committed");
+    expect(typeof rem.structuredContent?.id).toBe("string");
+
+    const rec = (await client.callTool({
+      name: "recall",
+      arguments: { about: "v", subject: "s" },
+    })) as { structuredContent?: { matches: { subject: string; key: string; confidence: number; score: number }[] } };
+    expect(Array.isArray(rec.structuredContent?.matches)).toBe(true);
+    expect(rec.structuredContent?.matches[0]).toMatchObject({ subject: "s", key: "k" });
+    expect(typeof rec.structuredContent?.matches[0].confidence).toBe("number");
+
+    await client.close();
+  });
 });

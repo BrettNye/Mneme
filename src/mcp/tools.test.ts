@@ -50,6 +50,15 @@ describe("mcp tools", () => {
     expect(listCorpora(s).corpora.map((c) => c.id).sort()).toEqual(["c1", "c2"]);
   });
 
+  it("recall on an unknown corpus returns empty and does NOT create it (read-only)", () => {
+    const s = freshSession();
+    const r = recall(s, { about: "anything", corpus: "never-seen" });
+    expect(r.matches).toEqual([]);
+    expect(r.content).toBe("");
+    // The side-effect-free contract: recall must not have materialized the corpus.
+    expect(listCorpora(s).corpora.map((c) => c.id)).not.toContain("never-seen");
+  });
+
   it("persists claims across a session restart (same db file)", () => {
     // The MCP server reopens the store on every Claude Code session — a work user must
     // get back what they remembered last time. Write, close, reopen the same db, recall.

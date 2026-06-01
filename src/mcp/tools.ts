@@ -63,9 +63,14 @@ export interface RecallResult {
 }
 
 export function recall(session: Session, args: RecallArgs): RecallResult {
-  ensureCorpus(session, args.corpus);
   const maxTokens = args.maxTokens ?? 2000;
   const limit = args.limit ?? 5;
+
+  // Read-only: a recall against an unknown corpus returns empty — it MUST NOT create the
+  // corpus (so the tool can honestly advertise readOnlyHint). remember() still ensures-on-write.
+  if (!session.listCorpora().some((c) => c.id === args.corpus)) {
+    return { corpus: args.corpus, content: "", matches: [] };
+  }
 
   const filters: Predicate[] = [];
   if (args.subject) filters.push({ op: "subjectEq", value: args.subject });
