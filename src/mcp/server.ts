@@ -46,6 +46,14 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         tags: z.array(z.string()).optional(),
         corpus: z.string().optional().describe(`corpus to write to; defaults to '${defaultCorpus}'`),
       },
+      // Append-only write: not read-only, but non-destructive (never overwrites or deletes)
+      // and not idempotent (each call commits a new claim).
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      outputSchema: {
+        id: z.string().describe("the committed claim's id"),
+        status: z.string().describe("committed | rejected | duplicate"),
+        corpus: z.string().describe("the corpus the claim was written to"),
+      },
     },
     async (a) => {
       const r = remember(session, {
@@ -56,7 +64,11 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         tags: a.tags,
         corpus: a.corpus ?? defaultCorpus,
       });
-      return { content: [{ type: "text" as const, text: `${r.status} ${r.id} in corpus '${r.corpus}'` }] };
+      const structuredContent = { id: r.id, status: r.status, corpus: r.corpus };
+      return {
+        content: [{ type: "text" as const, text: `${r.status} ${r.id} in corpus '${r.corpus}'` }],
+        structuredContent,
+      };
     },
   );
 
@@ -74,6 +86,21 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         limit: z.number().int().positive().optional().describe("how many top matches to return (default 5)"),
         corpus: z.string().optional().describe(`corpus to read; defaults to '${defaultCorpus}'`),
       },
+      // Pure read: no state change, repeatable.
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: {
+        corpus: z.string(),
+        content: z.string().describe("the composed, token-bounded context (markdown)"),
+        matches: z.array(
+          z.object({
+            subject: z.string(),
+            key: z.string(),
+            value: z.any().describe("the claim value (any JSON)"),
+            confidence: z.number().describe("point estimate of the claim's confidence, 0..1"),
+            score: z.number().describe("similarity score against the query"),
+          }),
+        ),
+      },
     },
     async (a) => {
       const r = recall(session, {
@@ -88,7 +115,10 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         .map((m) => `- ${m.subject} ${m.key} = ${JSON.stringify(m.value)} (p=${m.confidence.toFixed(2)}, score=${m.score.toFixed(2)})`)
         .join("\n");
       const text = `# Recall: ${a.about}\n\n${r.content || "(no composed context)"}\n\n## Top matches\n${matchLines || "(none)"}`;
-      return { content: [{ type: "text" as const, text }] };
+      return {
+        content: [{ type: "text" as const, text }],
+        structuredContent: { corpus: r.corpus, content: r.content, matches: r.matches },
+      };
     },
   );
 
@@ -98,11 +128,15 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
       title: "List corpora",
       description: "List the claim corpora available in this Mneme store.",
       inputSchema: {},
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: {
+        corpora: z.array(z.object({ id: z.string(), displayName: z.string() })),
+      },
     },
     async () => {
       const r = listCorpora(session);
       const text = r.corpora.map((c) => `${c.id} (${c.displayName})`).join("\n") || "(no corpora yet)";
-      return { content: [{ type: "text" as const, text }] };
+      return { content: [{ type: "text" as const, text }], structuredContent: { corpora: r.corpora } };
     },
   );
 

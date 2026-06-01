@@ -49,4 +49,28 @@ describe("mcp tools", () => {
     ensureCorpus(s, "c2");
     expect(listCorpora(s).corpora.map((c) => c.id).sort()).toEqual(["c1", "c2"]);
   });
+
+  it("recall on an unknown corpus returns empty and does NOT create it (read-only)", () => {
+    const s = freshSession();
+    const r = recall(s, { about: "anything", corpus: "never-seen" });
+    expect(r.matches).toEqual([]);
+    expect(r.content).toBe("");
+    // The side-effect-free contract: recall must not have materialized the corpus.
+    expect(listCorpora(s).corpora.map((c) => c.id)).not.toContain("never-seen");
+  });
+
+  it("persists claims across a session restart (same db file)", () => {
+    // The MCP server reopens the store on every Claude Code session — a work user must
+    // get back what they remembered last time. Write, close, reopen the same db, recall.
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-mcp-persist-")), "store.db");
+    const s1 = openSession({ dbPath: db, writer: "test" });
+    remember(s1, { subject: "project:x", key: "decision", value: "survives-restart", corpus: "dev" });
+    s1.close();
+
+    const s2 = openSession({ dbPath: db, writer: "test" });
+    const r = recall(s2, { about: "decision", corpus: "dev", subject: "project:x" });
+    expect(r.matches.length).toBe(1);
+    expect(r.matches[0].value).toBe("survives-restart");
+    s2.close();
+  });
 });
