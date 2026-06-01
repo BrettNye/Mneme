@@ -8,6 +8,8 @@ verified.
 
 This quickstart uses a **service/host status monitoring** scenario.
 
+> **Using Mneme day-to-day (via the MCP server)?** See **[docs/USING-MNEME.md](docs/USING-MNEME.md)** — the practical guide to the `remember` / `recall` / `list_corpora` tools, setup, and usage patterns.
+
 ## Install
 
 ```bash
