@@ -40,6 +40,10 @@ export interface RunOpts {
   collect?: (rows: ScoreRow[]) => void;
   /** Called with the tmp directory path after it is created — for cleanup assertion in tests. */
   onTmpDir?: (dir: string) => void;
+  /** Called for every error message that would go to console.error — for test introspection. */
+  onError?: (msg: string) => void;
+  /** Called after each successful ingest with the question id and committed count — for test introspection. */
+  onIngest?: (questionId: string, committed: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +57,12 @@ const TARGET_CATEGORIES = new Set(["knowledge-update", "temporal-reasoning", "ab
 // ---------------------------------------------------------------------------
 
 export async function main(argv: string[], opts?: RunOpts): Promise<number> {
+  // Unified error logger: mirrors to console.error and the optional onError hook.
+  const logError = (msg: string): void => {
+    console.error(msg);
+    opts?.onError?.(msg);
+  };
+
   // --- parse args ---
   let parsedArgs: ReturnType<typeof parseArgs>;
   try {
@@ -67,18 +77,18 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
       },
     });
   } catch (err) {
-    console.error(`Argument error: ${(err as Error).message}`);
+    logError(`Argument error: ${(err as Error).message}`);
     return 1;
   }
 
   const { values } = parsedArgs;
 
   if (!values.file) {
-    console.error("--file <dataset.json> is required");
+    logError("--file <dataset.json> is required");
     return 1;
   }
   if (!values.claims) {
-    console.error("--claims <claims.jsonl> is required");
+    logError("--claims <claims.jsonl> is required");
     return 1;
   }
 
@@ -88,7 +98,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
     .filter((n) => !Number.isNaN(n) && n > 0);
 
   if (ks.length === 0) {
-    console.error("--k must be a comma-separated list of positive integers");
+    logError("--k must be a comma-separated list of positive integers");
     return 1;
   }
 
@@ -102,7 +112,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
     const text = readFileSync(values.file, "utf-8");
     datasetRaw = JSON.parse(text) as unknown[];
   } catch (err) {
-    console.error(`Failed to read dataset file "${values.file}": ${(err as Error).message}`);
+    logError(`Failed to read dataset file "${values.file}": ${(err as Error).message}`);
     return 1;
   }
 
@@ -114,7 +124,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
       : datasetRaw.map((r) => LmeQuestion.parse(r));
     questions = parsed.filter((q) => TARGET_CATEGORIES.has(categoryOf(q)));
   } catch (err) {
-    console.error(`Failed to parse dataset: ${(err as Error).message}`);
+    logError(`Failed to parse dataset: ${(err as Error).message}`);
     return 1;
   }
 
@@ -126,12 +136,12 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
       const text = readFileSync(values.claims, "utf-8");
       lines = text.split("\n").filter((l) => l.trim().length > 0);
     } catch (err) {
-      console.error(`Failed to read claims file "${values.claims}": ${(err as Error).message}`);
+      logError(`Failed to read claims file "${values.claims}": ${(err as Error).message}`);
       return 1;
     }
 
     if (lines.length === 0) {
-      console.error("Claims file is empty — expected a header line");
+      logError("Claims file is empty — expected a header line");
       return 1;
     }
 
@@ -140,13 +150,13 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
     try {
       headerObj = JSON.parse(lines[0]);
     } catch {
-      console.error("Claims file: first line is not valid JSON (expected header)");
+      logError("Claims file: first line is not valid JSON (expected header)");
       return 1;
     }
 
     const headerResult = CacheHeader.safeParse(headerObj);
     if (!headerResult.success) {
-      console.error(`Claims file: invalid header — ${headerResult.error.message}`);
+      logError(`Claims file: invalid header — ${headerResult.error.message}`);
       return 1;
     }
 
@@ -159,7 +169,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
       mismatches.push(`promptVersion: expected "${PROMPT_VERSION}", got "${header.promptVersion}"`);
     }
     if (mismatches.length > 0) {
-      console.error(`Claims cache header mismatch: ${mismatches.join("; ")}`);
+      logError(`Claims cache header mismatch: ${mismatches.join("; ")}`);
       return 1;
     }
 
@@ -185,7 +195,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
     if (parseErrors.length > 0) {
       // Report but continue — each parse error is a failed check
       for (const e of parseErrors) {
-        console.error(`Claims parse error: ${e}`);
+        logError(`Claims parse error: ${e}`);
       }
     }
   }
@@ -213,18 +223,19 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
       // Ingest
       let ingestOk = false;
       try {
-        ingestQuestion(session, q, records);
+        const stats = ingestQuestion(session, q, records);
         ingestOk = true;
+        opts?.onIngest?.(qid, stats.committed);
         checks.push({ name: `ingest-conservation:${qid}`, pass: true });
       } catch (err) {
         if (err instanceof IngestConservationError) {
-          console.error(`IngestConservationError for ${qid}: ${err.message}`);
+          logError(`IngestConservationError for ${qid}: ${err.message}`);
           checks.push({ name: `ingest-conservation:${qid}`, pass: false });
         } else if (err instanceof AlreadyIngestedError) {
-          console.error(`AlreadyIngestedError for ${qid}: ${err.message}`);
+          logError(`AlreadyIngestedError for ${qid}: ${err.message}`);
           checks.push({ name: `ingest-conservation:${qid}`, pass: false });
         } else {
-          console.error(`Unexpected ingest error for ${qid}: ${(err as Error).message}`);
+          logError(`Unexpected ingest error for ${qid}: ${(err as Error).message}`);
           checks.push({ name: `ingest-conservation:${qid}`, pass: false });
         }
         // keep-going semantics: continue to next question
@@ -243,7 +254,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
         scoreRows.push(scoreA);
         checks.push({ name: `score-A:${qid}`, pass: true });
       } catch (err) {
-        console.error(`Error in arm A for ${qid}: ${(err as Error).message}`);
+        logError(`Error in arm A for ${qid}: ${(err as Error).message}`);
         checks.push({ name: `score-A:${qid}`, pass: false });
       }
 
@@ -254,7 +265,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
         scoreRows.push(scoreB);
         checks.push({ name: `score-B:${qid}`, pass: true });
       } catch (err) {
-        console.error(`Error in arm B for ${qid}: ${(err as Error).message}`);
+        logError(`Error in arm B for ${qid}: ${(err as Error).message}`);
         checks.push({ name: `score-B:${qid}`, pass: false });
       }
     }
@@ -284,7 +295,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
     console.log(`checks ${passed}/${total}`);
 
     if (failures.length > 0) {
-      console.error(`  failed checks: ${failures.map((f) => f.name).join(", ")}`);
+      logError(`  failed checks: ${failures.map((f) => f.name).join(", ")}`);
     }
 
     return failures.length > 0 ? 1 : 0;

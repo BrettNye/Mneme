@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,7 +68,7 @@ it("KU fixture: arm A updateCorrect=1.0, arm B updateCorrect=0.0", async () => {
   expect(kuArmB!.value).toBe(0.0);
 });
 
-it("corrupted claims cache header: nonzero exit before ingest", async () => {
+it("corrupted claims cache header: nonzero exit and error names the mismatch", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mneme-lme-test-"));
   try {
     const badClaims = join(dir, "bad-claims.jsonl");
@@ -80,13 +80,23 @@ it("corrupted claims cache header: nonzero exit before ingest", async () => {
       ].join("\n") + "\n"
     );
 
-    const code = await main([
-      "--file", fixturePath("dataset.json"),
-      "--claims", badClaims,
-      "--k", "1",
-    ]);
+    const errors: string[] = [];
+    const code = await main(
+      [
+        "--file", fixturePath("dataset.json"),
+        "--claims", badClaims,
+        "--k", "1",
+      ],
+      { onError: (msg) => errors.push(msg) }
+    );
 
     expect(code).not.toBe(0);
+    const combined = errors.join("\n");
+    // Error message must identify it as a header mismatch
+    expect(combined.toLowerCase()).toContain("header");
+    expect(combined.toLowerCase()).toContain("mismatch");
+    // Error message must name the offending model value
+    expect(combined).toContain("wrong-model");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -131,25 +141,45 @@ it("tmp dir is removed after run", async () => {
   expect(existsSync(tmpDir!)).toBe(false);
 });
 
-it("--oracle restricts ingest to evidence-session claims", async () => {
-  const rows: ScoreRow[] = [];
+it("--oracle restricts ingest to evidence-session claims: fewer committed than full run", async () => {
+  // Run WITHOUT oracle — collects all haystack claims per question
+  const ingestCountsFull: number[] = [];
+  const codeFull = await main(
+    [
+      "--file", fixturePath("dataset.json"),
+      "--claims", fixturePath("claims.jsonl"),
+      "--k", "1",
+    ],
+    {
+      onIngest: (_qid, committed) => ingestCountsFull.push(committed),
+    }
+  );
+  expect(codeFull).toBe(0);
 
-  const code = await main(
+  // Run WITH oracle — restricts to evidence-session claims only
+  const ingestCountsOracle: number[] = [];
+  const codeOracle = await main(
     [
       "--file", fixturePath("dataset.json"),
       "--claims", fixturePath("claims.jsonl"),
       "--k", "1",
       "--oracle",
     ],
-    { collect: (r) => rows.push(...r) }
+    {
+      onIngest: (_qid, committed) => ingestCountsOracle.push(committed),
+    }
   );
+  expect(codeOracle).toBe(0);
 
-  // With oracle, the run still succeeds (oracle picks fewer records — not duplicates)
-  expect(code).toBe(0);
+  // Both runs must have ingested the same number of questions
+  expect(ingestCountsOracle.length).toBe(ingestCountsFull.length);
 
-  // Arm A / B for KU still produces rows
-  const kuRows = rows.filter((r) => r.category === "knowledge-update");
-  expect(kuRows.length).toBeGreaterThan(0);
+  const totalFull = ingestCountsFull.reduce((a, b) => a + b, 0);
+  const totalOracle = ingestCountsOracle.reduce((a, b) => a + b, 0);
+
+  // Oracle must commit strictly fewer total records.
+  // fx-tr-1: haystack has fx-s3 (Denver) + fx-s4 (Austin); oracle only fx-s3.
+  expect(totalOracle).toBeLessThan(totalFull);
 });
 
 it("missing dataset file: nonzero exit with clear message", async () => {
