@@ -6,6 +6,7 @@ created: 2026-06-05
 ```mermaid
 flowchart TD
     task-types["task-types: extraction + scoring contracts<br/>files: bench/longmemeval/types.ts +1 more"]
+    task-test-support["task-test-support: shared test helpers<br/>files: bench/longmemeval/test-support.ts +1 more"]
     task-convert["task-convert: LLM extraction converter<br/>files: bench/convert/longmemeval.ts +1 more"]
     task-fixtures["task-fixtures: committed 3-question fixtures<br/>files: bench/longmemeval/fixtures/dataset.json +2 more"]
     task-score["task-score: deterministic metrics<br/>files: bench/longmemeval/score.ts +1 more"]
@@ -14,11 +15,15 @@ flowchart TD
     task-runner["task-runner: CLI runner + e2e fixture test<br/>files: bench/longmemeval/run.ts +1 more"]
     task-wiring["task-wiring: npm scripts + RESULTS.md docs<br/>files: package.json +1 more"]
 
+    task-types --> task-test-support
     task-types --> task-convert
     task-types --> task-fixtures
     task-types --> task-score
     task-types --> task-answer
     task-types --> task-ingest
+    task-test-support --> task-score
+    task-test-support --> task-answer
+    task-test-support --> task-ingest
     task-fixtures --> task-ingest
     task-ingest --> task-runner
     task-answer --> task-runner
@@ -225,6 +230,84 @@ it("every fixture question parses under the normalized schema", () => {
 
 Test file: `bench/longmemeval/fixtures/fixtures.test.ts`.
 
+## Task: shared test helpers
+
+```yaml
+id: task-test-support
+depends_on: [task-types]
+files:
+  - bench/longmemeval/test-support.ts
+  - bench/longmemeval/test-support.test.ts
+status: pending
+```
+
+Single owner for the helpers the score/answer/ingest/runner test suites all need —
+without this task each suite would invent its own (the S7 fragmentation risk). Mirrors
+the `src/bio/test-support.ts` precedent. Pure construction helpers plus the tmp-DB
+session; no assertions, no I/O beyond the tmp dir.
+
+## Implementation
+
+```typescript
+// bench/longmemeval/test-support.ts
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openSession, type Session } from "../../src/surface/index.js";
+import type { Claim } from "../../src/core/claim.js";
+import type { LmeQuestionT, AnswerResult, ClaimRecordT } from "./types.js";
+
+/** Tmp-DB session + best-effort cleanup. Callers MUST call close() in afterEach. */
+export function openTmpSession(): { session: Session; close: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "mneme-lme-"));
+  const session = openSession({ dbPath: join(dir, "lme.db"), writer: "lme-test", source: "imported" });
+  return { session, close: () => { session.close(); try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } } };
+}
+
+/** Question builders — one per category, evidence session ids overridable. */
+export function kuQuestion(opts?: { evidence?: string[]; questionDate?: string }): LmeQuestionT { /* … */ }
+export function temporalQuestion(opts?: { evidence?: string[] }): LmeQuestionT { /* … */ }
+export function abstentionQuestion(): LmeQuestionT { /* … */ }
+
+/** Claim/record builders with provenance tags. */
+export function claimTagged(sessionTag: string, turnTag: string, over?: Partial<Claim>): Claim { /* … */ }
+export function claimRecord(over?: Partial<ClaimRecordT>): ClaimRecordT { /* … */ }
+export function armResult(arm: "A" | "B", claims: Claim[], abstained = false): AnswerResult { /* … */ }
+
+/** Corpus seeded with a superseding pair ("Initech" then "Globex", same subject/key). */
+export function seedSupersedingPair(): { session: Session; close: () => void; corpusId: string; q: LmeQuestionT } { /* … */ }
+
+/** Path into the committed fixtures dir (used by run.test.ts). */
+export function fixturePath(name: string): string { /* … */ }
+```
+
+```typescript
+// bench/longmemeval/test-support.test.ts
+import { describe, it, expect } from "vitest";
+import { openTmpSession, claimRecord } from "./test-support.js";
+import { ClaimRecord } from "./types.js";
+
+it("claimRecord builds a record that passes the ClaimRecord schema", () => {
+  expect(ClaimRecord.safeParse(claimRecord()).success).toBe(true);
+});
+
+it("openTmpSession yields a usable session and close() releases the db dir", () => {
+  const { session, close } = openTmpSession();
+  session.createCorpus({ id: "t" });
+  expect(session.listCorpora().map((c) => c.id)).toContain("t");
+  close(); // must not throw on Windows (EBUSY regression — see bench/RESULTS.md finding 2)
+});
+```
+
+## Acceptance criteria
+
+- `claimRecord()` and `claimTagged()` outputs pass `ClaimRecord.parse` / carry `session:`+`turn:` tags respectively, with overrides applied.
+- `openTmpSession().close()` closes the adapter and removes the tmp dir without throwing on Windows.
+- `seedSupersedingPair()` commits exactly two claims sharing subject+key with different values and ascending `valid.from`.
+- Builders are pure (same inputs → deep-equal outputs) and make no network calls.
+
+Test file: `bench/longmemeval/test-support.test.ts`.
+
 ## Task: LLM extraction converter
 
 ```yaml
@@ -240,8 +323,11 @@ Sessions → claims JSONL, LLM at the edge only. Core is pure and takes an injec
 `llm: (prompt: string) => Promise<string>` (why this abstraction: the spec requires
 network-free unit tests; the thin CLI shell owns `fetch` + `ANTHROPIC_API_KEY`).
 Cache is per-session and resumable; header line pins model + prompt version and a
-mismatch on resume is a hard refusal with instructions. Malformed LLM output is
-retried with backoff, then counted `skipped` — never silently dropped.
+mismatch on resume is a hard refusal with instructions. Crash-mid-append is handled:
+on resume, a partial/corrupted trailing JSONL line is detected and truncated, and its
+session is treated as not-yet-extracted (re-prompted) — resume never reads through a
+torn write. Malformed LLM output is retried with backoff, then counted `skipped` —
+never silently dropped.
 
 ## Implementation
 
@@ -273,8 +359,10 @@ export function buildPrompt(q: LmeQuestionT, sessionId: string): string { /* …
 
 // CLI shell (only place fetch/fs/env appear):
 //   npx tsx bench/convert/longmemeval.ts --in <dataset.json> --out <claims.jsonl>
-// Writes CacheHeader as line 1 on fresh runs; on resume, refuses if the existing
-// header's model/promptVersion differ from the pinned constants.
+// Args via node:util parseArgs (bench/dataset.ts convention, not the bare-argv style
+// of the simpler converters). Writes CacheHeader as line 1 on fresh runs; on resume,
+// refuses if the existing header's model/promptVersion differ from the pinned
+// constants, and truncates a partial trailing line before indexing extracted sessions.
 ```
 
 ```typescript
@@ -300,6 +388,7 @@ it("counts a session as skipped after retries exhaust on malformed output", asyn
 - Every emitted record passes `ClaimRecord.parse` (including `session:`/`turn:` provenance tags and `validFrom` derived from the session date).
 - Malformed LLM output retries up to `maxRetries` then increments `skipped`; valid-after-retry output is emitted, not skipped.
 - Header pinning: resuming against a cache whose header model or promptVersion differs from the pinned constants throws with a message naming both values; it never appends mixed-provenance rows.
+- Torn-write recovery: resuming against a cache whose final line is not valid JSON truncates that line and re-extracts its session — asserted with a deliberately truncated cache fixture in the test.
 
 Test file: `bench/convert/longmemeval.test.ts`.
 
@@ -307,7 +396,7 @@ Test file: `bench/convert/longmemeval.test.ts`.
 
 ```yaml
 id: task-score
-depends_on: [task-types]
+depends_on: [task-types, task-test-support]
 files:
   - bench/longmemeval/score.ts
   - bench/longmemeval/score.test.ts
@@ -358,11 +447,11 @@ it("updateCorrect is false when the top claim traces to the superseded session",
 
 ## Acceptance criteria
 
-- `evidenceRecallAt[k]` = |evidence sessions represented in top-k| / |evidence sessions|; 1.0 when all covered at k, 0 when none; asserted at k = 1 and 3 on hand-built fixtures.
+- `evidenceRecallAt[k]` = |evidence sessions represented in top-k| / |evidence sessions|; 1.0 when all covered at k, 0 when none; asserted at k = 1 and 3 on hand-built fixtures. (k = 10 is the real-run default via the runner's `--k` arg; it is computed but not asserted against 3-question fixtures.)
 - `updateCorrect` true iff the top non-deprecated claim carries the session tag of the *latest-dated* evidence session; false when it traces to a superseded one; `undefined` for non-KU categories.
 - `temporalCorrect` false when any returned claim's session date postdates `question_date`; true when right-period evidence is hit and wrong-period excluded; `undefined` for non-temporal categories.
 - `abstentionCorrect` true iff `abstained === true` on abstention questions; `undefined` otherwise.
-- `aggregate` produces one row per (category × arm × metric) with `value` = mean and `n` = question count; verified against a hand-computed 4-question set.
+- `aggregate` produces one row per (category × arm × metric) with `value` = mean and `n` = question count; the test builds a 4-question set (2 KU, 1 temporal, 1 abstention) via test-support builders and asserts the rows against pre-computed expected means hardcoded in the test.
 
 Test file: `bench/longmemeval/score.test.ts`.
 
@@ -370,7 +459,7 @@ Test file: `bench/longmemeval/score.test.ts`.
 
 ```yaml
 id: task-ingest
-depends_on: [task-types, task-fixtures]
+depends_on: [task-types, task-fixtures, task-test-support]
 files:
   - bench/longmemeval/ingest.ts
   - bench/longmemeval/ingest.test.ts
@@ -386,7 +475,7 @@ sessions). Conservation enforced: `committed === records`.
 
 ```typescript
 // bench/longmemeval/ingest.ts
-import type { Session, ImportStats } from "../../src/surface/index.js";
+import type { Session, ImportStats, WriteRecord } from "../../src/surface/index.js";
 import type { ClaimRecordT, LmeQuestionT } from "./types.js";
 
 export function corpusIdFor(questionId: string): string { return `lme-${questionId}`; }
@@ -394,10 +483,17 @@ export function corpusIdFor(questionId: string): string { return `lme-${question
 /** Filter the claims cache to one question's haystack (or evidence-only when oracle). */
 export function claimsFor(q: LmeQuestionT, all: ClaimRecordT[], opts?: { oracle?: boolean }): ClaimRecordT[] { /* … */ }
 
-/** Create corpus + writeMany. Throws IngestConservationError if committed !== records. */
+/**
+ * ClaimRecordT → WriteRecord, exported in RowMapper shape so a future direct-file
+ * path can reuse src/surface/import.ts importFile without re-mapping. Note: ingest
+ * itself does NOT re-implement file streaming/batching — writeMany already batches.
+ */
+export function mapClaimRecord(rec: ClaimRecordT): WriteRecord { /* value, valid: { from: validFrom, to: Infinity }, tags, confidence */ }
+
+/** Create corpus + writeMany(records.map(mapClaimRecord)). Throws IngestConservationError if committed !== records. */
 export function ingestQuestion(
   session: Session, q: LmeQuestionT, records: ClaimRecordT[],
-): ImportStats { /* maps ClaimRecordT → WriteRecord: value, valid: { from: validFrom, to: Infinity }, tags, confidence */ }
+): ImportStats { /* … */ }
 ```
 
 ```typescript
@@ -429,16 +525,17 @@ Test file: `bench/longmemeval/ingest.test.ts`.
 
 ```yaml
 id: task-answer
-depends_on: [task-types]
+depends_on: [task-types, task-test-support]
 files:
   - bench/longmemeval/answer.ts
   - bench/longmemeval/answer.test.ts
 status: pending
 ```
 
-The experiment's two read paths. Arm B is the vanilla-memory baseline through the
-public DSL; arm A is a hand-built `Stage[]` through `session.mneme.query` adding
-`τ_known` + read-time contradiction resolution. Includes the bench-local
+The experiment's two read paths, both hand-built `Stage[]` through
+`session.mneme.query`. Arm B is the vanilla-memory baseline (recall only — the stage
+form of the DSL's `rank jaccard`, avoiding its quote-interpolation hazard); arm A adds
+`τ_known` + read-time contradiction resolution on top of the same recall. Includes the bench-local
 `resolveDeprecateOlder` (latest-wins by `valid.from`, ties by lexicographic id —
 same `ContradictionPair[] → Corpus` shape as its `src/algebra/resolution.ts`
 siblings; candidate to upstream as its own spec'd slice).
@@ -453,16 +550,39 @@ import { filterCorpus, type Corpus, type RankedCorpus } from "../../src/algebra/
 import type { Session } from "../../src/surface/index.js";
 import type { LmeQuestionT, AnswerResult } from "./types.js";
 
+/**
+ * conflictThreshold is the confidence floor for ⊥ DETECTION (claims at or below it are
+ * ignored by pairsOf/clustersOf — see src/algebra/contradiction.ts:24). It is NOT an
+ * abstention threshold: abstention is structural — no claim survives the pipeline.
+ */
 export interface AnswerOpts { k: number; conflictThreshold?: number }
 
 /** Bench-local latest-wins resolver (candidate to upstream into src/algebra/resolution.ts). */
 export const resolveDeprecateOlder =
   (pairs: ContradictionPair[]) => (corpus: Corpus): Corpus => { /* deprecate the earlier valid.from; tie → higher id */ };
 
-export function questionInstant(q: LmeQuestionT): number { /* parse question_date → epoch ms */ }
+/**
+ * Parse question_date → epoch ms. V8's Date.parse happens to accept the dataset's
+ * "(Thu)"-style parenthetical (treated as a comment) but that is NON-STANDARD —
+ * guard with Number.isNaN and throw naming the raw string (bench/convert/icews.ts:53
+ * pattern), with an explicit test pinning the fixture format.
+ */
+export function questionInstant(q: LmeQuestionT): number { /* … */ }
 
-/** Arm B: plain DSL recall. Never abstains; superseded values surface alongside current ones. */
-export function answerArmB(session: Session, corpusId: string, q: LmeQuestionT, opts: AnswerOpts): AnswerResult { /* session.q(corpusId, `rank jaccard "…"`) → top-k */ }
+/** top-k is bench-local and trivial: ranked.scored.slice(0, k).map(s => s.claim). */
+function takeTopK(ranked: RankedCorpus, k: number): Claim[] { /* … */ }
+
+/**
+ * Arm B: plain recall, no resolution. Built as a minimal Stage[] (leaf → rho.jaccard)
+ * via mneme.query rather than DSL string interpolation — a question containing a
+ * trailing `"` breaks the DSL's `rank jaccard "…"` regex, and the stage form is
+ * semantically identical to the DSL path. Never abstains; superseded values surface
+ * alongside current ones.
+ */
+export function answerArmB(session: Session, corpusId: string, q: LmeQuestionT, opts: AnswerOpts): AnswerResult {
+  const ranked = session.mneme.query<RankedCorpus>(corpusId, pipe(leaf(corpusId), rho.jaccard(q.question)));
+  return { arm: "B", claims: takeTopK(ranked, opts.k), abstained: false };
+}
 
 /** Arm A: τ_known(question date) → ⊥ detect → latest-wins resolve → drop deprecated → rank → top-k. */
 export function answerArmA(session: Session, corpusId: string, q: LmeQuestionT, opts: AnswerOpts): AnswerResult {
@@ -501,6 +621,8 @@ it("arm A resolves a superseding pair to the later value; arm B returns both", (
 - Abstention: arm A returns `abstained: true` when no claim survives the pipeline; arm B always returns `abstained: false`.
 - `resolveDeprecateOlder` deprecates the earlier-`valid.from` claim of each pair and breaks `valid.from` ties by deprecating the lexicographically-higher id (mirroring `resolveDeprecateLower`'s tie rule).
 - Both arms return claims with provenance tags intact (scoring depends on it).
+- `questionInstant` parses the dataset's `"2023/06/01 (Thu) 10:00"` format to epoch ms (explicit test pinning the format) and throws — naming the raw string — on an unparseable date rather than propagating `NaN`.
+- A question containing a double quote (embedded or trailing) flows through both arms without error.
 
 Test file: `bench/longmemeval/answer.test.ts`.
 
@@ -537,11 +659,15 @@ import { scoreQuestion, aggregate } from "./score.js";
 
 export async function main(argv: string[]): Promise<number> {
   // parse args; --raw applies normalizeQuestion (HF download), default expects normalized (fixtures)
-  // validate claims cache header; tmp db; loop questions in the 3 target categories:
-  //   ingest → answerArmA/B → scoreQuestion (both arms)
-  // aggregate → markdownTable(category × arm × metric); checks:
-  //   [cache header valid, per-question ingest conservation, every question scored × 2 arms]
-  // print `checks N/M`; return 0 only if N === M
+  // validate claims cache header BEFORE creating any state
+  // const dir = mkdtempSync(join(tmpdir(), "mneme-lme-")); openSession
+  // try {
+  //   loop questions in the 3 target categories:
+  //     ingest → answerArmA/B → scoreQuestion (both arms)
+  //   aggregate → markdownTable(category × arm × metric); checks:
+  //     [cache header valid, per-question ingest conservation, every question scored × 2 arms]
+  //   print `checks N/M`; return 0 only if N === M
+  // } finally { session.close(); rmSync(dir, { recursive: true, force: true }) /* best-effort, dataset.ts pattern */ }
 }
 ```
 
@@ -567,6 +693,7 @@ it("fixture e2e: exits 0 and scores 3 categories × 2 arms", async () => {
 - A corrupted claims cache (bad header) yields a nonzero exit and an error naming the header mismatch, before any ingest.
 - `--oracle` restricts ingest to evidence-session claims (visible as smaller per-question committed counts on the fixtures).
 - `checks N/M` line printed; any failed check ⇒ nonzero exit (verified by feeding a claims file with a missing row to break conservation).
+- The temp DB directory is removed after the run (best-effort `finally`, including on failure paths) — the fixture e2e asserts the dir is gone afterward.
 
 Test file: `bench/longmemeval/run.test.ts`.
 

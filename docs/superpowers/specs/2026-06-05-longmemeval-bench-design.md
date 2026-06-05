@@ -93,8 +93,10 @@ isolates what the algebra adds.
 - **Arm A (algebra):** hand-built `Stage[]` via `session.mneme.query(...)` (the
   documented DSL escape hatch):
   `leaf → tauKnown(question date) → rho.jaccard(question) → ⊥ detection + resolve
-  (deprecate-lower / latest-wins) → top-k`. Superseded claims are resolved away;
-  unresolvable `⊥` with no surviving claim above threshold → **abstain**.
+  (deprecate-lower / latest-wins) → top-k`. Superseded claims are resolved away; a
+  question whose pipeline yields **no surviving claims** → **abstain**. (Abstention is
+  structural; the confidence floor passed to `⊥` detection is a detection parameter,
+  not an abstention threshold.)
 
 Exact stage composition for the `⊥`/resolve step (which `resolve*` operator, where it
 sits relative to ranking) is an implementation-plan detail; the public exports
