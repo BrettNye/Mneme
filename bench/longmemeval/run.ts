@@ -313,10 +313,9 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
 // CLI shell
 // ---------------------------------------------------------------------------
 
-if (
-  typeof import.meta !== "undefined" &&
-  import.meta.url === new URL(process.argv[1], "file://").href
-) {
+import { pathToFileURL } from "node:url";
+const isCliEntry = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isCliEntry) {
   main(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((err) => {
