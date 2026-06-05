@@ -5,10 +5,10 @@ created: 2026-06-05
 
 ```mermaid
 flowchart TD
-    task-resolution["task-resolution: pairwise resolution engine with honest ties<br/>files: src/algebra/resolution.ts +1 more"]
-    task-spec-amendment["task-spec-amendment: canonical spec amendment for §4.8<br/>files: mneme-spec-v0.2-consolidated.md"]
-    task-registry["task-registry: registry registration for resolveDeprecateOlder<br/>files: src/algebra/registries.ts +2 more"]
-    task-bench["task-bench: bench adoption of the upstreamed resolver<br/>files: bench/longmemeval/answer.ts +2 more"]
+    task-resolution["task-resolution: pairwise resolution engine with honest ties<br/>files: src/algebra/resolution.ts +1 more"]:::done
+    task-spec-amendment["task-spec-amendment: canonical spec amendment for §4.8<br/>files: mneme-spec-v0.2-consolidated.md"]:::done
+    task-registry["task-registry: registry registration for resolveDeprecateOlder<br/>files: src/algebra/registries.ts +2 more"]:::done
+    task-bench["task-bench: bench adoption of the upstreamed resolver<br/>files: bench/longmemeval/answer.ts +2 more"]:::done
 
     task-resolution --> task-registry
     task-resolution --> task-bench
@@ -51,7 +51,7 @@ depends_on: []
 files:
   - src/algebra/resolution.ts
   - src/algebra/resolution.test.ts
-status: pending
+status: done
 ```
 
 The slice's core, one cohesive module reshape per spec §1–§3: shared
@@ -173,7 +173,7 @@ id: task-spec-amendment
 depends_on: []
 files:
   - mneme-spec-v0.2-consolidated.md
-status: pending
+status: done
 is_wiring_task: true
 ```
 
@@ -211,7 +211,7 @@ files:
   - src/algebra/registries.ts
   - src/algebra/registries.test.ts
   - src/algebra/compile.test.ts
-status: pending
+status: done
 ```
 
 Wire the new resolver into the name-keyed registry that replay/serialization consume,
@@ -275,7 +275,7 @@ files:
   - bench/longmemeval/answer.ts
   - bench/longmemeval/answer.test.ts
   - bench/longmemeval/manual/adversarial-probe.ts
-status: pending
+status: done
 ```
 
 Pay down the documented bench-local debt: delete the local copy, import the upstreamed
