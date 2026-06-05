@@ -56,7 +56,7 @@ const PROBES: Probe[] = [
   },
   {
     name: "5. timestamp TIE with conflicting values",
-    expectation: "deterministic but ARBITRARY winner (lexicographic id tie-break)",
+    expectation: "tie ⇒ both values returned + flagged for review (no arbitrary winner)",
     question: "What is the user's favorite coffee drink?",
     claims: [
       { subject: "user", key: "favorite_coffee", value: "flat white", daysAfterT0: 10 },

@@ -1,6 +1,7 @@
 import { leaf, pipe, rho, tau } from "../../src/index.js";
-import { pairsOf, type ContradictionPair } from "../../src/algebra/contradiction.js";
+import { pairsOf } from "../../src/algebra/contradiction.js";
 import { filterCorpus, type Corpus, type RankedCorpus } from "../../src/algebra/types.js";
+import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../../src/algebra/resolution.js";
 import type { Session } from "../../src/surface/index.js";
 import type { Claim } from "../../src/core/claim.js";
 import type { LmeQuestionT, AnswerResult } from "./types.js";
@@ -12,41 +13,6 @@ import { endOfUtcDay, parseLmeInstant } from "./types.js";
  * abstention threshold: abstention is structural — no claim survives the pipeline.
  */
 export interface AnswerOpts { k: number; conflictThreshold?: number }
-
-/**
- * Bench-local latest-wins resolver (candidate to upstream into src/algebra/resolution.ts).
- *
- * For each pair, deprecates the claim with the earlier valid.from.
- * Ties are broken by deprecating the lexicographically-higher claim id.
- */
-export const resolveDeprecateOlder =
-  (pairs: ContradictionPair[]) =>
-  (corpus: Corpus): Corpus => {
-    const losers = new Set<string>();
-    for (const p of pairs) {
-      const leftFrom = p.left.valid.from;
-      const rightFrom = p.right.valid.from;
-      if (leftFrom < rightFrom) {
-        // left is earlier — deprecate left
-        losers.add(p.left.id);
-      } else if (rightFrom < leftFrom) {
-        // right is earlier — deprecate right
-        losers.add(p.right.id);
-      } else {
-        // Tie: deprecate the lexicographically-higher id
-        if (p.left.id > p.right.id) {
-          losers.add(p.left.id);
-        } else {
-          losers.add(p.right.id);
-        }
-      }
-    }
-    return {
-      claims: corpus.claims.map((cl) =>
-        losers.has(cl.id) ? { ...cl, status: "deprecated" as const } : cl
-      ),
-    };
-  };
 
 /**
  * Parse question_date → epoch ms. Delegates to parseLmeInstant (single source of truth).
@@ -121,7 +87,7 @@ export function answerArmA(
     leaf(corpusId),
     tau.valid(t),
     (c: Corpus) => resolveDeprecateOlder(pairsOf(c, threshold))(c),
-    (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated"),
+    (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY),
     rho.jaccard(q.question)
   );
 
