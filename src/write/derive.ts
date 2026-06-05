@@ -10,6 +10,76 @@ import type { StorageAdapter } from "../adapters/adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import type { Scope } from "../core/scope.js";
 
+/**
+ * Walks the linear src-chain to the leaf node and returns the leaf's corpusId.
+ * All 12 ExprNode variants are linear (every non-leaf has exactly one `src`).
+ */
+function findLeafCorpusId(expr: ExprNode): string {
+  let node: ExprNode = expr;
+  while (node.op !== "leaf") {
+    node = (node as { src: ExprNode }).src;
+  }
+  return node.corpusId;
+}
+
+/**
+ * Pure normalization: rebuild the src-chain, stamping corpus defaults onto resolve
+ * nodes that lack them. Explicit node values always win.
+ *
+ * ASSUMES linear expression chains — every non-leaf ExprNode has exactly one `src`
+ * (verified for all 12 variants); the leaf corpus is found by walking `src` down to
+ * the leaf and calling catalog.getCorpus(leaf.corpusId). If non-linear expressions
+ * are ever introduced, stamping semantics must be revisited.
+ */
+export function stampResolveDefaults(expr: ExprNode, catalog: Catalog): ExprNode {
+  if (expr.op === "leaf") {
+    return expr;
+  }
+
+  // Recursively stamp the src first
+  const srcNode = (expr as { src: ExprNode }).src;
+  const stampedSrc = stampResolveDefaults(srcNode, catalog);
+
+  if (expr.op === "resolve") {
+    // Find the leaf corpus to get defaults
+    const corpusId = findLeafCorpusId(srcNode);
+    const corpus = catalog.getCorpus(corpusId);
+
+    // Build a new resolve node — explicit values always win
+    const newNode: Extract<ExprNode, { op: "resolve" }> = {
+      op: "resolve",
+      policy: expr.policy,
+      src: stampedSrc,
+    };
+
+    // threshold: explicit wins, else stamp from corpus defaults
+    newNode.threshold = expr.threshold !== undefined
+      ? expr.threshold
+      : corpus.defaults?.confidenceThreshold;
+
+    // rule: carry through if present
+    if (expr.rule !== undefined) {
+      newNode.rule = expr.rule;
+    }
+
+    // keyCardinality: explicit wins, else stamp from schema (omit entirely when absent)
+    if (expr.keyCardinality !== undefined) {
+      newNode.keyCardinality = expr.keyCardinality;
+    } else {
+      const schemaKC = corpus.schema?.keyCardinality;
+      if (schemaKC !== undefined) {
+        newNode.keyCardinality = schemaKC;
+      }
+      // else: omit entirely (field-absent, not undefined-valued)
+    }
+
+    return newNode;
+  }
+
+  // For all other ops: rebuild with the stamped src
+  return { ...expr, src: stampedSrc } as ExprNode;
+}
+
 export interface DeriveOptions {
   subject: string;
   key: string;
@@ -39,7 +109,8 @@ export function deriveClaimFrom(
     usedEmbeddingModelVersions: {},
   };
 
-  const result = evaluate<Corpus>(compile(expr), ctx);
+  const stamped = stampResolveDefaults(expr, catalog);
+  const result = evaluate<Corpus>(compile(stamped), ctx);
 
   if (result.claims.length === 0) {
     throw new Error("deriveClaimFrom: pipeline produced no claims; cannot derive a representative");
@@ -69,7 +140,7 @@ export function deriveClaimFrom(
     schema: rep.schema ?? "",
     provenance: {
       derivedFrom: {
-        queryExpression: serializeExpr(expr),
+        queryExpression: serializeExpr(stamped),
         corpusState: adapter.maxRecordedSeq(),
         combinationRule: opts.combination,
         inputClaims,
