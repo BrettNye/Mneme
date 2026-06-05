@@ -632,3 +632,93 @@ it("compile returns a Stage array without accessing EvalContext during the call"
   expect(s2).toHaveLength(2);
   expect(s3).toHaveLength(2);
 });
+
+// ---------- resolve: missing threshold throws at compile time ----------
+
+it("compiling a resolve node without threshold throws", () => {
+  expect(() => compile(resolve("resolveDeprecateOlder", leaf("c")))).toThrow(/no threshold/);
+});
+
+// ---------- resolve: keyCardinality excludes multi-mapped keys from detection ----------
+
+it("compiled resolve with keyCardinality:multi leaves two distinct-value hobby claims undeprecated", () => {
+  // Two claims for same subject but key="hobby" with different values.
+  // Without keyCardinality, they would be detected as contradictions and one deprecated.
+  // With keyCardinality: { hobby: "multi" }, the key is excluded from detection → both survive.
+  const hobbyA = makeBetaClaim("id-A", "alice", "hobby", "sh", "singing", 9, 1);
+  const hobbyB = makeBetaClaim("id-B", "alice", "hobby", "sh", "dancing", 9, 1);
+
+  const ctx = makeCtx([hobbyA, hobbyB]);
+
+  // With multi cardinality: both claims are undeprecated
+  const withMulti = evaluate<Corpus>(
+    compile(resolve("resolveDeprecateMinority", leaf("c"), undefined, 0.0, { hobby: "multi" })),
+    ctx,
+  );
+  expect(withMulti.claims).toHaveLength(2);
+  expect(withMulti.claims.every((c: any) => c.status !== "deprecated")).toBe(true);
+
+  // Without keyCardinality: one claim should be deprecated (existing behavior)
+  const withoutMulti = evaluate<Corpus>(
+    compile(resolve("resolveDeprecateMinority", leaf("c"), undefined, 0.0)),
+    ctx,
+  );
+  expect(withoutMulti.claims.some((c: any) => c.status === "deprecated")).toBe(true);
+});
+
+// ---------- combine with similarity produces same result as hand-built oplusDedupe ----------
+
+it("compiles combine with similarity to a dedupe pipeline equal to hand-built oplusDedupe(rule, params, {similarity})", () => {
+  // Two claims with same (subject, key, scopeHash) but dissimilar values.
+  // With a HIGH similarity cutoff (0.9), jaccard("hello world", "totally different") < 0.9,
+  // so they are NOT sub-merged and produce 2 separate output claims.
+  // Without similarity, they would be merged into 1 claim (default behavior merges all in group).
+  const c1 = makeBetaClaim("id-1", "subj", "key", "sh", "hello world", 9, 1);
+  const c2 = makeBetaClaim("id-2", "subj", "key", "sh", "totally different", 3, 7);
+  c1.valueHash = "vh-world";
+  c2.valueHash = "vh-different";
+
+  const ctx = makeCtx([c1, c2]);
+  const rule = "rule_evidence_pooled";
+  const similarity = { fn: "jaccard", cutoff: 0.9 };
+
+  const compiled = evaluate<Corpus>(
+    compile(combine(rule, leaf("c"), undefined, similarity)),
+    ctx,
+  );
+
+  // Hand-built equivalent
+  const handBuilt = evaluate<Corpus>(
+    [leafStage("c"), liftOp(oplusDedupe(rule, undefined, { similarity }))],
+    ctx,
+  );
+
+  // Both should produce same count (2 sub-partitions, since values are dissimilar at cutoff 0.9)
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  expect(compiled.claims).toHaveLength(2);
+
+  // Verify that without similarity they WOULD be merged into 1 claim (default behavior)
+  const withoutSimilarity = evaluate<Corpus>(
+    compile(combine(rule, leaf("c"))),
+    ctx,
+  );
+  expect(withoutSimilarity.claims).toHaveLength(1);
+});
+
+it("combine node without similarity compiles to today's exact behavior (no DedupeOptions)", () => {
+  // Regression: combine without similarity must match oplusDedupe(rule, params, undefined)
+  const c1 = makeBetaClaim("id-1", "subj", "key", "sh", "vh-A", 9, 1);
+  const c2 = makeBetaClaim("id-2", "subj", "key", "sh", "vh-A", 3, 7);
+
+  const ctx = makeCtx([c1, c2]);
+  const rule = "rule_evidence_pooled";
+
+  const compiled = evaluate<Corpus>(compile(combine(rule, leaf("c"))), ctx);
+  const handBuilt = evaluate<Corpus>(
+    [leafStage("c"), liftOp(oplusDedupe(rule, undefined, undefined))],
+    ctx,
+  );
+
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  expect(compiled.claims[0].confidence.raw).toBeCloseTo(handBuilt.claims[0].confidence.raw, 10);
+});
