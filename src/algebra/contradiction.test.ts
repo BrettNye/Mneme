@@ -174,3 +174,59 @@ it("combinedConfidences raw equals mean of pooled parameters", () => {
   // single claim, no folding: raw = alpha/(alpha+beta) = 9/10 = 0.9
   expect(pooled!.raw).toBeCloseTo(0.9);
 });
+
+// --- DetectionOptions: multi-key exclusion ---
+
+// Helper using cWith for custom key names
+const mk = (id: string, key: string, valueHash: string, alpha = 9, beta = 1) =>
+  cWith(id, "subject", key, "_", valueHash, alpha, beta);
+
+it("keys declared multi never form clusters even with distinct values", () => {
+  const c1 = mk("c1", "hobby", "painting landscapes");
+  const c2 = mk("c2", "hobby", "running marathons");
+  const clusters = clustersOf(corpusOf([c1, c2]), 0, { keyCardinality: { hobby: "multi" } });
+  expect(clusters).toHaveLength(0);
+});
+
+it("multi key coexisting with single key: only the single key clusters", () => {
+  const hobby1 = mk("h1", "hobby", "painting");
+  const hobby2 = mk("h2", "hobby", "running");
+  const name1 = mk("n1", "name", "Alice");
+  const name2 = mk("n2", "name", "Bob");
+  const clusters = clustersOf(
+    corpusOf([hobby1, hobby2, name1, name2]),
+    0,
+    { keyCardinality: { hobby: "multi" } },
+  );
+  // hobby is multi => no cluster; name is single => 1 cluster
+  expect(clusters).toHaveLength(1);
+  expect(clusters[0].triple.key).toBe("name");
+});
+
+it("threshold 0 admits low-confidence claim to contest high-confidence claim", () => {
+  // eff(lowConf) = 0.4/(0.4+0.6) = 0.4; threshold=0 => 0.4 > 0 => admitted
+  const lowConf = mk("low", "status", "inactive", 4, 6);   // eff ~ 0.4
+  const highConf = mk("high", "status", "active", 9, 1);   // eff ~ 0.9
+  const clusters = clustersOf(corpusOf([lowConf, highConf]), 0);
+  expect(clusters).toHaveLength(1);
+});
+
+it("threshold 0.5 excludes low-confidence claim; no cluster formed", () => {
+  const lowConf = mk("low", "status", "inactive", 4, 6);   // eff ~ 0.4
+  const highConf = mk("high", "status", "active", 9, 1);   // eff ~ 0.9
+  const clusters = clustersOf(corpusOf([lowConf, highConf]), 0.5);
+  expect(clusters).toHaveLength(0);
+});
+
+it("pairsOf passes opts through to clustersOf", () => {
+  const c1 = mk("c1", "hobby", "painting");
+  const c2 = mk("c2", "hobby", "running");
+  const pairs = pairsOf(corpusOf([c1, c2]), 0, { keyCardinality: { hobby: "multi" } });
+  expect(pairs).toHaveLength(0);
+});
+
+it("opts omitted: existing contradiction behavior is unchanged", () => {
+  // Regression: no opts => behaves as before
+  const clusters = clustersOf(corpusOf([c("a", "vh-yes", 9, 1), c("b", "vh-no", 8, 1)]), 0.5);
+  expect(clusters).toHaveLength(1);
+});

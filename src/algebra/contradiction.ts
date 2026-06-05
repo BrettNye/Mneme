@@ -4,6 +4,12 @@ import type { Claim } from "../core/claim.js";
 import { pointEstimate, type Confidence } from "../core/confidence.js";
 import { bindingFor } from "../distribution/registry.js";
 import { RULE } from "../distribution/rules.js";
+import { cardinalityOf } from "../catalog/schema.js";
+
+export interface DetectionOptions {
+  /** Keys mapped "multi" are excluded from cluster formation entirely. */
+  keyCardinality?: Record<string, "single" | "multi">;
+}
 
 export type ConflictReason = "value-difference"; // §4.8 binary criterion; only reason this detector emits
 export interface Resolution { kind: string; resultClaimIds: string[] }
@@ -20,9 +26,22 @@ export interface ContradictionCluster {
 
 const eff = (c: Claim) => c.confidence.effective ?? pointEstimate(c.confidence);
 
-export function clustersOf(corpus: Corpus, threshold: number): ContradictionCluster[] {
-  // 1. keep claims with eff(claim) > threshold
-  const aboveThreshold = corpus.claims.filter(claim => eff(claim) > threshold);
+/**
+ * Returns contradiction clusters for the given corpus.
+ *
+ * `threshold` is the confidence ELIGIBILITY floor: claims with eff(claim) <= threshold
+ * cannot contest (recommended default 0 — all contest; callers supply
+ * CorpusDefaults.confidenceThreshold on the read path).
+ *
+ * `opts.keyCardinality`: keys mapped "multi" are excluded from cluster formation entirely.
+ */
+export function clustersOf(corpus: Corpus, threshold: number, opts?: DetectionOptions): ContradictionCluster[] {
+  // 1. keep claims with eff(claim) > threshold AND key is "single" cardinality
+  const aboveThreshold = corpus.claims.filter(
+    claim =>
+      eff(claim) > threshold &&
+      cardinalityOf(claim.key, opts?.keyCardinality) === "single",
+  );
 
   // 2. group by (subject, key, scopeHash) => within each triple sub-group by valueHash
   const tripleMap = new Map<string, Map<string, Claim[]>>();
@@ -137,5 +156,14 @@ export function derivedPairs(clusters: ContradictionCluster[]): ContradictionPai
   return pairs;
 }
 
-export const pairsOf = (corpus: Corpus, threshold: number): ContradictionPair[] =>
-  derivedPairs(clustersOf(corpus, threshold));
+/**
+ * Returns contradiction pairs for the given corpus.
+ *
+ * `threshold` is the confidence ELIGIBILITY floor: claims with eff(claim) <= threshold
+ * cannot contest (recommended default 0 — all contest; callers supply
+ * CorpusDefaults.confidenceThreshold on the read path).
+ *
+ * `opts.keyCardinality`: keys mapped "multi" are excluded from cluster formation entirely.
+ */
+export const pairsOf = (corpus: Corpus, threshold: number, opts?: DetectionOptions): ContradictionPair[] =>
+  derivedPairs(clustersOf(corpus, threshold, opts));
