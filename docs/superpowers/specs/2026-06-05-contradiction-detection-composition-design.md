@@ -19,6 +19,13 @@ five distinct relationships, and it can only handle one of them:
 | Genuine dispute (conflicting signals) | fresh p=0.4 vs stale p=1.0 (probe 6) | both contest; rule decides | ❌ floor hides challenger |
 | Different referent (key collision) | `car_model`: Corolla vs Civic (different people) | scope separates | ❌ would cross-deprecate |
 
+**Design principle (ratified): composition-first.** Prefer composing the existing
+operators to express new semantics; introduce a new operator/equation only when no
+composition can express it — and when one genuinely better equation exists, adopt it
+rather than contorting a composition. Dialing return quality = tuning the composition
+(stages, declarative inputs, per-corpus dials), not stacking special cases into one
+predicate.
+
 **Diagnosis (ratified in brainstorming): no new equations are needed.** The algebra
 already contains the cooperating operators (`τ`, `⊕_dedupe`, `⊥`, `resolve*`,
 `⊕_synthesize`). The losses come from (i) one missing declarative INPUT to detection
