@@ -53,6 +53,19 @@ export interface RunOpts {
 const TARGET_CATEGORIES = new Set(["knowledge-update", "temporal-reasoning", "abstention"]);
 
 // ---------------------------------------------------------------------------
+// Manual-sample cardinality hints (keys that are additive / multi-value)
+// ---------------------------------------------------------------------------
+
+const MANUAL_KEY_CARDINALITY: Record<string, "single" | "multi"> = {
+  cooking_interest: "multi",
+  work_tasks: "multi",
+  activity: "multi",
+  sculpture_materials_interest: "multi",
+  next_trip_plan: "multi",
+  occupation_activity: "multi",
+};
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -249,7 +262,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
 
       let resultA;
       try {
-        resultA = answerArmA(session, corpusId, q, { k: maxK });
+        resultA = answerArmA(session, corpusId, q, { k: maxK, keyCardinality: MANUAL_KEY_CARDINALITY });
         const scoreA = scoreQuestion(q, resultA, ks);
         scoreRows.push(scoreA);
         checks.push({ name: `score-A:${qid}`, pass: true });
