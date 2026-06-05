@@ -6,6 +6,7 @@ import {
   claimsFor,
   mapClaimRecord,
   IngestConservationError,
+  AlreadyIngestedError,
 } from "./ingest.js";
 import { openTmpSession, fixturePath } from "./test-support.js";
 import type { LmeQuestionT, ClaimRecordT } from "./types.js";
@@ -31,16 +32,6 @@ const fixtureClaims = loadFixtureClaims();
 const kuFixtureQuestion = fixtureQuestions.find((q) => q.question_id === "fx-ku-1")!;
 const trFixtureQuestion = fixtureQuestions.find((q) => q.question_id === "fx-tr-1")!;
 const absFixtureQuestion = fixtureQuestions.find((q) => q.question_id === "fx-abs-1_abs")!;
-
-// Claims for fx-ku-1: those tagged session:fx-s1 or session:fx-s2
-const kuFixtureClaims = fixtureClaims.filter(
-  (c) => c.tags.some((t) => t === "session:fx-s1" || t === "session:fx-s2")
-);
-
-// Claims for fx-tr-1: those tagged session:fx-s3 or session:fx-s4
-const trFixtureClaims = fixtureClaims.filter(
-  (c) => c.tags.some((t) => t === "session:fx-s3" || t === "session:fx-s4")
-);
 
 // ---------------------------------------------------------------------------
 // corpusIdFor
@@ -169,106 +160,192 @@ describe("claimsFor", () => {
 // ingestQuestion
 // ---------------------------------------------------------------------------
 
-it("commits every fixture claim for the KU question and both contradictory values survive", () => {
-  const { session, close } = openTmpSession();
-  try {
-    const records = claimsFor(kuFixtureQuestion, fixtureClaims);
-    const stats = ingestQuestion(session, kuFixtureQuestion, records);
+describe("ingestQuestion", () => {
+  it("commits every fixture claim for the KU question and both contradictory values survive", () => {
+    const { session, close } = openTmpSession();
+    try {
+      const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+      const stats = ingestQuestion(session, kuFixtureQuestion, records);
 
-    expect(stats.committed).toBe(records.length);
-    expect(stats.committed).toBe(2); // alice Initech + alice Globex
+      expect(stats.committed).toBe(records.length);
+      expect(stats.committed).toBe(2); // alice Initech + alice Globex
 
-    const corpus = session.q(corpusIdFor("fx-ku-1"), "") as { claims: unknown[] };
-    expect(corpus.claims.length).toBe(records.length); // always_accept retains the contradiction
-  } finally {
-    close();
-  }
-});
-
-it("creates a corpus with ID lme-<question_id>", () => {
-  const { session, close } = openTmpSession();
-  try {
-    const records = claimsFor(kuFixtureQuestion, fixtureClaims);
-    ingestQuestion(session, kuFixtureQuestion, records);
-
-    const corpora = session.listCorpora();
-    expect(corpora.some((c) => c.id === "lme-fx-ku-1")).toBe(true);
-  } finally {
-    close();
-  }
-});
-
-it("provenance tags and validFrom survive the round trip", () => {
-  const { session, close } = openTmpSession();
-  try {
-    const records = claimsFor(kuFixtureQuestion, fixtureClaims);
-    ingestQuestion(session, kuFixtureQuestion, records);
-
-    const corpus = session.q(corpusIdFor("fx-ku-1"), "") as { claims: Array<{
-      tags?: string[];
-      valid?: { from: number };
-    }> };
-
-    // Every claim should carry session:/turn: tags
-    for (const claim of corpus.claims) {
-      expect(claim.tags?.some((t) => t.startsWith("session:"))).toBe(true);
-      expect(claim.tags?.some((t) => t.startsWith("turn:"))).toBe(true);
-      expect(claim.valid?.from).toBeGreaterThan(0);
+      const corpus = session.q(corpusIdFor("fx-ku-1"), "") as { claims: unknown[] };
+      expect(corpus.claims.length).toBe(records.length); // always_accept retains the contradiction
+    } finally {
+      close();
     }
-  } finally {
-    close();
-  }
-});
+  });
 
-it("throws IngestConservationError if committed !== records", () => {
-  // Build a stub Session that returns committed=0 from writeMany,
-  // simulating a partial failure (e.g. all claims errored).
-  const records = claimsFor(kuFixtureQuestion, fixtureClaims);
-  const stubSession = {
-    createCorpus: () => undefined,
-    writeMany: () => ({
-      total: records.length,
-      committed: 0, // nothing got through — conservation fails
-      rejected: 0,
-      duplicate: 0,
-      skipped: records.length,
-      elapsedMs: 0,
-      claimsPerSec: 0,
-    }),
-  } as unknown as Parameters<typeof ingestQuestion>[0];
+  it("creates a corpus with ID lme-<question_id>", () => {
+    const { session, close } = openTmpSession();
+    try {
+      const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+      ingestQuestion(session, kuFixtureQuestion, records);
 
-  expect(() => ingestQuestion(stubSession, kuFixtureQuestion, records)).toThrow(
-    IngestConservationError
-  );
-});
-
-it("IngestConservationError names the question id and delta", () => {
-  const records = claimsFor(kuFixtureQuestion, fixtureClaims);
-  const committed = 1; // one committed, but we expect 2 → delta = 1
-  const stubSession = {
-    createCorpus: () => undefined,
-    writeMany: () => ({
-      total: records.length,
-      committed,
-      rejected: 0,
-      duplicate: 0,
-      skipped: records.length - committed,
-      elapsedMs: 0,
-      claimsPerSec: 0,
-    }),
-  } as unknown as Parameters<typeof ingestQuestion>[0];
-
-  let error: IngestConservationError | undefined;
-  try {
-    ingestQuestion(stubSession, kuFixtureQuestion, records);
-  } catch (e) {
-    if (e instanceof IngestConservationError) {
-      error = e;
+      const corpora = session.listCorpora();
+      expect(corpora.some((c) => c.id === "lme-fx-ku-1")).toBe(true);
+    } finally {
+      close();
     }
-  }
-  expect(error).toBeDefined();
-  // message must include the question id
-  expect(error!.message).toContain("fx-ku-1");
-  // delta = records.length - committed
-  expect(error!.delta).toBe(records.length - committed);
+  });
+
+  it("provenance tags and validFrom survive the round trip", () => {
+    const { session, close } = openTmpSession();
+    try {
+      const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+      ingestQuestion(session, kuFixtureQuestion, records);
+
+      const corpus = session.q(corpusIdFor("fx-ku-1"), "") as { claims: Array<{
+        tags?: string[];
+        valid?: { from: number };
+      }> };
+
+      // Every claim should carry session:/turn: tags
+      for (const claim of corpus.claims) {
+        expect(claim.tags?.some((t) => t.startsWith("session:"))).toBe(true);
+        expect(claim.tags?.some((t) => t.startsWith("turn:"))).toBe(true);
+        expect(claim.valid?.from).toBeGreaterThan(0);
+      }
+    } finally {
+      close();
+    }
+  });
+
+  it("throws IngestConservationError if committed !== records", () => {
+    // Build a stub Session that returns committed=0 from writeMany,
+    // simulating a partial failure (e.g. all claims errored).
+    const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+    const stubSession = {
+      createCorpus: () => undefined,
+      listCorpora: () => [],
+      writeMany: () => ({
+        total: records.length,
+        committed: 0, // nothing got through — conservation fails
+        rejected: 0,
+        duplicate: 0,
+        skipped: records.length,
+        elapsedMs: 0,
+        claimsPerSec: 0,
+      }),
+    } as unknown as Parameters<typeof ingestQuestion>[0];
+
+    expect(() => ingestQuestion(stubSession, kuFixtureQuestion, records)).toThrow(
+      IngestConservationError
+    );
+  });
+
+  it("IngestConservationError names the question id and delta", () => {
+    const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+    const committed = 1; // one committed, but we expect 2 → delta = 1
+    const stubSession = {
+      createCorpus: () => undefined,
+      listCorpora: () => [],
+      writeMany: () => ({
+        total: records.length,
+        committed,
+        rejected: 0,
+        duplicate: 0,
+        skipped: records.length - committed,
+        elapsedMs: 0,
+        claimsPerSec: 0,
+      }),
+    } as unknown as Parameters<typeof ingestQuestion>[0];
+
+    let error: IngestConservationError | undefined;
+    try {
+      ingestQuestion(stubSession, kuFixtureQuestion, records);
+    } catch (e) {
+      if (e instanceof IngestConservationError) {
+        error = e;
+      }
+    }
+    expect(error).toBeDefined();
+    // message must include the question id
+    expect(error!.message).toContain("fx-ku-1");
+    // delta = records.length - committed
+    expect(error!.delta).toBe(records.length - committed);
+  });
+
+  it("throws AlreadyIngestedError on re-ingest of the same question", () => {
+    const { session, close } = openTmpSession();
+    try {
+      const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+      ingestQuestion(session, kuFixtureQuestion, records);
+
+      // Second call must throw
+      expect(() => ingestQuestion(session, kuFixtureQuestion, records)).toThrow(
+        AlreadyIngestedError
+      );
+    } finally {
+      close();
+    }
+  });
+
+  it("AlreadyIngestedError names the corpus id and corpus still holds only first ingest's claims", () => {
+    const { session, close } = openTmpSession();
+    try {
+      const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+      ingestQuestion(session, kuFixtureQuestion, records);
+
+      let error: AlreadyIngestedError | undefined;
+      try {
+        ingestQuestion(session, kuFixtureQuestion, records);
+      } catch (e) {
+        if (e instanceof AlreadyIngestedError) {
+          error = e;
+        }
+      }
+
+      expect(error).toBeDefined();
+      expect(error!.corpusId).toBe("lme-fx-ku-1");
+      expect(error!.message).toContain("lme-fx-ku-1");
+
+      // Corpus was NOT written to a second time — still has exactly the first ingest's claims
+      const corpus = session.q(corpusIdFor("fx-ku-1"), "") as { claims: unknown[] };
+      expect(corpus.claims.length).toBe(records.length);
+    } finally {
+      close();
+    }
+  });
+
+  it("throws IngestConservationError whose message mentions duplicates when writeMany reports duplicate > 0", () => {
+    // Simulate the case where writeMany detects duplicate input records (e.g. via
+    // idempotency key deduplication). committed < records.length violates conservation,
+    // and the duplicate count must appear in the error message for diagnosability.
+    // Fixture/extraction records are always unique; a non-zero duplicate count means
+    // corrupted input — not a benign skip.
+    const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+    const dupRecords = [...records, ...records]; // 4 records, 2 unique
+    const duplicateCount = records.length; // 2 duplicates detected
+
+    const stubSession = {
+      createCorpus: () => undefined,
+      listCorpora: () => [],
+      writeMany: () => ({
+        total: dupRecords.length,
+        committed: records.length, // only the unique ones committed
+        rejected: 0,
+        duplicate: duplicateCount,
+        skipped: 0,
+        elapsedMs: 0,
+        claimsPerSec: 0,
+      }),
+    } as unknown as Parameters<typeof ingestQuestion>[0];
+
+    let error: IngestConservationError | undefined;
+    try {
+      ingestQuestion(stubSession, kuFixtureQuestion, dupRecords);
+    } catch (e) {
+      if (e instanceof IngestConservationError) {
+        error = e;
+      }
+    }
+    expect(error).toBeDefined();
+    // delta = dupRecords.length - committed = 4 - 2 = 2
+    expect(error!.delta).toBe(duplicateCount);
+    // message must mention duplicate count for diagnosability
+    expect(error!.message).toMatch(/duplicate/i);
+    expect(error!.message).toContain(String(duplicateCount));
+  });
 });

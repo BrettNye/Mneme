@@ -53,20 +53,40 @@ export function mapClaimRecord(rec: ClaimRecordT): WriteRecord {
 }
 
 /**
+ * Thrown when `ingestQuestion` is called for a question whose corpus already
+ * exists in the session. Session has no deleteCorpus, so re-ingesting into an
+ * existing corpus would silently double-write claims. The correct workflow for
+ * this bench is one fresh tmp DB per run; callers must not retry ingestion into
+ * the same session.
+ */
+export class AlreadyIngestedError extends Error {
+  constructor(public readonly corpusId: string) {
+    super(
+      `AlreadyIngestedError: corpus "${corpusId}" already exists in this session. ` +
+        `Use a fresh tmp DB per run — re-ingesting would double-write claims.`
+    );
+    this.name = "AlreadyIngestedError";
+  }
+}
+
+/**
  * Thrown when the number of committed claims does not equal the number of
- * records passed to `ingestQuestion`. The message includes the question id
- * and the delta (records - committed).
+ * records passed to `ingestQuestion`. The message includes the question id,
+ * the delta (records - committed), and the duplicate count for diagnosability.
+ * A non-zero duplicate count means corrupted input — fixture/extraction records
+ * are expected to be unique.
  */
 export class IngestConservationError extends Error {
   constructor(
     public readonly questionId: string,
     public readonly delta: number,
     public readonly records: number,
-    public readonly committed: number
+    public readonly committed: number,
+    public readonly duplicate: number = 0
   ) {
     super(
       `IngestConservationError for question ${questionId}: ` +
-        `expected ${records} committed, got ${committed} (delta=${delta})`
+        `expected ${records} committed, got ${committed} (delta=${delta}, duplicate=${duplicate})`
     );
     this.name = "IngestConservationError";
   }
@@ -77,8 +97,15 @@ export class IngestConservationError extends Error {
  * Creates a corpus with id `lme-<question_id>` and `contradictionPolicy: { kind: "always_accept" }`
  * so contradictions are retained for arm A's read-time resolution.
  *
- * Conservation is enforced: throws IngestConservationError if
- * `stats.committed !== records.length`.
+ * **Re-ingest guard:** throws `AlreadyIngestedError` if the corpus already
+ * exists. Session has no deleteCorpus, so this bench requires one fresh tmp DB
+ * per run. Re-ingesting into an existing corpus would double-write claims and
+ * could falsely satisfy conservation checks.
+ *
+ * **Conservation:** throws `IngestConservationError` if
+ * `stats.committed !== records.length`. A non-zero `stats.duplicate` count in
+ * the error indicates corrupted input — fixture/extraction records are expected
+ * to be unique; duplicates are a signal of bad input, not a benign skip.
  */
 export function ingestQuestion(
   session: Session,
@@ -86,6 +113,11 @@ export function ingestQuestion(
   records: ClaimRecordT[]
 ): ImportStats {
   const corpusId = corpusIdFor(q.question_id);
+
+  const existing = session.listCorpora();
+  if (existing.some((c) => c.id === corpusId)) {
+    throw new AlreadyIngestedError(corpusId);
+  }
 
   session.createCorpus({
     id: corpusId,
@@ -100,7 +132,8 @@ export function ingestQuestion(
       q.question_id,
       records.length - stats.committed,
       records.length,
-      stats.committed
+      stats.committed,
+      stats.duplicate
     );
   }
 
