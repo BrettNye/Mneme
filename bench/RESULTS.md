@@ -73,7 +73,7 @@ npm run eval:lme:fixture
 
 **Flags**
 
-- `--oracle`: resolve questions using oracle attribution only (requires `longmemeval_oracle.json` claims).
+- `--oracle`: resolve questions using oracle attribution. Requires re-extracting claims from `longmemeval_oracle.json` (download step 1) and passing that file as `--file` and the resulting claims as `--claims` — the `eval:lme` npm script targets the standard split only.
 - `--k 1,3,10`: comma-separated recall depth values (default `1,3,10`).
 - `--raw`: skip strict JSON schema validation on dataset (useful for non-standard splits).
 
