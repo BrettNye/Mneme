@@ -1,8 +1,11 @@
 import { deriveClaimFrom, stampResolveDefaults } from "./derive.js";
 import { leaf, sigma, resolve } from "../algebra/ast.js";
 import { serializeExpr, parseExpr } from "../algebra/serialize.js";
+import { evaluate } from "../algebra/expression.js";
+import { compile } from "../algebra/compile.js";
 import type { ExprNode } from "../algebra/ast.js";
 import type { Claim } from "../core/claim.js";
+import type { Corpus } from "../algebra/types.js";
 
 // Minimal claim factory
 function makeClaim(id: string, value: string, confidence = 0.9): Claim {
@@ -289,6 +292,19 @@ describe("deriveClaimFrom stamping integration", () => {
     const storedExpr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
     expect(storedExpr.threshold).toBe(originalThreshold);
     expect(storedExpr.threshold).toBe(0.5);
+
+    // AC5 end-to-end replay fidelity: re-running the stored expression with the
+    // recorded evaluationClock reproduces the original result claims, even though
+    // the corpus default has since been mutated to 0.99.
+    const storedClock = cand.provenance!.derivedFrom!.evaluationClock!;
+    const replayCtx = { adapter, catalog: mutableCatalog, evaluationClock: storedClock };
+    const replayResult = evaluate<Corpus>(
+      compile(parseExpr(cand.provenance!.derivedFrom!.queryExpression)),
+      replayCtx,
+    );
+    const replayRep = replayResult.claims[replayResult.claims.length - 1];
+    expect(replayRep.value).toEqual(cand.value);
+    expect(replayRep.confidence.raw).toBe(cand.confidence.raw);
   });
 
   it("old-format expression (threshold present, no keyCardinality) evaluates identically", () => {
