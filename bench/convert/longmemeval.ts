@@ -275,7 +275,7 @@ export function loadFileCache(filePath: string): { extractedSessions: Set<string
  * real filesystem without relying on `require` being available in all runtimes.
  * @internal exported for testing only
  */
-export function _loadFileCacheWithFs(
+function _loadFileCacheWithFs(
   filePath: string,
   readFileSync: (path: string, enc: "utf8") => string,
   truncateSync: (path: string, len: number) => void,
