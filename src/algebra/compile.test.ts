@@ -561,6 +561,36 @@ it("compiled resolve threads node.threshold to pairsOf / clustersOf (high thresh
   expect(compiled.claims).toHaveLength(handBuilt.claims.length);
 });
 
+it("compiles resolve(resolveDeprecateOlder) [pairs] and evaluates equal to hand-built fn(pairsOf(...))", () => {
+  // Give claims distinct valid.from so recency semantics decide a clear winner.
+  const hi = makeBetaClaim("id-hi", "subj", "key", "sh", "vh-HI", 9, 1);
+  const lo = makeBetaClaim("id-lo", "subj", "key", "sh", "vh-LO", 1, 9);
+  // lo is the "older" claim (earlier valid.from), hi is newer
+  hi.valid = { from: 2000, to: Number.MAX_SAFE_INTEGER };
+  lo.valid = { from: 1000, to: Number.MAX_SAFE_INTEGER };
+
+  const ctx = makeCtx([hi, lo]);
+  const compiled = evaluate<Corpus>(
+    compile(resolve("resolveDeprecateOlder", leaf("c"), undefined, 0.0)),
+    ctx,
+  );
+
+  const corpus = corpusOf([hi, lo]);
+  const { fn, input } = resolutionRegistry("resolveDeprecateOlder");
+  expect(input).toBe("pairs");
+  const handBuilt = (fn as any)(pairsOf(corpus, 0.0))(corpus);
+
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  // the older claim (lo) is deprecated in both paths
+  const loCompiled = compiled.claims.find((c: any) => c.id === "id-lo");
+  const loHandBuilt = handBuilt.claims.find((c: any) => c.id === "id-lo");
+  expect(loCompiled?.status).toBe("deprecated");
+  expect(loHandBuilt?.status).toBe("deprecated");
+  const hiCompiled = compiled.claims.find((c: any) => c.id === "id-hi");
+  const hiHandBuilt = handBuilt.claims.find((c: any) => c.id === "id-hi");
+  expect(hiCompiled?.status).toBe(hiHandBuilt?.status);
+});
+
 it("unknown resolve policy throws MissingRule at evaluate time", () => {
   const ctx = makeCtx([]);
   // Compile doesn't throw; MissingRule is thrown during evaluate (resolutionRegistry lookup)

@@ -1,5 +1,6 @@
 import {
   resolveDeprecateLower,
+  resolveDeprecateOlder,
   resolveKeepBoth,
   resolveFlagForReview,
   resolveDeprecateMinority,
@@ -28,6 +29,7 @@ export interface ResolutionEntry { fn: unknown; input: ResolutionInput; }
 
 const RESOLUTIONS: Record<string, ResolutionEntry> = {
   resolveDeprecateLower:    { fn: resolveDeprecateLower,    input: "pairs" },
+  resolveDeprecateOlder:    { fn: resolveDeprecateOlder,    input: "pairs" },
   resolveKeepBoth:          { fn: resolveKeepBoth,          input: "pairs" },
   resolveFlagForReview:     { fn: resolveFlagForReview,     input: "pairs" },
   resolveDeprecateMinority: { fn: resolveDeprecateMinority, input: "clusters" },

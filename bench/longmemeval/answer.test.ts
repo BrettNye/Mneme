@@ -1,9 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { answerArmA, answerArmB, questionInstant, evaluationInstant, resolveDeprecateOlder } from "./answer.js";
-import { seedSupersedingPair, openTmpSession, claimTagged } from "./test-support.js";
+import { answerArmA, answerArmB, questionInstant, evaluationInstant } from "./answer.js";
+import { seedSupersedingPair, openTmpSession } from "./test-support.js";
 import type { Claim } from "../../src/core/claim.js";
-import { corpusOf } from "../../src/algebra/types.js";
-import { pairsOf } from "../../src/algebra/contradiction.js";
+import { CONTRADICTION_FLAG_KEY } from "../../src/algebra/resolution.js";
 
 // Helper to extract the string value from a claim
 function valueOf(cl: Claim): unknown {
@@ -82,55 +81,49 @@ it("arm A abstains when corpus is empty; arm B returns abstained:false", () => {
 });
 
 // ---------------------------------------------------------------------------
-// resolveDeprecateOlder unit tests
+// Tie semantics: arm A returns BOTH tied values and no contradiction flag artifact
 // ---------------------------------------------------------------------------
 
-describe("resolveDeprecateOlder", () => {
-  it("deprecates the claim with earlier valid.from", () => {
-    const earlier = claimTagged("sess-1", "0", {
-      id: "claim-aaa" as any,
-      value: "Initech",
-      valueHash: "hash-initech",
-      valid: { from: new Date("2023-01-01T00:00:00Z").getTime(), to: Infinity },
-    });
-    const later = claimTagged("sess-2", "0", {
-      id: "claim-bbb" as any,
-      value: "Globex",
-      valueHash: "hash-globex",
-      valid: { from: new Date("2023-06-01T00:00:00Z").getTime(), to: Infinity },
-    });
-    const corpus = corpusOf([earlier, later]);
-    const pairs = pairsOf(corpus, 0.5);
-    const resolved = resolveDeprecateOlder(pairs)(corpus);
+it("arm A returns both tied values and no flag artifact in ranked results", () => {
+  const { session, close } = openTmpSession();
+  const corpusId = "lme-tie-test";
+  session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
 
-    const statuses = new Map(resolved.claims.map((c) => [c.value, c.status]));
-    expect(statuses.get("Initech")).toBe("deprecated");
-    expect(statuses.get("Globex")).toBe("validated");
+  // Seed a tied pair: same subject+key, conflicting values, SAME valid.from
+  const tiedFrom = new Date("2023-06-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "favorite_coffee",
+    value: "flat white",
+    valid: { from: tiedFrom, to: Infinity },
+    tags: ["session:tie-sess-1", "turn:0"],
+    confidence: 0.9,
+  });
+  session.write(corpusId, {
+    subject: "user",
+    key: "favorite_coffee",
+    value: "cortado",
+    valid: { from: tiedFrom, to: Infinity },
+    tags: ["session:tie-sess-2", "turn:0"],
+    confidence: 0.9,
   });
 
-  it("breaks valid.from ties by deprecating the lexicographically-higher id", () => {
-    const sameTime = new Date("2023-06-01T00:00:00Z").getTime();
-    const claimAlpha = claimTagged("sess-1", "0", {
-      id: "claim-aaa" as any,
-      value: "Alpha",
-      valueHash: "hash-alpha",
-      valid: { from: sameTime, to: Infinity },
-    });
-    const claimBeta = claimTagged("sess-2", "0", {
-      id: "claim-zzz" as any,
-      value: "Beta",
-      valueHash: "hash-beta",
-      valid: { from: sameTime, to: Infinity },
-    });
-    const corpus = corpusOf([claimAlpha, claimBeta]);
-    const pairs = pairsOf(corpus, 0.5);
-    const resolved = resolveDeprecateOlder(pairs)(corpus);
+  const q = {
+    question_id: "tie-001",
+    question_type: "knowledge-update",
+    question: "What is the user's favorite coffee drink, flat white or cortado?",
+    question_date: "2023/12/01 (Fri) 10:00",
+    answer: undefined,
+    sessions: [],
+    answer_session_ids: [],
+  };
 
-    // "claim-zzz" > "claim-aaa" lexicographically → "claim-zzz" (Beta) should be deprecated
-    const statuses = new Map(resolved.claims.map((c) => [c.value, c.status]));
-    expect(statuses.get("Beta")).toBe("deprecated");
-    expect(statuses.get("Alpha")).toBe("validated");
-  });
+  const a = answerArmA(session, corpusId, q, { k: 5 });
+  // Both values must survive (neither deprecated)
+  expect(a.claims.map(valueOf)).toEqual(expect.arrayContaining(["flat white", "cortado"]));
+  // The contradiction flag artifact must NOT appear in ranked results
+  expect(a.claims.some((c) => c.key === CONTRADICTION_FLAG_KEY)).toBe(false);
+  close();
 });
 
 // ---------------------------------------------------------------------------

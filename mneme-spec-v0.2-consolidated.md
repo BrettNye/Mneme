@@ -749,10 +749,15 @@ Pairs are a derived special case: each cluster with exactly two distinct values 
 Resolution operators consume detected conflicts and produce a new corpus state. The pairwise resolvers operate on the pair set; the cluster-aware resolvers operate on the cluster set.
 
 ```
-resolve_deprecate_lower : Set<ContradictionPair> × Corpus → Corpus
-resolve_flag_for_review : Set<ContradictionPair> × Corpus → Corpus
-resolve_keep_both       : Set<ContradictionPair> × Corpus → Corpus
+resolve_deprecate_lower  : Set<ContradictionPair> × Corpus → Corpus
+resolve_deprecate_older  : Set<ContradictionPair> × Corpus → Corpus
+resolve_flag_for_review  : Set<ContradictionPair> × Corpus → Corpus
+resolve_keep_both        : Set<ContradictionPair> × Corpus → Corpus
 ```
+
+- `resolve_deprecate_older` — per pair, the claim with the earlier `valid.from` is deprecated; the claim with the later `valid.from` survives. Recency semantics: the more recently valid assertion wins.
+
+**Tie semantics for pairwise deprecation resolvers.** When `resolve_deprecate_lower` encounters two claims with identical point estimates (the same point-estimate quantity used for selection in §4.9), or when `resolve_deprecate_older` encounters two claims with identical `valid.from` timestamps, the ordering criterion cannot decide; a silent arbitrary pick masquerades as a resolution. Therefore, exact ties MUST NOT cause either claim to be deprecated. Instead, the resolver MUST append one `contradiction.flag` review artifact per tied pair — a candidate-status claim with subject `contradiction` recording both conflicting claim ids (the same artifact `resolve_flag_for_review` emits) — both claims retain their current status unchanged by this resolver invocation, and the emitted artifacts do not participate in pair derivation within that invocation. This pins previously-unspecified behaviour as a specification addition — no existing normative text for these operators is altered. Note that cluster-level tie-break rules (`resolve_deprecate_minority` and `resolve_promote_consensus` largest-group selection) and the §4.9 `⊕` combination-rule tie-breaks are unchanged; the latter are load-bearing for idempotence and associativity. A per-corpus `tieBehavior` override, if ever needed, would belong in CorpusDefaults (§3.3).
 
 ```
 resolve_deprecate_minority      : Set<ContradictionCluster> × Corpus → Corpus   `[C]`
