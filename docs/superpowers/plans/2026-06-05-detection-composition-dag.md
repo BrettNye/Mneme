@@ -5,15 +5,15 @@ created: 2026-06-05
 
 ```mermaid
 flowchart TD
-    task-schema-cardinality["task-schema-cardinality: keyCardinality declaration<br/>files: src/catalog/schema.ts +1 more"]
-    task-dedupe-similarity["task-dedupe-similarity: similarity-partitioned dedupe<br/>files: src/algebra/combination.ts +1 more"]
-    task-ast-nodes["task-ast-nodes: optional resolve threshold AST<br/>files: src/algebra/ast.ts +2 more"]
-    task-detection-options["task-detection-options: cardinality-aware detection<br/>files: src/algebra/contradiction.ts +1 more"]
-    task-compile-wiring["task-compile-wiring: compile node pass-through<br/>files: src/algebra/compile.ts +1 more"]
-    task-derive-stamping["task-derive-stamping: derive-path default stamping<br/>files: src/write/derive.ts +1 more"]
-    task-bench-arma["task-bench-arma: arm A canonical pipeline<br/>files: bench/longmemeval/answer.ts +1 more"]
-    task-bench-harness["task-bench-harness: bench harness config<br/>files: bench/longmemeval/run.ts +1 more"]
-    task-canonical-spec["task-canonical-spec: canonical spec amendments<br/>files: mneme-spec-v0.2-consolidated.md"]
+    task-schema-cardinality["task-schema-cardinality: keyCardinality declaration<br/>files: src/catalog/schema.ts +1 more"]:::done
+    task-dedupe-similarity["task-dedupe-similarity: similarity-partitioned dedupe<br/>files: src/algebra/combination.ts +1 more"]:::done
+    task-ast-nodes["task-ast-nodes: optional resolve threshold AST<br/>files: src/algebra/ast.ts +2 more"]:::done
+    task-detection-options["task-detection-options: cardinality-aware detection<br/>files: src/algebra/contradiction.ts +1 more"]:::done
+    task-compile-wiring["task-compile-wiring: compile node pass-through<br/>files: src/algebra/compile.ts +1 more"]:::done
+    task-derive-stamping["task-derive-stamping: derive-path default stamping<br/>files: src/write/derive.ts +1 more"]:::done
+    task-bench-arma["task-bench-arma: arm A canonical pipeline<br/>files: bench/longmemeval/answer.ts +1 more"]:::done
+    task-bench-harness["task-bench-harness: bench harness config<br/>files: bench/longmemeval/run.ts +1 more"]:::done
+    task-canonical-spec["task-canonical-spec: canonical spec amendments<br/>files: mneme-spec-v0.2-consolidated.md"]:::done
 
     task-schema-cardinality --> task-detection-options
     task-detection-options --> task-compile-wiring
@@ -75,7 +75,7 @@ depends_on: []
 files:
   - src/catalog/schema.ts
   - src/catalog/schema.test.ts
-status: pending
+status: done  # fff0d7c — cardinalityOf(key, map?) + ClaimSchema.keyCardinality; spec+quality approved
 ```
 
 Add the per-key cardinality map to `ClaimSchema` and the single-source-of-truth default
@@ -139,7 +139,7 @@ depends_on: []
 files:
   - src/algebra/combination.ts
   - src/algebra/combination.test.ts
-status: pending
+status: done  # 89abeb2 — SimilarityConfig/DedupeOptions + union-find subPartitions; spec+quality approved
 ```
 
 Opt-in similarity mode on `oplusDedupe` (design §3, audit A1): sub-partition each
@@ -226,7 +226,7 @@ files:
   - src/algebra/ast.ts
   - src/algebra/ast.test.ts
   - src/algebra/serialize.test.ts
-status: pending
+status: done  # 8390a21 + 31e0915 — optional threshold + keyCardinality + similarity nodes; quality "wire-vs-type mismatch" issue OVERRULED as design-mandated (A2/A7 stamping contract), JSDoc note added
 ```
 
 AST shape changes (design §4, audit A2/A5): resolve node `threshold` becomes optional
@@ -292,7 +292,7 @@ depends_on: [task-schema-cardinality]
 files:
   - src/algebra/contradiction.ts
   - src/algebra/contradiction.test.ts
-status: pending
+status: done  # a33266c — DetectionOptions + cardinality filter at grouping time; spec+quality approved
 ```
 
 `clustersOf`/`pairsOf` gain `DetectionOptions` (design §2): keys mapped `"multi"` are
@@ -354,7 +354,7 @@ depends_on: [task-detection-options, task-dedupe-similarity, task-ast-nodes]
 files:
   - src/algebra/compile.ts
   - src/algebra/compile.test.ts
-status: pending
+status: done  # 668c7f6 — compile throws on unstamped resolve; keyCardinality/similarity pass-through; spec+quality approved
 ```
 
 Wire the new node fields through compile (design §4): resolve throws on missing
@@ -415,7 +415,7 @@ depends_on: [task-ast-nodes, task-schema-cardinality]
 files:
   - src/write/derive.ts
   - src/write/derive.test.ts
-status: pending
+status: done  # 92a96d7 + 9b42649 — stampResolveDefaults + replay-fidelity test (AC5 fixup after spec review); spec+quality approved
 ```
 
 The build-time stamping pass (design §4, audit A2): before compile+serialize,
@@ -485,7 +485,7 @@ depends_on: [task-detection-options, task-dedupe-similarity]
 files:
   - bench/longmemeval/answer.ts
   - bench/longmemeval/answer.test.ts
-status: pending
+status: done  # a9495e5 — arm A canonical pipeline (dedupe stage, floor 0, keyCardinality/dedupeCutoff opts); spec+quality approved
 ```
 
 Arm A adopts the canonical composition (design §5): dedupe stage (similarity mode,
@@ -556,7 +556,7 @@ depends_on: [task-bench-arma]
 files:
   - bench/longmemeval/run.ts
   - bench/longmemeval/manual/adversarial-probe.ts
-status: pending
+status: done  # ec57981 — MANUAL_KEY_CARDINALITY + probe updates + probe 7; spec+quality approved. Controller follow-up 51b2c2b updated run.test.ts (duplicate test passed via score side-effect pre-slice; dedupe now absorbs it)
 is_wiring_task: true
 ```
 
@@ -601,7 +601,7 @@ id: task-canonical-spec
 depends_on: [task-compile-wiring, task-derive-stamping]
 files:
   - mneme-spec-v0.2-consolidated.md
-status: pending
+status: done  # 6b9a2da + d1b6e21 + 24e30fd + 4e31bf1 — four ADD amendments; quality round scoped equational laws/streamability to base mode, fixed §3.3 role framing + §4.8 wording; approved
 is_wiring_task: true
 ```
 
