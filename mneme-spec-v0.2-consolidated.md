@@ -485,7 +485,7 @@ CorpusDefaults {
 
 These are *defaults*. An individual query MAY override any of them. The purpose is to factor common settings out of query expressions: without defaults, every query would have to redeclare its decay policy, confidence threshold, and contradiction policy.
 
-**`confidenceThreshold` wiring.** `confidenceThreshold` is the contradiction-detection threshold default on the derive path: resolve operations carrying no explicit threshold are stamped with this value at expression-build time (before serialization), so replayed expressions are deterministic regardless of any subsequent change to the corpus default.
+**`confidenceThreshold` wiring.** This is the read-path wiring of the field's "default confidence floor for queries" role: contradiction-detection expressions (`⊥` within resolve pipelines) carrying no explicit threshold are stamped with this value at expression-build time on the derive path, before serialization, so replayed expressions are deterministic regardless of subsequent changes to the corpus default.
 
 ### 3.4 AccessPolicy
 
@@ -718,7 +718,7 @@ Contradiction detection finds claims that conflict. Unlike the retrieval operato
 2. They have different `value`s.
 3. Both are above the corpus's contradiction confidence threshold.
 
-**Threshold as eligibility dial.** Criterion 3 means `eff(claim) > threshold` — claims at or below the threshold are ineligible to contest and are excluded from cluster formation. The threshold is an ELIGIBILITY dial, not a resolution policy; it controls which claims are considered live enough to matter. The recommended default is `0` (all claims contest), which is the most conservative choice — no pair is silently excluded without explicit configuration. When recency and confidence point in opposite directions, there is no universal resolution; the caller's chosen resolution rule IS the policy, and it is the caller's responsibility to select a rule that matches the domain's semantics.
+**Threshold as eligibility dial.** Criterion 3 means `eff(claim) > threshold` — claims at or below the threshold are ineligible to contest and are excluded from cluster formation. The threshold is an ELIGIBILITY dial, not a resolution policy; it controls which claims are considered live enough to matter. The recommended default is `0` (every claim with nonzero effective confidence contests), which is the most conservative choice — no pair is silently excluded without explicit configuration. When recency and confidence point in opposite directions, there is no universal resolution; the caller's chosen resolution rule IS the policy, and it is the caller's responsibility to select a rule that matches the domain's semantics.
 
 **Multi-valued key exemption.** Keys declared `"multi"` in the schema's `keyCardinality` (§3.2) are excluded from cluster formation entirely. This exemption is applied at grouping time, before pairs or clusters are constructed: triples whose key maps to `"multi"` are never grouped, and distinct values for those keys are never reported as contradictions. This keeps `⊥` well-defined for heterogeneous corpora where some keys accumulate and others assert.
 
@@ -837,6 +837,8 @@ When `⊕_dedupe` is configured with a similarity function and a cutoff, its gro
 When the similarity function or cutoff is omitted, `⊕_dedupe` uses whole-group semantics — all claims sharing the triple are merged — exactly as specified above. The similarity-partitioned mode is a strict extension; omitting its configuration produces the base semantics verbatim.
 
 **Determinism.** Within each similarity cluster, members are processed in lexicographic claim-id order to guarantee a deterministic merge sequence. The representative claim for a merged group carries the value and identity (including `id`) of the member with the latest `valid.from`; when two members share the same `valid.from`, the lexicographically larger `id` breaks the tie. Confidence is combined by the configured combination rule applied in the same lexicographic order.
+
+**Scope of equational laws.** The associativity law ("⊕_dedupe is associative for symmetric rules") and the streamable incremental-evaluation characterization stated above apply to the base whole-group mode only. In similarity-partitioned mode the partition depends on the full input set — single-link clusters form over pairwise similarity across all claims in a triple group — so associativity does not hold: splitting the input and recombining can bridge or miss clusters that would form over the complete group. In addition, each new claim requires pairwise comparison within its triple group (O(n)) with possible cascading cluster merges, so evaluation is not streamable in constant work per claim.
 
 ### 4.10 Layered override — ⊳ `[C]`
 
