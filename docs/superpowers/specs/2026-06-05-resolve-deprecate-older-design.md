@@ -14,7 +14,11 @@
    lexicographically-higher claim id. Probe 5 showed this presents an **arbitrary
    choice as a resolution**. A tie means the ordering criterion *cannot decide*; hiding
    that violates the same honesty principle that forbade `rule_max_confidence` aliasing
-   (§4.9 / E.2).
+   (§4.9 / E.2). Note: the canonical spec does NOT currently pin tie semantics for
+   resolution operators (§4.9's lexicographic tie-break language is exclusive to `⊕`),
+   so this slice is a **specification addition** — pinning previously-unspecified
+   semantics — not a normative behavior change. D.4 (foundational-convention
+   propagation) does not apply; rationale is recorded inline in the §4.8 amendment.
 
 ## Decisions made during brainstorming
 
@@ -25,9 +29,22 @@
 2. **Scope: both read-time pairwise deprecation resolvers.** `resolveDeprecateOlder`
    (new) and `resolveDeprecateLower` (tie-semantics change) get identical tie handling.
    Write-time `accept_and_resolve` rule `deprecate_older` is deferred until pulled.
-3. **Mechanism: internal partition + shared artifact helper** (signatures unchanged,
-   `Corpus → Corpus`). Rejected: `withTiePolicy` combinator (premature abstraction for
-   one consumer); `{corpus, unresolved}` return shape (breaks registry/replay/compile).
+3. **Mechanism: one shared module-private engine** (audit-upgraded from
+   "per-resolver partition"): `deprecatePairwise(pairs, loserOf: (pair:
+   ContradictionPair) => string | "tie") => (corpus: Corpus) => Corpus` owns the
+   partition → deprecate → flag-surviving-ties algorithm (including the interaction
+   rule); each public resolver supplies only its comparator. Public signatures
+   unchanged (`Corpus → Corpus`). Rejected: per-resolver duplicated partitions (two
+   ~25-line clones differing only in comparator — DRY violation, both consumers exist
+   today so the abstraction is not premature); `withTiePolicy` combinator (extra
+   public surface); `{corpus, unresolved}` return shape (breaks
+   registry/replay/compile).
+3a. **Cluster-level tie-breaks are deliberately out of scope.** `resolveDeprecateMinority`
+   / `resolvePromoteConsensus` break cardinality ties by lexicographically-lower
+   valueHash (`findLargestGroup`). That asymmetry is accepted for this slice: cluster
+   resolution aggregates groups (a different decision shape), and extending honest-tie
+   semantics there is its own future discussion — documented so the inconsistency is a
+   known choice, not an oversight.
 4. **Config posture:** tie semantics are fixed in this slice. If a per-corpus
    `tieBehavior` override is ever pulled for, it belongs in `CorpusDefaults`
    (catalog) alongside the §4.9 per-corpus tie-breaker precedent — documented in the
@@ -64,13 +81,21 @@ behavior change; tests asserting the old lexicographic tie-break are updated.
 §4.9's `⊕` combination-rule tie-breaks (claim-id ordering for `rule_max_*`) are NOT
 touched — they are load-bearing for idempotence and associativity of `⊕`.
 
-### 3. Shared artifact helper
+### 3. Shared artifact helper + exported key constant
 
 The artifact-construction block inside `resolveFlagForReview` is extracted into a
-module-private helper and reused by all three call sites (`resolveFlagForReview`, both
-tie paths). Artifact shape unchanged: `subject: "contradiction"`,
-`key: "contradiction.flag"`, conflicting claim ids recorded, id via `newClaimId()`
+module-private helper with the pinned signature
+`flagArtifactFor(pair: ContradictionPair): Claim`, reused by all call sites
+(`resolveFlagForReview` and the engine's tie path). Artifact shape unchanged:
+`subject: "contradiction"`, `key: "contradiction.flag"`, `status: "candidate"`
+(NOTE: not "deprecated" — read paths filtering only on status will still see
+artifacts; filter by key), conflicting claim ids recorded, id via `newClaimId()`
 (existing precedent; replay caveat for artifact ids is pre-existing and unchanged).
+
+The key string is exported as a constant —
+`export const CONTRADICTION_FLAG_KEY = "contradiction.flag"` — and used by
+`resolveFlagForReview`/`flagArtifactFor` and every downstream filter (bench arm A),
+eliminating the magic string.
 
 ### 4. Registry / replay
 
@@ -80,12 +105,14 @@ Compile/replay coverage mirrors the existing resolver entries (same test pattern
 
 ### 5. Spec amendment (mneme-spec-v0.2-consolidated.md §4.8)
 
-- Add `resolve_deprecate_older : Set<ContradictionPair> × Corpus → Corpus` `[C]` with
-  recency semantics.
-- Document unified tie semantics for both pairwise deprecation resolvers: exact tie ⇒
-  keep both + flag artifact; rationale recorded (a tie means the ordering criterion
-  cannot decide; a silent arbitrary pick masquerades as a resolution) so future
-  revisions don't re-litigate (D.4).
+- Add `resolve_deprecate_older : Set<ContradictionPair> × Corpus → Corpus` `[C]`
+  (core tier, consistent with the pairwise resolver family — those are unbadged and
+  therefore implicitly core per §0.2) with recency semantics.
+- Specify unified tie semantics for both pairwise deprecation resolvers: exact tie ⇒
+  keep both + flag artifact. Rationale recorded **inline in §4.8** (a tie means the
+  ordering criterion cannot decide; a silent arbitrary pick masquerades as a
+  resolution). This pins previously-unspecified semantics — a spec addition, not a
+  convention change, so D.4 machinery is not invoked.
 - Note the future per-corpus `tieBehavior` override hook (CorpusDefaults), not
   implemented.
 
@@ -108,18 +135,31 @@ Compile/replay coverage mirrors the existing resolver entries (same test pattern
 
 ## Testing (TDD)
 
-- `resolveDeprecateOlder`: later-wins (pairwise); exact tie → both live + one artifact
-  per tied pair; multi-pair accumulation; 3-way chain (A<B<C ⇒ only C survives);
-  deprecation-beats-tie when the same claim is in a decided and a tied pair.
-- `resolveDeprecateLower`: updated tie tests (tie → both live + artifact, no
-  lexicographic deprecation); non-tie behavior unchanged.
-- `resolveFlagForReview`: behavior unchanged after helper extraction (regression).
-- Registry: `resolutionRegistry("resolveDeprecateOlder")` resolves; replay/compile
-  coverage test in the existing pattern.
-- Bench: answer tie test, probe 5 manual re-run, full `npm test` green.
+- **Test-infra fix first:** `src/algebra/resolution.test.ts`'s `makeClaim` builds
+  `valid: { start: null, end: null }` — wrong Interval field names. Fix to
+  `valid: { from: 0, to: Infinity }` (overridable) so recency tests are real.
+- `resolveDeprecateOlder`: later-wins (pairwise); exact tie → both live + exactly one
+  artifact per tied-surviving pair (property: artifact count == tied pairs whose
+  members both survive); multi-pair accumulation; 3-way chain (A<B<C ⇒ only C
+  survives); deprecation-beats-tie (decided pair deprecates a member of a tied pair ⇒
+  no artifact for that tied pair); input corpus not mutated.
+- `resolveDeprecateLower`: the existing lexicographic tie test
+  (`src/algebra/resolution.test.ts:48–57`, expects "bbb" deprecated on tie) is
+  REWRITTEN to expect both claims live + one artifact; non-tie behavior unchanged.
+- `resolveFlagForReview`: behavior unchanged after helper extraction (regression);
+  uses `CONTRADICTION_FLAG_KEY`.
+- Registry: add the name to `src/algebra/registries.test.ts:4–10`'s validation list;
+  `resolutionRegistry("resolveDeprecateOlder")` resolves; replay/compile coverage test
+  in the existing pattern (`src/algebra/compile.test.ts:496–569` shape).
+- Bench: answer tie test updated; artifact filtered via `CONTRADICTION_FLAG_KEY`;
+  probe 5 manual re-run; full `npm test` green.
 
 ## Explicitly out of scope (deliberately deferred)
 
-- Write-time `accept_and_resolve` rule `deprecate_older` (`keep_newer`) — until pulled.
+- Write-time `accept_and_resolve` rule `deprecate_older` (`keep_newer`) — until
+  pulled. Coupling note: the write path's `enforce()` in `src/write/contradiction.ts`
+  has its OWN policy logic (it does not call the read-time resolvers), so adding the
+  write-time rule later means a new branch there — this slice's read-time change does
+  not leak into commit behavior.
 - Per-corpus `tieBehavior` configuration — documented hook only.
 - Slices 2–4 (detection-floor split, cardinality-aware `⊥`, key-drift similarity).
