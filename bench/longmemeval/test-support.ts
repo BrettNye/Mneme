@@ -48,13 +48,13 @@ export function openTmpSession(): { session: Session; close: () => void } {
 /** Format a Date as a LongMemEval dataset date string: "2023/06/01 (Thu) 10:00" */
 function lmeDate(d: Date): string {
   const pad = (n: number): string => String(n).padStart(2, "0");
-  const year = d.getFullYear();
-  const month = pad(d.getMonth() + 1);
-  const day = pad(d.getDate());
+  const year = d.getUTCFullYear();
+  const month = pad(d.getUTCMonth() + 1);
+  const day = pad(d.getUTCDate());
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
-  const dow = days[d.getDay()];
-  const hour = pad(d.getHours());
-  const min = pad(d.getMinutes());
+  const dow = days[d.getUTCDay()];
+  const hour = pad(d.getUTCHours());
+  const min = pad(d.getUTCMinutes());
   return `${year}/${month}/${day} (${dow}) ${hour}:${min}`;
 }
 
@@ -184,7 +184,7 @@ export function claimTagged(
     valueHash: "deadbeef01234567",
     confidence: { distribution: "scalar", parameters: { p: 0.9 }, raw: 0.9 },
     valid: { from: new Date("2023-01-01T00:00:00Z").getTime(), to: Infinity },
-    recorded: 0,
+    recorded: 0, // epoch 0 — deterministic sentinel; not a real ingestion time
     recordedSeq: 0,
     status: "validated",
     source: "imported",
