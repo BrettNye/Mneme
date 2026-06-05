@@ -54,6 +54,12 @@ Known residue: KU recall@3 gap vs B is the deliberate supersession-vs-evidence-c
 
 The market litigates QA-accuracy headlines under incomparable harnesses. Mneme's defensible wedge is the layer nobody else measures: **deterministic, auditable, LLM-free update resolution at retrieval time** (plus replayable derivation provenance). Sequencing stays per the standing decision: dogfood via MCP on un-curated data first (where the floor/dedupe insurance shipped in PR #20 starts to matter), funded full-haystack benchmark later if/when the leaderboard number is worth $110.
 
+### The epistemic-substrate framing (founder-ratified, 2026-06-05)
+
+LLM **ingestion** is universal across the market — table stakes, not a differentiator. What varies is **where the epistemic decisions get made**: Mem0's LLM issues ADD/UPDATE/DELETE at write time (destructive, on an LLM's judgment); Zep's LLM detects contradictions at write, temporal metadata invalidates; vector RAG resolves nothing and pushes the mess to the answer model; Letta's agent re-judges at every read. **Mneme is alone in doing it with a deterministic, non-destructive, replayable algebra — wrong resolution policy? Re-derive under a different rule; the claims were never destroyed. Mem0 can't un-DELETE what its LLM overwrote six months ago.** This is the reason the system exists.
+
+Sharpened hypothesis for all evaluation work: *given that everyone pays the LLM-ingestion tax, does a deterministic claims algebra beat LLM/vector heuristics for the downstream epistemic operations — at equal or better quality, with auditability and replayability the heuristics structurally cannot offer?* Keep the two value claims separate: accuracy benchmarks can test the first clause; the auditability/replay clause is demonstrated (dogfood, governance/RaState story), never benchmarked — no published metric rewards it.
+
 ## Sources
 
 [LongMemEval paper](https://arxiv.org/abs/2410.10813) · [Zep paper](https://arxiv.org/abs/2501.13956) · [Mem0 paper](https://arxiv.org/abs/2504.19413) · [Mem0 research page](https://mem0.ai/research) · [mem0ai/memory-benchmarks](https://github.com/mem0ai/memory-benchmarks) · [Zep rebuttal](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) · [Mem0 issue vs Zep](https://github.com/getzep/zep-papers/issues/5) · [Letta blog](https://www.letta.com/blog/benchmarking-ai-agent-memory) · [Hindsight paper](https://arxiv.org/abs/2512.12818) · [Hermes Agent memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers)
