@@ -1,5 +1,6 @@
 import {
   categoryOf,
+  endOfUtcDay,
   parseLmeInstant,
   type Category,
   type LmeQuestionT,
@@ -179,7 +180,7 @@ export function scoreQuestion(
       const sid = sessionIdOfClaim(claim);
       if (sid === null) continue;
       const sessMs = dateMap.get(sid);
-      if (sessMs !== undefined && sessMs > questionMs) {
+      if (sessMs !== undefined && sessMs > endOfUtcDay(questionMs)) {
         hasPostdated = true;
       }
       if (evidenceSet.has(sid)) {

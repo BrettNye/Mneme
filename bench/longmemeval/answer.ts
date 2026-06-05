@@ -4,7 +4,7 @@ import { filterCorpus, type Corpus, type RankedCorpus } from "../../src/algebra/
 import type { Session } from "../../src/surface/index.js";
 import type { Claim } from "../../src/core/claim.js";
 import type { LmeQuestionT, AnswerResult } from "./types.js";
-import { parseLmeInstant } from "./types.js";
+import { endOfUtcDay, parseLmeInstant } from "./types.js";
 
 /**
  * conflictThreshold is the confidence floor for ⊥ DETECTION (claims at or below it are
@@ -71,10 +71,7 @@ export function questionInstant(q: LmeQuestionT): number {
  */
 export function evaluationInstant(q: LmeQuestionT): number {
   const dayStart = parseLmeInstant(q.question_date);
-  // Build a Date from the epoch, set time to end of UTC day
-  const d = new Date(dayStart);
-  d.setUTCHours(23, 59, 59, 999);
-  return d.getTime();
+  return endOfUtcDay(dayStart);
 }
 
 /** top-k is bench-local and trivial: ranked.scored.slice(0, k).map(s => s.claim). */

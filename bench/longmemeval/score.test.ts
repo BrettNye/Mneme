@@ -212,6 +212,50 @@ describe("temporalCorrect", () => {
     expect(scoreQuestion(qEarly, r, [1]).temporalCorrect).toBe(false);
   });
 
+  it("is true when claim traces to evidence session LATER THE SAME DAY as question_date", () => {
+    // question_date is 2023/06/15 (Thu) 08:00; session date is same day at 20:00
+    // Under the new end-of-day boundary, same-day later sessions are NOT postdating
+    const q = {
+      question_id: "tr-sameday-001",
+      question_type: "temporal-reasoning",
+      question: "When did the user last change jobs?",
+      question_date: "2023/06/15 (Thu) 08:00",
+      answer: "June 2023",
+      sessions: [
+        {
+          sessionId: "sess-tr-sameday",
+          date: "2023/06/15 (Thu) 20:00",
+          turns: [{ role: "user" as const, content: "Same-day session." }],
+        },
+      ],
+      answer_session_ids: ["sess-tr-sameday"],
+    };
+    const r = armResult("A", [claimTagged("sess-tr-sameday", "0")]);
+    expect(scoreQuestion(q, r, [1]).temporalCorrect).toBe(true);
+  });
+
+  it("is false when claim traces to a session on the NEXT DAY after question_date", () => {
+    // question_date is 2023/06/15 (Thu) 08:00; session date is 2023/06/16 (next day)
+    // Next-day sessions ARE on a later day → still counted as postdating
+    const q = {
+      question_id: "tr-nextday-001",
+      question_type: "temporal-reasoning",
+      question: "When did the user last change jobs?",
+      question_date: "2023/06/15 (Thu) 08:00",
+      answer: "June 2023",
+      sessions: [
+        {
+          sessionId: "sess-tr-nextday",
+          date: "2023/06/16 (Fri) 09:00",
+          turns: [{ role: "user" as const, content: "Next-day session." }],
+        },
+      ],
+      answer_session_ids: ["sess-tr-nextday"],
+    };
+    const r = armResult("A", [claimTagged("sess-tr-nextday", "0")]);
+    expect(scoreQuestion(q, r, [1]).temporalCorrect).toBe(false);
+  });
+
   it("is false when no evidence sessions hit (no right-period evidence)", () => {
     // claim traces to background session, not evidence session
     const q = temporalQuestion({ evidence: ["sess-tr-1"] });

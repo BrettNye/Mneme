@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ClaimRecord, CacheHeader, LmeQuestion, categoryOf, normalizeQuestion, parseLmeInstant } from "./types.js";
+import { ClaimRecord, CacheHeader, LmeQuestion, categoryOf, normalizeQuestion, parseLmeInstant, endOfUtcDay } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // parseLmeInstant
@@ -31,6 +31,30 @@ describe("parseLmeInstant", () => {
   it("throws naming the raw string when result would be NaN", () => {
     const raw = "2023/99/99 25:99";
     expect(() => parseLmeInstant(raw)).toThrow(raw);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// endOfUtcDay
+// ---------------------------------------------------------------------------
+
+describe("endOfUtcDay", () => {
+  it("mid-day input returns 23:59:59.999Z of the same UTC day", () => {
+    const midDay = new Date("2023-05-28T12:30:00Z").getTime();
+    const result = endOfUtcDay(midDay);
+    expect(result).toBe(new Date("2023-05-28T23:59:59.999Z").getTime());
+  });
+
+  it("is idempotent: end-of-day input returns same end-of-day value", () => {
+    const endOfDay = new Date("2023-05-28T23:59:59.999Z").getTime();
+    const result = endOfUtcDay(endOfDay);
+    expect(result).toBe(new Date("2023-05-28T23:59:59.999Z").getTime());
+  });
+
+  it("start-of-day input returns 23:59:59.999Z of the same UTC day", () => {
+    const startOfDay = new Date("2023-06-01T00:00:00.000Z").getTime();
+    const result = endOfUtcDay(startOfDay);
+    expect(result).toBe(new Date("2023-06-01T23:59:59.999Z").getTime());
   });
 });
 

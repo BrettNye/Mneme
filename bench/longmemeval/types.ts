@@ -118,6 +118,19 @@ export function parseLmeInstant(raw: string): number {
   return ms;
 }
 
+/**
+ * Return the epoch ms of the last millisecond of the UTC day containing `ms`
+ * (i.e. 23:59:59.999Z on that calendar day).
+ *
+ * Single source of truth for the end-of-day boundary used by both
+ * evaluationInstant (answer.ts) and temporalCorrect (score.ts).
+ */
+export function endOfUtcDay(ms: number): number {
+  const d = new Date(ms);
+  d.setUTCHours(23, 59, 59, 999);
+  return d.getTime();
+}
+
 export type Category = "knowledge-update" | "temporal-reasoning" | "abstention" | "other";
 
 /**
