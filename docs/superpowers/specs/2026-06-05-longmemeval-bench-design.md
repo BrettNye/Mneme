@@ -92,11 +92,17 @@ isolates what the algebra adds.
   versions of a fact both surface; no temporal filtering; never abstains.
 - **Arm A (algebra):** hand-built `Stage[]` via `session.mneme.query(...)` (the
   documented DSL escape hatch):
-  `leaf → tauKnown(question date) → rho.jaccard(question) → ⊥ detection + resolve
+  `leaf → tauValid(question date) → rho.jaccard(question) → ⊥ detection + resolve
   (deprecate-lower / latest-wins) → top-k`. Superseded claims are resolved away; a
   question whose pipeline yields **no surviving claims** → **abstain**. (Abstention is
   structural; the confidence floor passed to `⊥` detection is a detection parameter,
   not an abstention threshold.)
+
+  *τ_valid, not τ_known:* `τ_known = τ_valid ∩ τ_recorded`, and bench claims are
+  *recorded* at ingest wall-clock while question dates are historical — the
+  `τ_recorded` half would filter every claim. Backdating recorded-time requires a
+  `src/` extension (deferred as its own slice); valid-time alone carries the
+  experiment's temporal semantics for this bench.
 
 Exact stage composition for the `⊥`/resolve step (which `resolve*` operator, where it
 sits relative to ranking) is an implementation-plan detail; the public exports

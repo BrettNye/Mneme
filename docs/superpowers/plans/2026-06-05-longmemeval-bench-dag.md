@@ -5,15 +5,15 @@ created: 2026-06-05
 
 ```mermaid
 flowchart TD
-    task-types["task-types: extraction + scoring contracts<br/>files: bench/longmemeval/types.ts +1 more"]
-    task-test-support["task-test-support: shared test helpers<br/>files: bench/longmemeval/test-support.ts +1 more"]
-    task-convert["task-convert: LLM extraction converter<br/>files: bench/convert/longmemeval.ts +1 more"]
-    task-fixtures["task-fixtures: committed 3-question fixtures<br/>files: bench/longmemeval/fixtures/dataset.json +2 more"]
-    task-score["task-score: deterministic metrics<br/>files: bench/longmemeval/score.ts +1 more"]
-    task-answer["task-answer: arm A / arm B pipelines<br/>files: bench/longmemeval/answer.ts +1 more"]
-    task-ingest["task-ingest: claims to corpus-per-question<br/>files: bench/longmemeval/ingest.ts +1 more"]
-    task-runner["task-runner: CLI runner + e2e fixture test<br/>files: bench/longmemeval/run.ts +1 more"]
-    task-wiring["task-wiring: npm scripts + RESULTS.md docs<br/>files: package.json +1 more"]
+    task-types["task-types: extraction + scoring contracts<br/>files: bench/longmemeval/types.ts +1 more"]:::done
+    task-test-support["task-test-support: shared test helpers<br/>files: bench/longmemeval/test-support.ts +1 more"]:::done
+    task-convert["task-convert: LLM extraction converter<br/>files: bench/convert/longmemeval.ts +1 more"]:::done
+    task-fixtures["task-fixtures: committed 3-question fixtures<br/>files: bench/longmemeval/fixtures/dataset.json +2 more"]:::done
+    task-score["task-score: deterministic metrics<br/>files: bench/longmemeval/score.ts +1 more"]:::done
+    task-answer["task-answer: arm A / arm B pipelines<br/>files: bench/longmemeval/answer.ts +1 more"]:::done
+    task-ingest["task-ingest: claims to corpus-per-question<br/>files: bench/longmemeval/ingest.ts +1 more"]:::done
+    task-runner["task-runner: CLI runner + e2e fixture test<br/>files: bench/longmemeval/run.ts +1 more"]:::done
+    task-wiring["task-wiring: npm scripts + RESULTS.md docs<br/>files: package.json +1 more"]:::done
 
     task-types --> task-test-support
     task-types --> task-convert
@@ -71,7 +71,7 @@ depends_on: []
 files:
   - bench/longmemeval/types.ts
   - bench/longmemeval/types.test.ts
-status: pending
+status: done
 ```
 
 Single contracts module every other task imports: zod schemas for the normalized
@@ -176,7 +176,7 @@ files:
   - bench/longmemeval/fixtures/dataset.json
   - bench/longmemeval/fixtures/claims.jsonl
   - bench/longmemeval/fixtures/fixtures.test.ts
-status: pending
+status: done
 ```
 
 Tiny hand-written dataset committed to the repo so the full pipeline runs in CI with
@@ -238,7 +238,7 @@ depends_on: [task-types]
 files:
   - bench/longmemeval/test-support.ts
   - bench/longmemeval/test-support.test.ts
-status: pending
+status: done
 ```
 
 Single owner for the helpers the score/answer/ingest/runner test suites all need —
@@ -316,7 +316,7 @@ depends_on: [task-types]
 files:
   - bench/convert/longmemeval.ts
   - bench/convert/longmemeval.test.ts
-status: pending
+status: done
 ```
 
 Sessions → claims JSONL, LLM at the edge only. Core is pure and takes an injected
@@ -400,7 +400,7 @@ depends_on: [task-types, task-test-support]
 files:
   - bench/longmemeval/score.ts
   - bench/longmemeval/score.test.ts
-status: pending
+status: done
 ```
 
 Pure functions from `(question, AnswerResult)` to per-question scores, plus the
@@ -463,7 +463,7 @@ depends_on: [task-types, task-fixtures, task-test-support]
 files:
   - bench/longmemeval/ingest.ts
   - bench/longmemeval/ingest.test.ts
-status: pending
+status: done
 ```
 
 Extracted claims → one corpus per question via `Session.writeMany`, under
@@ -529,13 +529,14 @@ depends_on: [task-types, task-test-support]
 files:
   - bench/longmemeval/answer.ts
   - bench/longmemeval/answer.test.ts
-status: pending
+status: done
 ```
 
 The experiment's two read paths, both hand-built `Stage[]` through
 `session.mneme.query`. Arm B is the vanilla-memory baseline (recall only — the stage
 form of the DSL's `rank jaccard`, avoiding its quote-interpolation hazard); arm A adds
-`τ_known` + read-time contradiction resolution on top of the same recall. Includes the bench-local
+`τ_valid` (see pipeline comment for why not `τ_known`) + read-time contradiction
+resolution on top of the same recall. Includes the bench-local
 `resolveDeprecateOlder` (latest-wins by `valid.from`, ties by lexicographic id —
 same `ContradictionPair[] → Corpus` shape as its `src/algebra/resolution.ts`
 siblings; candidate to upstream as its own spec'd slice).
@@ -584,12 +585,18 @@ export function answerArmB(session: Session, corpusId: string, q: LmeQuestionT, 
   return { arm: "B", claims: takeTopK(ranked, opts.k), abstained: false };
 }
 
-/** Arm A: τ_known(question date) → ⊥ detect → latest-wins resolve → drop deprecated → rank → top-k. */
+/**
+ * Arm A: τ_valid(question date) → ⊥ detect → latest-wins resolve → drop deprecated → rank → top-k.
+ * τ_valid, NOT τ_known: τ_known = τ_valid ∩ τ_recorded, and bench claims are recorded at
+ * ingest wall-clock (now) while question dates are historical — τ_recorded(question date)
+ * would filter every claim. WriteRecord cannot backdate recorded-time without a src/ change
+ * (deferred as its own slice); valid-time alone carries the experiment's temporal semantics.
+ */
 export function answerArmA(session: Session, corpusId: string, q: LmeQuestionT, opts: AnswerOpts): AnswerResult {
   const t = questionInstant(q);
   const stages = pipe(
     leaf(corpusId),
-    tau.known(t),
+    tau.valid(t),
     (c: Corpus) => resolveDeprecateOlder(pairsOf(c, opts.conflictThreshold ?? 0.5))(c),
     (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated"),
     rho.jaccard(q.question),
@@ -617,7 +624,7 @@ it("arm A resolves a superseding pair to the later value; arm B returns both", (
 ## Acceptance criteria
 
 - Superseding pair (same subject/key, different value, different `valid.from`): arm A's results contain only the later value; arm B's contain both.
-- `τ_known`: a claim with `valid.from` after the question date is excluded by arm A and returned by arm B.
+- `τ_valid`: a claim with `valid.from` after the question date is excluded by arm A and returned by arm B. (τ_known is deliberately NOT used — recorded-time of bench claims is ingest wall-clock; see Implementation comment.)
 - Abstention: arm A returns `abstained: true` when no claim survives the pipeline; arm B always returns `abstained: false`.
 - `resolveDeprecateOlder` deprecates the earlier-`valid.from` claim of each pair and breaks `valid.from` ties by deprecating the lexicographically-higher id (mirroring `resolveDeprecateLower`'s tie rule).
 - Both arms return claims with provenance tags intact (scoring depends on it).
@@ -634,7 +641,7 @@ depends_on: [task-ingest, task-answer, task-score, task-fixtures]
 files:
   - bench/longmemeval/run.ts
   - bench/longmemeval/run.test.ts
-status: pending
+status: done
 ```
 
 Orchestrates the deterministic path end-to-end, `bench/dataset.ts`-style: load dataset
@@ -705,7 +712,7 @@ depends_on: [task-runner, task-convert]
 files:
   - package.json
   - bench/RESULTS.md
-status: pending
+status: done
 is_wiring_task: true
 ```
 
