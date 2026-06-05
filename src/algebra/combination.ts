@@ -5,6 +5,18 @@ import { bindingFor } from "../distribution/registry.js";
 import { assertSupportsRule } from "../distribution/protocol.js";
 import { assertNotDeprecatedRule, RULE } from "../distribution/rules.js";
 import { SOURCE_WEIGHT } from "../core/source-trust.js";
+import { similarityFn } from "./similarity.js";
+
+/** Shared similarity-config shape — single owner; ast.ts type-imports this (DRY). */
+export interface SimilarityConfig {
+  fn: string;
+  cutoff: number;
+}
+
+export interface DedupeOptions {
+  /** Sub-partition each (subject, key, scopeHash) group by value similarity before merging. */
+  similarity?: SimilarityConfig;
+}
 
 /**
  * Fold a group's claims through the pairwise combine(). For weighted_avg, thread the accumulated
@@ -12,9 +24,19 @@ import { SOURCE_WEIGHT } from "../core/source-trust.js";
  * claim id so the first-arg-wins tie-break is lexicographic; evidence_pooled folds exactly.
  */
 export const oplusDedupe =
-  (ruleId: string, params?: unknown) =>
+  (ruleId: string, params?: unknown, opts?: DedupeOptions) =>
   (c: Corpus): Corpus => {
     assertNotDeprecatedRule(ruleId);
+
+    // Validate similarity config eagerly (before any grouping work)
+    if (opts?.similarity) {
+      const { fn, cutoff } = opts.similarity;
+      // This throws /no similarity fn/ if unregistered
+      similarityFn(fn);
+      if (cutoff < 0 || cutoff > 1) {
+        throw new Error(`similarity cutoff ${cutoff} is outside [0, 1]`);
+      }
+    }
 
     // Group claims by (subject, key, scopeHash)
     const groups = partitionBy(c.claims as Claim[], (cl) =>
@@ -23,10 +45,85 @@ export const oplusDedupe =
 
     const out: Claim[] = [];
     for (const group of groups.values()) {
-      out.push(combineGroup(ruleId, group, params));
+      for (const part of subPartitions(group, opts)) {
+        out.push(combineGroup(ruleId, part, params));
+      }
     }
     return corpusOf(out);
   };
+
+/**
+ * No similarity configured → [group] (today's behavior, untouched).
+ * Similarity mode: single-link clusters (transitive closure over pairwise
+ * fn.scoreOne(a.value, b.value) >= cutoff — note >=, boundary scores merge).
+ * BOTH sorts happen INSIDE this function (callers pass groups as-is):
+ *   1. sort group by id ASC before clustering → deterministic under input reordering;
+ *   2. sort each resulting cluster by valid.from DESC (id ASC tie-break) before
+ *      returning, so combineGroup's fold rules (weighted_avg, evidence_pooled,
+ *      dempster) take the LATEST member as the base/representative ("keep richest"
+ *      pinned rule), while max rules still return their true winner (combineGroup
+ *      semantics untouched — its own needsSort re-sorts; no chimera claims).
+ * Throws: unregistered fn (via similarityFn), cutoff outside [0, 1].
+ */
+function subPartitions(group: Claim[], opts?: DedupeOptions): Claim[][] {
+  if (!opts?.similarity) {
+    return [group];
+  }
+
+  const { fn: fnName, cutoff } = opts.similarity;
+  const simFn = similarityFn(fnName);
+
+  // 1. Sort by id ASC for determinism
+  const sorted = [...group].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  const n = sorted.length;
+  // Union-Find for single-link clustering
+  const parent = Array.from({ length: n }, (_, i) => i);
+
+  function find(i: number): number {
+    if (parent[i] !== i) parent[i] = find(parent[i]);
+    return parent[i];
+  }
+
+  function union(i: number, j: number): void {
+    const pi = find(i);
+    const pj = find(j);
+    if (pi !== pj) parent[pi] = pj;
+  }
+
+  // Pairwise similarity check — single-link: any edge merges two components
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const score = simFn.scoreOne(sorted[i].value, sorted[j].value);
+      if (score >= cutoff) {
+        union(i, j);
+      }
+    }
+  }
+
+  // Collect clusters by root
+  const clusterMap = new Map<number, Claim[]>();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    if (!clusterMap.has(root)) clusterMap.set(root, []);
+    clusterMap.get(root)!.push(sorted[i]);
+  }
+
+  // 2. Sort each cluster by valid.from DESC (id ASC tie-break)
+  //    so sorted[0] in the cluster is the latest-valid.from representative
+  const result: Claim[][] = [];
+  for (const cluster of clusterMap.values()) {
+    cluster.sort((a, b) => {
+      const af = (a as any).valid?.from ?? 0;
+      const bf = (b as any).valid?.from ?? 0;
+      if (bf !== af) return bf - af; // DESC by valid.from
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; // ASC by id as tie-break
+    });
+    result.push(cluster);
+  }
+
+  return result;
+}
 
 /**
  * Returns an UNPERSISTED synthesized Claim: confidence from the rule, evidence = union of inputs',
