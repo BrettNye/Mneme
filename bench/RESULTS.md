@@ -21,6 +21,62 @@ npx tsx bench/convert/conceptnet.ts bench/datasets/cn_subset.tsv bench/datasets/
 npx tsx bench/dataset.ts --name conceptnet --file bench/datasets/cn.jsonl --as conceptnet
 ```
 
+### LongMemEval
+
+LongMemEval is a benchmark for long-context memory in dialogue systems. It requires
+a one-time LLM extraction step (network, cached, resumable) to convert raw sessions
+into a claims JSONL, after which all evaluation runs are deterministic and network-free.
+
+**Step 1: Download the dataset (one-time)**
+
+The dataset lives in the HuggingFace dataset repo `xiaowu0162/longmemeval`. Download
+`longmemeval_s.json` (the standard split) and optionally `longmemeval_oracle.json`
+(oracle/attribution variant) into `bench/datasets/longmemeval/` (gitignored):
+
+```bash
+# Requires huggingface-cli (pip install huggingface_hub)
+huggingface-cli download xiaowu0162/longmemeval longmemeval_s.json --repo-type dataset --local-dir bench/datasets/longmemeval
+
+# Optional oracle variant (used with --oracle flag)
+huggingface-cli download xiaowu0162/longmemeval longmemeval_oracle.json --repo-type dataset --local-dir bench/datasets/longmemeval
+```
+
+Note: verify exact filenames against https://huggingface.co/datasets/xiaowu0162/longmemeval
+if the above fail — the HF repo may rename files between dataset versions.
+
+**Step 2: Extract claims (one-time, LLM-assisted, resumable)**
+
+Requires `ANTHROPIC_API_KEY` in your environment. Runs `claude-sonnet-4-6` over
+each session to extract structured claims. Caches results in the output JSONL
+so interrupted runs resume where they left off:
+
+```bash
+ANTHROPIC_API_KEY=sk-... npm run eval:lme:extract
+```
+
+**Step 3: Run the benchmark (deterministic)**
+
+```bash
+npm run eval:lme
+```
+
+Prints a Markdown aggregate table and `checks N/M`. Exits nonzero on any check failure.
+
+**Network-free CI smoke test (fixture dataset)**
+
+Uses the committed fixture dataset and pre-extracted claims in `bench/longmemeval/fixtures/`.
+No network access, no external files:
+
+```bash
+npm run eval:lme:fixture
+```
+
+**Flags**
+
+- `--oracle`: resolve questions using oracle attribution. Requires re-extracting claims from `longmemeval_oracle.json` (download step 1) and passing that file as `--file` and the resulting claims as `--claims` — the `eval:lme` npm script targets the standard split only.
+- `--k 1,3,10`: comma-separated recall depth values (default `1,3,10`).
+- `--raw`: skip strict JSON schema validation on dataset (useful for non-standard splits).
+
 Every run asserts integrity invariants and reports `checks N/M`. A run that
 fails an invariant exits nonzero.
 
@@ -92,3 +148,78 @@ facts under a contradiction policy, put the event date in `scope`.
 Caveat: this is the alphabetically-early **head** of the sorted dump (language- and
 relation-skewed), streamed to cap the download — not a representative sample.
 Faster than synthetic because identities are near-unique (little contradiction work).
+
+## LongMemEval A/B findings (2026-06-05)
+
+The LongMemEval suite tests the core hypothesis: **claims with superseding/temporal
+structure are retrieved more correctly through the algebra read path (arm A: recall +
+`⊥`/resolve + τ_valid) than through plain similarity recall (arm B)**. Both arms share
+identical lexical recall, so every delta is attributable to the algebra stages.
+
+### Designed-separation check (committed fixtures, CI)
+
+`npm run eval:lme:fixture` - on the 3-question fixture set, arm A scores 1.0 and arm B
+0.0 on updateCorrect / temporalCorrect / abstentionCorrect. This validates the
+instrument (each metric detects the failure mode it claims to), not the hypothesis.
+
+### Real-data sample (manual extraction, 20 questions)
+
+Methodology: claims were extracted **manually** (Claude Code session agents reading the
+real session transcripts; no API spend) for 10 knowledge-update + 5 temporal + 5
+abstention oracle questions; KU questions were enriched with 2 distractor sessions each
+from the `_s` haystacks. 188 claims, 60/60 integrity checks. Scripts:
+`bench/longmemeval/manual/build-manual-sample.ts` + `assemble-manual-claims.ts`.
+Caveats: small N; extraction agents were explicitly instructed to normalize keys
+(favorable conditions); several sampled distractor sessions were empty.
+
+| category (n) | metric | arm A | arm B |
+|---|---|---|---|
+| knowledge-update (10) | **updateCorrect** | **0.9** | **0.1** |
+| knowledge-update (10) | recall@1 / @3 / @10 | 0.5 / 0.9 / 1.0 | 0.5 / 1.0 / 1.0 |
+| temporal-reasoning (5) | temporalCorrect | 1.0 | 1.0 |
+| abstention (5) | abstentionCorrect | 0.0 | 0.0 |
+
+1. **Knowledge-update is the headline: 0.9 vs 0.1.** On real conversational
+   supersession, plain recall surfaced the stale fact on top in 9/10 questions; the
+   algebra resolved 9/10 correctly, at a cost of only 0.1 recall@3 (the deliberately
+   suppressed superseded claims).
+2. **Temporal is non-discriminating in oracle mode** (evidence-only sessions leave
+   nothing for τ_valid to exclude). Differentiation requires the full `_s` haystacks.
+   Calibration finding along the way: LongMemEval `question_date` has same-day
+   granularity (evidence sessions are often timestamped hours *after* the question),
+   so both the evaluation clock and the temporalCorrect metric use **end of the
+   question's UTC day** (`evaluationInstant` / `endOfUtcDay`); naive instant-precision
+   clocks collapse arm A's recall to ~0.17.
+3. **Abstention is an honest negative: 0.0 for both arms.** The `_abs` questions ask
+   about absent entities amid topically-adjacent sessions; lexical overlap always lets
+   *something* survive the pipeline, so structural ("nothing survived") abstention
+   never fires. Abstention needs a relevance/confidence threshold - a recall-surface
+   design input, not a bench artifact.
+
+### Adversarial probes (`bench/longmemeval/manual/adversarial-probe.ts`)
+
+Six hand-built cases designed to make arm A lose:
+
+| case | verdict |
+|---|---|
+| additive facts, same key (hobbies) | LOSS - `⊥`'s value-difference criterion wrongly deprecates the older true fact; needs schema-declared key cardinality |
+| supersede-then-revert | WIN - latest-wins handles cycles |
+| paraphrase values (NYC vs New York City) | benign outcome, wrong reason - audit trail records a phantom contradiction |
+| contradiction split across keys (home_city vs city) | BLIND - `⊥` only fires on exact subject+key; the algebra's advantage is gated on extraction-time key normalization |
+| timestamp tie, conflicting values | arbitrary (deterministic lexicographic winner) - should flag-for-review |
+| fresh low-confidence update vs stale confident fact | BLIND - the 0.5 detection floor hides the contesting claim; detection and resolution arguably need separate confidence semantics |
+
+Each weakness maps to a candidate library slice: cardinality-aware `⊥`,
+similarity-tolerant key matching, tie -> flag-for-review, split detection-floor vs
+resolution-weighting.
+
+### Extraction-cost incident (2026-06-05)
+
+A bulk API extraction run failed with zero usable output (~$20 consumed): responses
+were valid but `JSON.parse` on bare response text failed universally, and each
+deterministic failure was retried at full cost while errors were swallowed. Fixes now
+in place: structured outputs (`output_config.format`) in `realLlm`, 4-layer lenient
+`parseLlmClaims`, retry cap on deterministic failures, fail-fast on 400/401/403 with
+the API message, per-reason skip accounting. **Protocol: always run
+`bench/longmemeval/manual/smoke-one-call.ts` (~1 cent, prints an explicit VERDICT)
+before any bulk extraction run.**
