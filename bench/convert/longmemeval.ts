@@ -14,6 +14,7 @@ import {
   type LmeQuestionT,
   CacheHeader,
 } from "../longmemeval/types.js";
+import { readFileSync as _readFileSync, truncateSync as _truncateSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -217,6 +218,131 @@ export async function extractClaims(
 }
 
 // ---------------------------------------------------------------------------
+// File-cache utilities (exported for testing)
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate a JSONL header line against the pinned model/promptVersion constants.
+ *
+ * Throws a descriptive Error naming both the existing value and the expected
+ * constant if either field mismatches, so the operator knows what changed.
+ * Also throws if the line is not valid JSON or not a well-formed cache header.
+ */
+export function validateCacheHeader(headerLine: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(headerLine);
+  } catch {
+    throw new Error(
+      `Cache header line is not valid JSON: ${headerLine}`,
+    );
+  }
+
+  const result = CacheHeader.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(
+      `Cache header line does not match expected shape: ${headerLine}`,
+    );
+  }
+
+  const header = result.data;
+  if (header.model !== EXTRACTION_MODEL || header.promptVersion !== PROMPT_VERSION) {
+    throw new Error(
+      `Cache header mismatch. ` +
+        `Existing: model=${header.model}, promptVersion=${header.promptVersion}. ` +
+        `Expected: model=${EXTRACTION_MODEL}, promptVersion=${PROMPT_VERSION}. ` +
+        "Delete the cache file or update the constants.",
+    );
+  }
+}
+
+/**
+ * Load a file-backed extraction cache.
+ *
+ * - Validates the header line via `validateCacheHeader` (throws on mismatch).
+ * - Scans subsequent lines to build the set of already-extracted session IDs.
+ * - If the last line is not valid JSON (torn write), truncates the file back to
+ *   the last complete valid line so the partial session will be re-extracted.
+ *
+ * Returns `{ extractedSessions }`: the set of sessionIds that are complete.
+ */
+export function loadFileCache(filePath: string): { extractedSessions: Set<string> } {
+  return _loadFileCacheWithFs(filePath, _readFileSync, _truncateSync);
+}
+
+/**
+ * Testable core of loadFileCache: inject fs operations so tests can use the
+ * real filesystem without relying on `require` being available in all runtimes.
+ * @internal exported for testing only
+ */
+export function _loadFileCacheWithFs(
+  filePath: string,
+  readFileSync: (path: string, enc: "utf8") => string,
+  truncateSync: (path: string, len: number) => void,
+): { extractedSessions: Set<string> } {
+  const content = readFileSync(filePath, "utf8");
+  const lines = content.split("\n");
+
+  // Validate header (throws on mismatch)
+  const headerLine = lines[0] ?? "";
+  validateCacheHeader(headerLine);
+
+  const extractedSessions = new Set<string>();
+  const encoder = new TextEncoder();
+
+  // Track byte position incrementally through the file.
+  // We need the byte length of each line + its trailing "\n" separator.
+  // The file was written as lines joined with "\n" — content.split("\n")
+  // preserves the original order; we reconstruct byte positions by summing
+  // encoded lengths + 1 (for the "\n") for every line up to (but not
+  // including) the current one.
+  let currentByteStart = 0;
+  // After the header line, advance past header + newline
+  const headerBytes = encoder.encode(lines[0]).length + 1;
+  let lastValidByteEnd = headerBytes - 1; // byte index of end of header line content
+
+  currentByteStart = headerBytes;
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    const lineBytes = encoder.encode(line).length;
+
+    // Skip blank lines (trailing newline at end of file produces an empty line)
+    if (!line.trim()) {
+      currentByteStart += lineBytes + 1;
+      continue;
+    }
+
+    let parsedOk = false;
+    try {
+      const parsed = JSON.parse(line) as { tags?: string[] };
+      parsedOk = true;
+      if (parsed.tags) {
+        for (const tag of parsed.tags) {
+          if (tag.startsWith("session:")) {
+            extractedSessions.add(tag.slice("session:".length));
+          }
+        }
+      }
+    } catch {
+      // Torn write: this line is not valid JSON.
+      // Truncate file to end of last valid line + newline.
+      truncateSync(filePath, lastValidByteEnd + 1);
+      break;
+    }
+
+    if (parsedOk) {
+      // Advance lastValidByteEnd to the end of this line's content
+      lastValidByteEnd = currentByteStart + lineBytes - 1;
+    }
+
+    currentByteStart += lineBytes + 1;
+  }
+
+  return { extractedSessions };
+}
+
+// ---------------------------------------------------------------------------
 // CLI shell — only place that touches fs / fetch / env
 // ---------------------------------------------------------------------------
 
@@ -299,71 +425,16 @@ async function runCli(): Promise<void> {
   const isResume = existsSync(outPath);
 
   // Build file-backed cache
-  const extractedSessions = new Set<string>();
+  let extractedSessions = new Set<string>();
 
   if (isResume) {
-    // Validate header line
-    const content = readFileSync(outPath, "utf8");
-    const lines = content.split("\n");
-    const headerLine = lines[0];
-
-    let header: { model: string; promptVersion: string };
+    // Validate header and load extracted session set, recovering from torn writes.
+    // validateCacheHeader (called inside _loadFileCacheWithFs) will process.exit if header mismatches.
     try {
-      const parsed = CacheHeader.parse(JSON.parse(headerLine));
-      header = parsed;
-    } catch {
-      console.error(
-        `Cache file ${outPath} has invalid or missing header. ` +
-          "Delete it to start fresh.",
-      );
+      ({ extractedSessions } = _loadFileCacheWithFs(outPath, readFileSync, truncateSync));
+    } catch (err) {
+      console.error(`Cache resume failed: ${(err as Error).message}`);
       process.exit(1);
-    }
-
-    if (header.model !== EXTRACTION_MODEL || header.promptVersion !== PROMPT_VERSION) {
-      console.error(
-        `Cache header mismatch. ` +
-          `Existing: model=${header.model}, promptVersion=${header.promptVersion}. ` +
-          `Current: model=${EXTRACTION_MODEL}, promptVersion=${PROMPT_VERSION}. ` +
-          "Delete the cache file or update the constants.",
-      );
-      process.exit(1);
-    }
-
-    // Find byte offset of last valid line and handle torn writes
-    const encoder = new TextEncoder();
-    let byteOffset = 0;
-    let lastValidByteOffset = 0;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line.trim()) {
-        byteOffset += encoder.encode(line).length + 1; // +1 for \n
-        continue;
-      }
-
-      // Check if this line is valid JSON
-      try {
-        JSON.parse(line);
-        lastValidByteOffset = byteOffset + encoder.encode(line).length;
-        // Index session tags for resume
-        const parsed = JSON.parse(line) as { tags?: string[] };
-        if (parsed.tags) {
-          for (const tag of parsed.tags) {
-            if (tag.startsWith("session:")) {
-              extractedSessions.add(tag.slice("session:".length));
-            }
-          }
-        }
-      } catch {
-        // Torn write: this line is invalid JSON
-        // Truncate to last valid byte offset + newline
-        console.warn(
-          `Truncating torn write at line ${i + 1}. Re-extracting that session.`,
-        );
-        truncateSync(outPath, lastValidByteOffset + 1);
-        break;
-      }
-      byteOffset += encoder.encode(line).length + 1;
     }
   } else {
     // Fresh run: write header

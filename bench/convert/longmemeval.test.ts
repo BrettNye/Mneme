@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { extractClaims, buildPrompt, EXTRACTION_MODEL, PROMPT_VERSION } from "./longmemeval.js";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { extractClaims, buildPrompt, EXTRACTION_MODEL, PROMPT_VERSION, validateCacheHeader, loadFileCache } from "./longmemeval.js";
 import type { LmeQuestionT } from "../longmemeval/types.js";
 import { ClaimRecord } from "../longmemeval/types.js";
 
@@ -385,5 +388,144 @@ describe("exported constants", () => {
   it("PROMPT_VERSION is a non-empty string", () => {
     expect(typeof PROMPT_VERSION).toBe("string");
     expect(PROMPT_VERSION.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Header pinning: validateCacheHeader
+// ---------------------------------------------------------------------------
+
+describe("validateCacheHeader", () => {
+  function makeHeaderLine(model: string, promptVersion: string): string {
+    return JSON.stringify({ kind: "lme-extraction-header", model, promptVersion });
+  }
+
+  it("accepts a header that matches the pinned constants", () => {
+    const line = makeHeaderLine(EXTRACTION_MODEL, PROMPT_VERSION);
+    // Should not throw
+    expect(() => validateCacheHeader(line)).not.toThrow();
+  });
+
+  it("throws (and names both values) when model differs from EXTRACTION_MODEL", () => {
+    const wrongModel = "some-other-model";
+    const line = makeHeaderLine(wrongModel, PROMPT_VERSION);
+    expect(() => validateCacheHeader(line)).toThrowError(
+      new RegExp(`${wrongModel}.*${EXTRACTION_MODEL}|${EXTRACTION_MODEL}.*${wrongModel}`, "s"),
+    );
+  });
+
+  it("throws (and names both values) when promptVersion differs from PROMPT_VERSION", () => {
+    const wrongVersion = "lme-extract-v99";
+    const line = makeHeaderLine(EXTRACTION_MODEL, wrongVersion);
+    expect(() => validateCacheHeader(line)).toThrowError(
+      new RegExp(`${wrongVersion}.*${PROMPT_VERSION}|${PROMPT_VERSION}.*${wrongVersion}`, "s"),
+    );
+  });
+
+  it("throws when the header line is not valid JSON", () => {
+    expect(() => validateCacheHeader("{not json")).toThrow();
+  });
+
+  it("throws when the header is valid JSON but not a cache header shape", () => {
+    expect(() => validateCacheHeader(JSON.stringify({ foo: "bar" }))).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Torn-write recovery: loadFileCache
+// ---------------------------------------------------------------------------
+
+describe("loadFileCache", () => {
+  /** Build a real temp JSONL file and return its path */
+  function makeTempCache(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "lme-test-"));
+    const filePath = join(dir, "cache.jsonl");
+    writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+    return filePath;
+  }
+
+  function headerLine(): string {
+    return JSON.stringify({ kind: "lme-extraction-header", model: EXTRACTION_MODEL, promptVersion: PROMPT_VERSION });
+  }
+
+  function claimLine(sessionId: string): string {
+    return JSON.stringify({
+      subject: "user",
+      key: "city",
+      value: "Berlin",
+      validFrom: Date.parse("2024-03-15"),
+      tags: [`session:${sessionId}`, "turn:0"],
+    });
+  }
+
+  it("returns the set of extracted sessionIds from a clean cache", () => {
+    const filePath = makeTempCache([headerLine(), claimLine("sess-A")]);
+    const { extractedSessions } = loadFileCache(filePath);
+    expect(extractedSessions.has("sess-A")).toBe(true);
+  });
+
+  it("returns empty set when only the header line is present", () => {
+    const filePath = makeTempCache([headerLine()]);
+    const { extractedSessions } = loadFileCache(filePath);
+    expect(extractedSessions.size).toBe(0);
+  });
+
+  it("truncates the file when the last line is a torn write (invalid JSON)", () => {
+    const filePath = makeTempCache([
+      headerLine(),
+      claimLine("sess-A"),
+      '{"subject":"user","key":"city","value":"Berlin","validFrom":17', // truncated
+    ]);
+
+    const { extractedSessions } = loadFileCache(filePath);
+
+    // sess-A is complete — it must be in the set
+    expect(extractedSessions.has("sess-A")).toBe(true);
+
+    // The file must now end at the last valid line (no partial JSON)
+    const content = readFileSync(filePath, "utf8");
+    const lines = content.split("\n").filter((l) => l.trim().length > 0);
+    // Only header + sess-A line should remain
+    expect(lines).toHaveLength(2);
+    // Every line must be parseable JSON
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+  });
+
+  it("does NOT include the torn session in extractedSessions (so it will be re-extracted)", () => {
+    const filePath = makeTempCache([
+      headerLine(),
+      claimLine("sess-A"),
+      '{"subject":"user","key":"city","value":"Berlin","validFrom":17', // torn sess-B write
+    ]);
+
+    const { extractedSessions } = loadFileCache(filePath);
+
+    // sess-A is done; torn sess-B is not in the set
+    expect(extractedSessions.has("sess-A")).toBe(true);
+    // sess-B was never completed, so it should NOT appear
+    // (in practice the torn line had no session tag extracted, so the set size is 1)
+    expect(extractedSessions.size).toBe(1);
+  });
+
+  it("works when there are multiple valid claim lines before the torn write", () => {
+    const filePath = makeTempCache([
+      headerLine(),
+      claimLine("sess-A"),
+      claimLine("sess-B"),
+      '{"partial":true', // torn
+    ]);
+
+    const { extractedSessions } = loadFileCache(filePath);
+
+    expect(extractedSessions.has("sess-A")).toBe(true);
+    expect(extractedSessions.has("sess-B")).toBe(true);
+    expect(extractedSessions.size).toBe(2);
+
+    // File should be truncated to just header + 2 valid lines
+    const content = readFileSync(filePath, "utf8");
+    const lines = content.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(3);
   });
 });
