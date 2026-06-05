@@ -66,7 +66,11 @@ helper with unchanged behavior. Public signatures stay `(pairs) => (corpus) => C
 // src/algebra/resolution.ts (reshaped — load-bearing shapes)
 export const CONTRADICTION_FLAG_KEY = "contradiction.flag";
 
-/** Extracted from resolveFlagForReview; one artifact per pair, status "candidate". */
+/**
+ * Extracted from resolveFlagForReview; one artifact per pair, status "candidate".
+ * NOTE: carry over the existing `as any` casts on branded Claim fields (profile,
+ * workspace, subject, key, scope, valid) from the current implementation (lines 74-99).
+ */
 const flagArtifactFor = (p: ContradictionPair): Claim => { /* … key: CONTRADICTION_FLAG_KEY … */ };
 
 /**
@@ -124,12 +128,21 @@ it("resolveDeprecateLower with tie keeps both claims and adds one flag artifact"
   expect(statuses).toEqual(["validated", "validated"]); // neither deprecated
   expect(out.claims.filter((c) => c.key === CONTRADICTION_FLAG_KEY)).toHaveLength(1);
 });
+
+// Property anchor: artifact count == tied pairs whose members both survive.
+it("emits artifacts only for tied-surviving pairs across a mixed pair set", () => {
+  // 4 pairs: (A,B) decided; (C,D) decided; (E,F) tied (both survive) ⇒ 1 artifact;
+  // (B,G) tied but B was deprecated by the (A,B) pair ⇒ NO artifact.
+  const out = resolveDeprecateOlder(mixedPairs)(corpusOf([a, b, c, d, e, f, g]));
+  expect(out.claims.filter((cl) => cl.key === CONTRADICTION_FLAG_KEY)).toHaveLength(1);
+});
 ```
 
-PRE-STEP (test infra, same task): fix `makeClaim` to build
+PRE-STEP — **CRITICAL BLOCKER, do this first**: fix `makeClaim` to build
 `valid: { from: 0, to: Infinity }` with an overridable `from` (the current
-`{ start: null, end: null }` stub has wrong Interval field names), so recency tests
-exercise real numeric `valid.from`.
+`{ start: null, end: null }` stub has wrong Interval field names — the recency tests
+reference `valid.from`, which does not exist on the current stub; without this fix
+every recency comparison is `undefined < undefined`).
 
 ## Acceptance criteria
 
@@ -145,7 +158,9 @@ exercise real numeric `valid.from`.
   unchanged.
 - `resolveFlagForReview`: existing tests pass unchanged; asserts now reference
   `CONTRADICTION_FLAG_KEY`.
-- Input corpus is not mutated (same claims array reference check on input).
+- Immutability: after the call, the INPUT corpus object and its claims (array contents
+  and each claim's status) are unchanged — the resolver returns a NEW corpus; asserted
+  by capturing the input's claim statuses before the call and comparing after.
 - Artifacts carry `key === CONTRADICTION_FLAG_KEY`, `subject "contradiction"`,
   `status "candidate"`, and both conflicting claim ids.
 
@@ -181,6 +196,8 @@ surrounding section's prose style and operator-listing format exactly.
   pairwise resolvers, in matching format.
 - The tie-semantics paragraph covers both pairwise deprecation resolvers, the
   rationale, the spec-addition framing, and the explicit §4.9/cluster non-changes.
+- The rationale prose matches the design spec's §5 wording ("a tie means the ordering
+  criterion cannot decide; a silent arbitrary pick masquerades as a resolution").
 - No other normative text altered (diff touches only the §4.8 vicinity).
 
 Test file: none new — verified by reading the diff (`git diff -- mneme-spec-v0.2-consolidated.md`) and `npm test` staying green (no code referenced).
@@ -220,10 +237,26 @@ it("resolutionRegistry resolves resolveDeprecateOlder as a pairs resolver", () =
 // and add "resolveDeprecateOlder" to the names validation list (lines 4–10).
 ```
 
-Compile/replay coverage: add a `resolveDeprecateOlder` case in
-`src/algebra/compile.test.ts` following the existing resolver-coverage shape at
-lines 496–569 (serialize → compile → execute on a corpus with a superseding pair;
-assert the older claim is deprecated after the round trip).
+Compile/replay coverage — exact shape (mirrors compile.test.ts:496–516, the pairs
+pattern):
+
+```typescript
+// src/algebra/compile.test.ts
+it("compiles resolve(resolveDeprecateOlder) [pairs] and evaluates equal to hand-built fn(pairsOf(...))", () => {
+  const { hi, lo } = makeConflictingPair(); // give them distinct valid.from (lo earlier)
+  const ctx = makeCtx([hi, lo]);
+  const compiled = evaluate<Corpus>(
+    compile(resolve("resolveDeprecateOlder", leaf("c"), undefined, 0.0)),
+    ctx,
+  );
+  const corpus = corpusOf([hi, lo]);
+  const { fn, input } = resolutionRegistry("resolveDeprecateOlder");
+  expect(input).toBe("pairs");
+  const handBuilt = (fn as any)(pairsOf(corpus, 0.0))(corpus);
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  // the older claim is deprecated in both paths
+});
+```
 
 ## Acceptance criteria
 
@@ -260,12 +293,16 @@ import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../../src/algebra
 ```
 
 ```typescript
-// bench/longmemeval/answer.test.ts — the tie test's NEW expectation (failing first)
-it("breaks ties by keeping both claims and flagging, not by lexicographic deprecation", () => {
-  // same-valid.from conflicting pair seeded as before (former lines ~111+)
-  const out = resolveDeprecateOlder([pair])(corpusOf([claimAlpha, claimBeta]));
-  expect(out.claims.filter((c) => c.key !== CONTRADICTION_FLAG_KEY).every((c) => c.status !== "deprecated")).toBe(true);
-  expect(out.claims.some((c) => c.key === CONTRADICTION_FLAG_KEY)).toBe(true);
+// bench/longmemeval/answer.test.ts — BENCH-LAYER tie test (failing first).
+// NOTE: the existing resolver UNIT tests (answer.test.ts:89–133) are DELETED, not
+// rewritten — that coverage now lives in src/algebra/resolution.test.ts
+// (task-resolution). The bench layer tests the arm A PIPELINE behavior:
+it("arm A returns both tied values and no flag artifact in ranked results", () => {
+  const { session, close, corpusId, q } = seedTiedPair(); // same valid.from, conflicting values, seeded via session.write
+  const a = answerArmA(session, corpusId, q, { k: 5 });
+  expect(a.claims.map(valueOf)).toEqual(expect.arrayContaining(["flat white", "cortado"])); // both survive
+  expect(a.claims.some((c) => c.key === CONTRADICTION_FLAG_KEY)).toBe(false); // artifact filtered out
+  close();
 });
 ```
 
@@ -277,9 +314,11 @@ winner)" — and verify by running the probe that arm A now returns both coffee 
 
 - No local `resolveDeprecateOlder` remains in bench (grep clean); imports come from
   `src/algebra/resolution.js`.
-- Arm A results never contain `contradiction.flag` artifacts (tie case asserted in
-  answer.test.ts).
-- The former lexicographic tie test is rewritten to the keep-both+flag expectation.
+- The former resolver UNIT tests (answer.test.ts:89–133, incl. the lexicographic tie
+  test) are deleted — that coverage belongs to src (task-resolution); bench tests the
+  pipeline layer only.
+- Arm A pipeline on a tied pair returns BOTH values and never a `contradiction.flag`
+  artifact (asserted via `answerArmA` end-to-end with a seeded tied pair).
 - Probe 5 run output shows arm A returning both tied values; expectation text updated.
 - `npm run eval:lme:fixture` still exits 0 (no fixture data has ties — regression
   guard).
