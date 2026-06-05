@@ -58,13 +58,6 @@ function lmeDate(d: Date): string {
   return `${year}/${month}/${day} (${dow}) ${hour}:${min}`;
 }
 
-/** Parse epoch ms from a LME date string ("2023/06/01 (Thu) 10:00"). */
-function parseLmeDate(s: string): number {
-  // "2023/06/01 (Thu) 10:00" → drop the "(Dow) " part
-  const stripped = s.replace(/\s*\([A-Za-z]+\)\s*/, " ").trim();
-  return new Date(stripped.replace("/", "-").replace("/", "-")).getTime();
-}
-
 // ---------------------------------------------------------------------------
 // Question builders
 // ---------------------------------------------------------------------------
@@ -180,7 +173,7 @@ export function claimTagged(
   over?: Partial<Claim>
 ): Claim {
   const base: Claim = {
-    id: crypto.randomUUID() as Claim["id"],
+    id: `claim-${sessionTag}-${turnTag}` as Claim["id"],
     profile: "lme-test" as Claim["profile"],
     workspace: "lme-test-ws" as Claim["workspace"],
     subject: "test-subject",
@@ -191,7 +184,7 @@ export function claimTagged(
     valueHash: "deadbeef01234567",
     confidence: { distribution: "scalar", parameters: { p: 0.9 }, raw: 0.9 },
     valid: { from: new Date("2023-01-01T00:00:00Z").getTime(), to: Infinity },
-    recorded: Date.now(),
+    recorded: 0,
     recordedSeq: 0,
     status: "validated",
     source: "imported",

@@ -58,6 +58,27 @@ describe("claimTagged", () => {
     expect(typeof c.workspace).toBe("string");
     expect(c.status).toBe("validated");
   });
+
+  it("is pure — same inputs produce deep-equal outputs", () => {
+    const a = claimTagged("session:s1", "turn:0");
+    const b = claimTagged("session:s1", "turn:0");
+    expect(a).toEqual(b);
+  });
+
+  it("derives id deterministically from sessionTag and turnTag", () => {
+    const c1 = claimTagged("session:s1", "turn:0");
+    const c2 = claimTagged("session:s1", "turn:0");
+    expect(c1.id).toBe(c2.id);
+    // id encodes both inputs so different inputs yield different ids
+    const c3 = claimTagged("session:s2", "turn:1");
+    expect(c1.id).not.toBe(c3.id);
+  });
+
+  it("has a fixed recorded timestamp (not Date.now())", () => {
+    const c1 = claimTagged("session:s1", "turn:0");
+    const c2 = claimTagged("session:s1", "turn:0");
+    expect(c1.recorded).toBe(c2.recorded);
+  });
 });
 
 describe("armResult", () => {
