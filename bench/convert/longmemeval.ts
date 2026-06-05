@@ -24,6 +24,27 @@ export const EXTRACTION_MODEL = "claude-sonnet-4-6";
 export const PROMPT_VERSION = "lme-extract-v1";
 
 // ---------------------------------------------------------------------------
+// NonRetryableLlmError
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown by the LLM function for HTTP 400/401/403 responses (billing, auth,
+ * permission errors). Catching this in extractClaims causes an immediate
+ * re-throw — no retries, no skipping.
+ */
+export class NonRetryableLlmError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "NonRetryableLlmError";
+    this.status = status;
+    // Maintain correct prototype chain in compiled JS
+    Object.setPrototypeOf(this, NonRetryableLlmError.prototype);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Interfaces
 // ---------------------------------------------------------------------------
 
@@ -45,6 +66,11 @@ export interface ExtractStats {
   extracted: number;
   skipped: number;
   claims: number;
+  /**
+   * Breakdown of why sessions were skipped.
+   * Keys: "nan-date", "unparseable-response", "llm-error: <msg truncated to 80 chars>"
+   */
+  skipReasons: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +149,16 @@ export async function extractClaims(
     extracted: 0,
     skipped: 0,
     claims: 0,
+    skipReasons: {},
   };
+
+  /** Increment a skip-reason bucket by key */
+  const bumpReason = (key: string) => {
+    stats.skipReasons[key] = (stats.skipReasons[key] ?? 0) + 1;
+  };
+
+  /** Track which llm-error reasons have been logged to stderr (first-occurrence) */
+  const loggedLlmErrors = new Set<string>();
 
   for (const [sessionId, session] of sessionMap) {
     // Skip already-cached sessions
@@ -136,6 +171,7 @@ export async function extractClaims(
     if (Number.isNaN(validFrom)) {
       cache.markSkipped(sessionId);
       stats.skipped++;
+      bumpReason("nan-date");
       continue;
     }
 
@@ -144,6 +180,8 @@ export async function extractClaims(
 
     // Retry loop
     let extracted = false;
+    // Track per-session skip reason to record after exhausting retries
+    let sessionSkipReason: string | null = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
         const waitMs = delayMs * Math.pow(2, attempt - 1);
@@ -153,8 +191,19 @@ export async function extractClaims(
       let raw: string;
       try {
         raw = await llm(prompt);
-      } catch {
-        // LLM call itself threw; treat as malformed
+      } catch (err) {
+        // Non-retryable errors (billing, auth, permission): re-throw immediately
+        if (err instanceof NonRetryableLlmError) {
+          throw err;
+        }
+        // Retryable error: bucket it and try again
+        const errMsg = (err instanceof Error ? err.message : String(err)).slice(0, 80);
+        const reasonKey = `llm-error: ${errMsg}`;
+        if (!loggedLlmErrors.has(reasonKey)) {
+          loggedLlmErrors.add(reasonKey);
+          console.error(`[extractClaims] LLM error (first occurrence): ${reasonKey}`);
+        }
+        sessionSkipReason = reasonKey;
         continue;
       }
 
@@ -162,7 +211,10 @@ export async function extractClaims(
       let parsed: LlmClaimT[];
       try {
         const jsonVal = JSON.parse(raw);
-        if (!Array.isArray(jsonVal)) continue;
+        if (!Array.isArray(jsonVal)) {
+          sessionSkipReason = "unparseable-response";
+          continue;
+        }
         // Validate each element
         const results = jsonVal.map((item: unknown) => LlmClaim.safeParse(item));
         const valid = results
@@ -170,6 +222,7 @@ export async function extractClaims(
           .map((r) => r.data);
         parsed = valid;
       } catch {
+        sessionSkipReason = "unparseable-response";
         continue;
       }
 
@@ -203,6 +256,9 @@ export async function extractClaims(
     } else {
       cache.markSkipped(sessionId);
       stats.skipped++;
+      if (sessionSkipReason !== null) {
+        bumpReason(sessionSkipReason);
+      }
     }
   }
 
@@ -402,9 +458,23 @@ async function runCli(): Promise<void> {
       }),
     });
     if (!response.ok) {
-      throw new Error(
-        `Anthropic API error: ${response.status} ${response.statusText}`,
-      );
+      const status = response.status;
+      // Attempt to extract the API's error message from the response body
+      let apiMsg = `${response.status} ${response.statusText}`;
+      try {
+        const errBody = await response.json() as { error?: { message?: string } };
+        if (errBody?.error?.message) {
+          apiMsg = errBody.error.message;
+        }
+      } catch {
+        // ignore body parse failure; use status text
+      }
+      const fullMsg = `Anthropic API error: ${apiMsg}`;
+      // 400/401/403 are non-retryable (billing, auth, permission)
+      if (status === 400 || status === 401 || status === 403) {
+        throw new NonRetryableLlmError(fullMsg, status);
+      }
+      throw new Error(fullMsg);
     }
     const data = (await response.json()) as {
       content: Array<{ type: string; text: string }>;
@@ -469,10 +539,20 @@ async function runCli(): Promise<void> {
       `${isResume ? "resuming" : "fresh run"}`,
   );
 
-  const stats = await extractClaims(questions, fileCache, {
-    llm: realLlm,
-    maxRetries: 2,
-  });
+  let stats;
+  try {
+    stats = await extractClaims(questions, fileCache, {
+      llm: realLlm,
+      maxRetries: 2,
+    });
+  } catch (err) {
+    if (err instanceof NonRetryableLlmError) {
+      console.error(`Fatal LLM error (non-retryable, status ${err.status}): ${err.message}`);
+      console.error("Aborting — fix the API key / billing issue and re-run.");
+      process.exit(1);
+    }
+    throw err;
+  }
 
   console.log(
     `Done: sessions=${stats.sessions} extracted=${stats.extracted} ` +
@@ -482,6 +562,13 @@ async function runCli(): Promise<void> {
     `Conservation check: ${stats.extracted + stats.skipped} === ${stats.sessions}: ` +
       `${stats.extracted + stats.skipped === stats.sessions ? "PASS" : "FAIL"}`,
   );
+
+  if (stats.skipped > 0 && Object.keys(stats.skipReasons).length > 0) {
+    console.log("Skip reasons breakdown:");
+    for (const [reason, count] of Object.entries(stats.skipReasons)) {
+      console.log(`  ${reason}: ${count}`);
+    }
+  }
 
   process.exit(stats.extracted + stats.skipped === stats.sessions ? 0 : 1);
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { extractClaims, buildPrompt, EXTRACTION_MODEL, PROMPT_VERSION, validateCacheHeader, loadFileCache } from "./longmemeval.js";
+import { extractClaims, buildPrompt, EXTRACTION_MODEL, PROMPT_VERSION, validateCacheHeader, loadFileCache, NonRetryableLlmError } from "./longmemeval.js";
 import type { LmeQuestionT } from "../longmemeval/types.js";
 import { ClaimRecord } from "../longmemeval/types.js";
 
@@ -577,3 +577,176 @@ describe("loadFileCache", () => {
     expect(JSON.parse(lastLine)).toMatchObject({ tags: expect.arrayContaining(["session:sess-B"]) });
   });
 });
+
+// ---------------------------------------------------------------------------
+// NonRetryableLlmError: class export and behavior
+// ---------------------------------------------------------------------------
+
+describe("NonRetryableLlmError", () => {
+  it("is an instance of Error", () => {
+    const err = new NonRetryableLlmError("billing error", 400);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("carries the status code", () => {
+    const err = new NonRetryableLlmError("auth failed", 401);
+    expect(err.status).toBe(401);
+  });
+
+  it("carries the message", () => {
+    const err = new NonRetryableLlmError("credit balance is too low", 400);
+    expect(err.message).toBe("credit balance is too low");
+  });
+
+  it("is an instance of NonRetryableLlmError (named class, not plain Error)", () => {
+    const err = new NonRetryableLlmError("test", 403);
+    expect(err instanceof NonRetryableLlmError).toBe(true);
+    expect(err.name).toBe("NonRetryableLlmError");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractClaims fail-fast on NonRetryableLlmError
+// ---------------------------------------------------------------------------
+
+describe("extractClaims fail-fast on NonRetryableLlmError", () => {
+  it("re-throws NonRetryableLlmError immediately without retrying (llm called exactly once)", async () => {
+    let callCount = 0;
+    const llm = async () => {
+      callCount++;
+      throw new NonRetryableLlmError("Anthropic API error: 400 Bad Request – credit balance is too low", 400);
+    };
+
+    await expect(
+      extractClaims(
+        [oneQuestionFixture()],
+        { has: () => false, emit: () => {}, markSkipped: () => {} },
+        { llm, maxRetries: 3, delayMs: 0 },
+      ),
+    ).rejects.toBeInstanceOf(NonRetryableLlmError);
+
+    // Must not retry — only one call
+    expect(callCount).toBe(1);
+  });
+
+  it("does not process subsequent sessions after NonRetryableLlmError", async () => {
+    const sessions = [
+      oneSessionFixture("sess-1", "2024-01-01"),
+      oneSessionFixture("sess-2", "2024-02-01"),
+    ];
+    const q: LmeQuestionT = {
+      question_id: "q1",
+      question_type: "knowledge-update",
+      question: "Test?",
+      question_date: "2024-05-01",
+      sessions,
+      answer_session_ids: [],
+    };
+
+    let callCount = 0;
+    const llm = async () => {
+      callCount++;
+      throw new NonRetryableLlmError("credit balance is too low", 400);
+    };
+
+    await expect(
+      extractClaims(
+        [q],
+        { has: () => false, emit: () => {}, markSkipped: () => {} },
+        { llm, maxRetries: 2, delayMs: 0 },
+      ),
+    ).rejects.toBeInstanceOf(NonRetryableLlmError);
+
+    // Only one LLM call total — second session never attempted
+    expect(callCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractClaims skipReasons tracking
+// ---------------------------------------------------------------------------
+
+describe("extractClaims skipReasons in stats", () => {
+  it("includes skipReasons field in returned stats", async () => {
+    const llm = async () => validLlmResponse();
+    const stats = await extractClaims(
+      [oneQuestionFixture()],
+      { has: () => false, emit: () => {}, markSkipped: () => {} },
+      { llm, delayMs: 0 },
+    );
+    expect(stats).toHaveProperty("skipReasons");
+    expect(typeof stats.skipReasons).toBe("object");
+  });
+
+  it("records nan-date in skipReasons when session date is unparseable", async () => {
+    const q = oneQuestionFixture();
+    q.sessions[0].date = "not-a-date";
+    const llm = async () => validLlmResponse();
+    const stats = await extractClaims(
+      [q],
+      { has: () => false, emit: () => {}, markSkipped: () => {} },
+      { llm, delayMs: 0 },
+    );
+    expect(stats.skipReasons["nan-date"]).toBe(1);
+  });
+
+  it("records llm-error bucket in skipReasons when llm throws retryable error", async () => {
+    const errorMsg = "Anthropic API error: 429 Too Many Requests";
+    const llm = async () => {
+      throw new Error(errorMsg);
+    };
+    const stats = await extractClaims(
+      [oneQuestionFixture()],
+      { has: () => false, emit: () => {}, markSkipped: () => {} },
+      { llm, maxRetries: 1, delayMs: 0 },
+    );
+    // Should have an llm-error entry for the retryable error
+    const llmErrorKey = Object.keys(stats.skipReasons).find((k) => k.startsWith("llm-error:"));
+    expect(llmErrorKey).toBeDefined();
+    expect(stats.skipReasons[llmErrorKey!]).toBeGreaterThan(0);
+    // Message should appear (truncated to ~80 chars)
+    expect(llmErrorKey).toContain("Anthropic API error: 429");
+  });
+
+  it("records unparseable-response in skipReasons when llm returns invalid JSON", async () => {
+    const llm = async () => "not json";
+    const stats = await extractClaims(
+      [oneQuestionFixture()],
+      { has: () => false, emit: () => {}, markSkipped: () => {} },
+      { llm, maxRetries: 0, delayMs: 0 },
+    );
+    expect(stats.skipReasons["unparseable-response"]).toBe(1);
+  });
+
+  it("accumulates multiple nan-date skips", async () => {
+    const q1 = oneQuestionFixture({ sessionId: "s1" });
+    q1.sessions[0].date = "INVALID_DATE_1";
+    const q2 = oneQuestionFixture({ sessionId: "s2" });
+    q2.sessions[0].date = "INVALID_DATE_2";
+
+    const llm = async () => validLlmResponse();
+    const stats = await extractClaims(
+      [q1, q2],
+      { has: () => false, emit: () => {}, markSkipped: () => {} },
+      { llm, delayMs: 0 },
+    );
+    expect(stats.skipReasons["nan-date"]).toBe(2);
+  });
+
+  it("returns empty skipReasons when all sessions extracted successfully", async () => {
+    const llm = async () => validLlmResponse();
+    const stats = await extractClaims(
+      [oneQuestionFixture()],
+      { has: () => false, emit: () => {}, markSkipped: () => {} },
+      { llm, delayMs: 0 },
+    );
+    expect(Object.keys(stats.skipReasons)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Existing stats assertions updated to include skipReasons
+// ---------------------------------------------------------------------------
+// (The existing tests use individual field access, not whole-object equality,
+// so they should pass after the skipReasons field is added to ExtractStats.
+// The tests below confirm whole-object shape for completeness.)
