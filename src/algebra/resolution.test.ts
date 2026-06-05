@@ -139,10 +139,12 @@ it("resolveFlagForReview artifact has subject 'contradiction', CONTRADICTION_FLA
   expect(artifact!.subject).toBe("contradiction");
   expect(artifact!.key).toBe(CONTRADICTION_FLAG_KEY);
   expect(artifact!.status).toBe("candidate");
-  // value should reference both ids
-  const valueStr = JSON.stringify(artifact!.value);
-  expect(valueStr).toContain("a");
-  expect(valueStr).toContain("b");
+  expect(artifact!.valid.from).toBe(0);
+  expect(artifact!.valid.to).toBe(Infinity);
+  // value should reference both ids precisely
+  const flagValue = artifact!.value as { leftId: string; rightId: string };
+  expect(flagValue.leftId).toBe("a");
+  expect(flagValue.rightId).toBe("b");
 });
 
 it("resolveFlagForReview with multiple pairs adds one artifact per pair", () => {
@@ -233,25 +235,36 @@ it("resolveDeprecateOlder: immutability — input corpus unchanged after call", 
   expect(afterStatuses).toEqual(beforeStatuses);
 });
 
+it("resolveDeprecateOlder: a claim whose id is literally 'tie' still gets deprecated when it is the older claim", () => {
+  // Regression: sentinel collision guard — if the internal sentinel were "tie" (a string),
+  // a claim with id "tie" would silently survive. With null sentinel this cannot happen.
+  const tieIdClaim = makeClaim("tie", 5, 5, "validated", 1000); // id is literally "tie"
+  const newer = makeClaim("newer", 5, 5, "validated", 2000);
+  const pair = { left: tieIdClaim, right: newer, conflictReason: "value-difference" } as ContradictionPair;
+  const out = resolveDeprecateOlder([pair])(corpusOf([tieIdClaim, newer]));
+  expect(out.claims.find((c) => c.id === "tie")?.status).toBe("deprecated");
+  expect(out.claims.find((c) => c.id === "newer")?.status).toBe("validated");
+});
+
 // --- Mixed pairs property test: artifact count == tied-surviving pairs ---
 
 // Setup for the mixed-pair property test
-// 4 pairs: (A,B) decided (A is newer); (C,D) decided (C is newer);
-// (E,F) tied (both survive) => 1 artifact;
-// (B,G) tied but B was deprecated by (A,B) pair => NO artifact.
+// 4 pairs: (A,B) decided (A is newer, B deprecated); (C,D) decided (C is newer, D deprecated);
+// (E,F) tied (both survive, same from) => 1 artifact;
+// (B,G) tied (same from as B=1000) but B was deprecated by (A,B) pair => NO artifact.
 const a = makeClaim("mixed-a", 5, 5, "validated", 2000);
 const b = makeClaim("mixed-b", 5, 5, "validated", 1000); // older than A => deprecated
 const c = makeClaim("mixed-c", 5, 5, "validated", 4000);
 const d = makeClaim("mixed-d", 5, 5, "validated", 3000); // older than C => deprecated
 const e = makeClaim("mixed-e", 5, 5, "validated", 5000);
 const f = makeClaim("mixed-f", 5, 5, "validated", 5000); // same from as E => tied
-const g = makeClaim("mixed-g", 5, 5, "validated", 5000); // same from as B => tied with B
+const g = makeClaim("mixed-g", 5, 5, "validated", 1000); // same from as B (1000) => tied with B
 
 const mixedPairs: ContradictionPair[] = [
-  { left: a, right: b, conflictReason: "value-difference" }, // decided: B loses
-  { left: c, right: d, conflictReason: "value-difference" }, // decided: D loses
+  { left: a, right: b, conflictReason: "value-difference" }, // decided: B loses (from=1000 < A=2000)
+  { left: c, right: d, conflictReason: "value-difference" }, // decided: D loses (from=3000 < C=4000)
   { left: e, right: f, conflictReason: "value-difference" }, // tied: both survive => 1 artifact
-  { left: b, right: g, conflictReason: "value-difference" }, // tied but B already deprecated => NO artifact
+  { left: b, right: g, conflictReason: "value-difference" }, // tied (both from=1000) but B already deprecated => NO artifact
 ];
 
 it("emits artifacts only for tied-surviving pairs across a mixed pair set", () => {

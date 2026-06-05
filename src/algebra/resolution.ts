@@ -60,15 +60,19 @@ const flagArtifactFor = (p: ContradictionPair): Claim => ({
  * Engine: partition pairs by loserOf; deprecate losers; for tied pairs whose members
  * BOTH survive this pass, append one flag artifact each. Tied pairs with a member
  * deprecated by a decided pair emit nothing (conflict already resolved).
+ *
+ * loserOf returns the id of the losing claim, or null when the pair is a tie.
+ * Using null (not a string sentinel like "tie") prevents collision with a real
+ * claim whose id happens to be "tie".
  */
 const deprecatePairwise =
-  (pairs: ContradictionPair[], loserOf: (p: ContradictionPair) => string | "tie") =>
+  (pairs: ContradictionPair[], loserOf: (p: ContradictionPair) => string | null) =>
   (corpus: Corpus): Corpus => {
     const losers = new Set<string>();
     const tied: ContradictionPair[] = [];
     for (const p of pairs) {
       const l = loserOf(p);
-      if (l === "tie") tied.push(p);
+      if (l === null) tied.push(p);
       else losers.add(l);
     }
     const artifacts = tied
@@ -89,7 +93,7 @@ export const resolveDeprecateLower = (pairs: ContradictionPair[]) =>
   deprecatePairwise(pairs, (p) => {
     const l = pointEstimate(p.left.confidence);
     const r = pointEstimate(p.right.confidence);
-    return l < r ? p.left.id : r < l ? p.right.id : "tie";
+    return l < r ? p.left.id : r < l ? p.right.id : null;
   });
 
 /**
@@ -103,7 +107,7 @@ export const resolveDeprecateOlder = (pairs: ContradictionPair[]) =>
   deprecatePairwise(pairs, (p) => {
     const l = p.left.valid.from;
     const r = p.right.valid.from;
-    return l < r ? p.left.id : r < l ? p.right.id : "tie";
+    return l < r ? p.left.id : r < l ? p.right.id : null;
   });
 
 /**
