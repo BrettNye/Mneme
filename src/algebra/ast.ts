@@ -82,6 +82,11 @@ export const synthesize = (
     ? { op: "synthesize", subject, key, rule, params, src }
     : { op: "synthesize", subject, key, rule, src };
 
+/**
+ * threshold omitted ⇒ the node is intentionally UNSTAMPED: the derive path stamps
+ * CorpusDefaults.confidenceThreshold before serialization (the wire format requires
+ * threshold — see serialize.ts REQUIRED_FIELDS), and compile() rejects unstamped nodes.
+ */
 export const resolve = (
   policy: string,
   src: ExprNode,
