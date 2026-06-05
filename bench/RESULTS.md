@@ -21,6 +21,62 @@ npx tsx bench/convert/conceptnet.ts bench/datasets/cn_subset.tsv bench/datasets/
 npx tsx bench/dataset.ts --name conceptnet --file bench/datasets/cn.jsonl --as conceptnet
 ```
 
+### LongMemEval
+
+LongMemEval is a benchmark for long-context memory in dialogue systems. It requires
+a one-time LLM extraction step (network, cached, resumable) to convert raw sessions
+into a claims JSONL, after which all evaluation runs are deterministic and network-free.
+
+**Step 1: Download the dataset (one-time)**
+
+The dataset lives in the HuggingFace dataset repo `xiaowu0162/longmemeval`. Download
+`longmemeval_s.json` (the standard split) and optionally `longmemeval_oracle.json`
+(oracle/attribution variant) into `bench/datasets/longmemeval/` (gitignored):
+
+```bash
+# Requires huggingface-cli (pip install huggingface_hub)
+huggingface-cli download xiaowu0162/longmemeval longmemeval_s.json --repo-type dataset --local-dir bench/datasets/longmemeval
+
+# Optional oracle variant (used with --oracle flag)
+huggingface-cli download xiaowu0162/longmemeval longmemeval_oracle.json --repo-type dataset --local-dir bench/datasets/longmemeval
+```
+
+Note: verify exact filenames against https://huggingface.co/datasets/xiaowu0162/longmemeval
+if the above fail — the HF repo may rename files between dataset versions.
+
+**Step 2: Extract claims (one-time, LLM-assisted, resumable)**
+
+Requires `ANTHROPIC_API_KEY` in your environment. Runs `claude-sonnet-4-6` over
+each session to extract structured claims. Caches results in the output JSONL
+so interrupted runs resume where they left off:
+
+```bash
+ANTHROPIC_API_KEY=sk-... npm run eval:lme:extract
+```
+
+**Step 3: Run the benchmark (deterministic)**
+
+```bash
+npm run eval:lme
+```
+
+Prints a Markdown aggregate table and `checks N/M`. Exits nonzero on any check failure.
+
+**Network-free CI smoke test (fixture dataset)**
+
+Uses the committed fixture dataset and pre-extracted claims in `bench/longmemeval/fixtures/`.
+No network access, no external files:
+
+```bash
+npm run eval:lme:fixture
+```
+
+**Flags**
+
+- `--oracle`: resolve questions using oracle attribution only (requires `longmemeval_oracle.json` claims).
+- `--k 1,3,10`: comma-separated recall depth values (default `1,3,10`).
+- `--raw`: skip strict JSON schema validation on dataset (useful for non-standard splits).
+
 Every run asserts integrity invariants and reports `checks N/M`. A run that
 fails an invariant exits nonzero.
 
