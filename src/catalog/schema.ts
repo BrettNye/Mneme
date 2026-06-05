@@ -12,6 +12,8 @@ export interface ClaimSchema {
   required: string[];
   /** Required pseudocount per source — no silent defaults (§3.2 MUST). */
   scalarPseudocount: Partial<Record<Source, number>>;
+  /** Per-key cardinality; undeclared keys are "single" (⊥ eligible). */
+  keyCardinality?: Record<string, "single" | "multi">;
 }
 
 /**
@@ -52,4 +54,23 @@ export function getValueSchema(
   schema: ClaimSchema
 ): z.ZodTypeAny | undefined {
   return schema.valueSchemas?.[key];
+}
+
+/**
+ * Returns the cardinality ("single" | "multi") for `key` from the supplied map.
+ * Undeclared keys default to "single". Throws on values outside "single"|"multi"
+ * (manual strict check mirroring validateScope — no zod, per design audit A3).
+ */
+export function cardinalityOf(
+  key: string,
+  map?: Record<string, "single" | "multi">,
+): "single" | "multi" {
+  const v = map?.[key];
+  if (v === undefined) return "single";
+  if (v !== "single" && v !== "multi") {
+    throw new Error(
+      `invalid keyCardinality "${v}" for key "${key}" (expected "single" | "multi")`,
+    );
+  }
+  return v;
 }

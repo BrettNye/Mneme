@@ -14,17 +14,19 @@ interface Probe {
   expectation: string;
   question: string;
   claims: Array<{ subject: string; key: string; value: string; daysAfterT0: number; confidence?: number }>;
+  keyCardinality?: Record<string, "single" | "multi">;
 }
 
 const PROBES: Probe[] = [
   {
     name: "1. false-positive ⊥ — same key, BOTH true (additive facts, not an update)",
-    expectation: "A wrongly deprecates the older true fact; B keeps both",
+    expectation: "FIXED: both hobbies kept (hobby declared multi)",
     question: "What hobbies does the user have, like painting or running?",
     claims: [
       { subject: "user", key: "hobby", value: "painting landscapes", daysAfterT0: 0 },
       { subject: "user", key: "hobby", value: "running marathons", daysAfterT0: 30 },
     ],
+    keyCardinality: { hobby: "multi" },
   },
   {
     name: "2. supersede-then-REVERT (back at the original value)",
@@ -38,7 +40,7 @@ const PROBES: Probe[] = [
   },
   {
     name: "3. paraphrase 'contradiction' — same fact, different wording",
-    expectation: "⊥ fires on lexical difference; A deprecates one paraphrase (benign?)",
+    expectation: "expected-fail under jaccard (acronym, token sets disjoint); embedding slice acceptance case — older paraphrase deprecated, fact survives",
     question: "What city does the user live in, New York?",
     claims: [
       { subject: "user", key: "city", value: "NYC", daysAfterT0: 0 },
@@ -65,11 +67,20 @@ const PROBES: Probe[] = [
   },
   {
     name: "6. fresh-but-low-confidence update vs stale-confident fact",
-    expectation: "confidence floor (0.5) hides the new claim from ⊥ — stale fact survives unchallenged",
+    expectation: "FIXED: floor 0 — Pixel contests; recency rule decides",
     question: "What phone does the user own, iPhone or Pixel?",
     claims: [
       { subject: "user", key: "phone", value: "iPhone 13", daysAfterT0: 0, confidence: 1 },
       { subject: "user", key: "phone", value: "Pixel 8", daysAfterT0: 30, confidence: 0.4 },
+    ],
+  },
+  {
+    name: "7. token-overlap paraphrase — same purchase, incrementally described",
+    expectation: "merged by dedupe — single claim, latest wording, no deprecation",
+    question: "What did the user order from Amazon?",
+    claims: [
+      { subject: "user", key: "recent_purchase", value: "power bank from Amazon", daysAfterT0: 0 },
+      { subject: "user", key: "recent_purchase", value: "power bank from Amazon ordered Feb 13", daysAfterT0: 30 },
     ],
   },
 ];
@@ -113,7 +124,7 @@ for (const [idx, probe] of PROBES.entries()) {
     const corpusId = `adv-${idx}`;
     seed(session, corpusId, probe, idx);
     const q = mkQuestion(probe, idx);
-    const a = answerArmA(session, corpusId, q, { k: 5 });
+    const a = answerArmA(session, corpusId, q, { k: 5, keyCardinality: probe.keyCardinality });
     const b = answerArmB(session, corpusId, q, { k: 5 });
     console.log(`\n=== ${probe.name}`);
     console.log(`    expectation: ${probe.expectation}`);

@@ -45,3 +45,38 @@ it("exposes per-key value schema for type-checking", () => {
 it("getValueSchema returns undefined for undeclared key", () => {
   expect(getValueSchema("undeclared", schema)).toBeUndefined();
 });
+
+import { cardinalityOf } from "./schema.js";
+
+it("undeclared key defaults to single (no map)", () => {
+  expect(cardinalityOf("hobby")).toBe("single");
+});
+
+it("undeclared key defaults to single (empty map)", () => {
+  expect(cardinalityOf("hobby", {})).toBe("single");
+});
+
+it("declared multi key returns multi", () => {
+  expect(cardinalityOf("tags", { tags: "multi" })).toBe("multi");
+});
+
+it("declared single key returns single", () => {
+  expect(cardinalityOf("name", { name: "single" })).toBe("single");
+});
+
+it("invalid cardinality value throws with matching message", () => {
+  expect(() => cardinalityOf("k", { k: "many" as any })).toThrow(/invalid keyCardinality/);
+});
+
+it("ClaimSchema literal with keyCardinality type-checks at runtime", () => {
+  const schemaWithCardinality: ClaimSchema = {
+    ...schema,
+    keyCardinality: { hobby: "multi" },
+  };
+  expect(schemaWithCardinality.keyCardinality).toEqual({ hobby: "multi" });
+});
+
+it("ClaimSchema without keyCardinality field type-checks (optional)", () => {
+  const schemaWithout: ClaimSchema = { ...schema };
+  expect(schemaWithout.keyCardinality).toBeUndefined();
+});

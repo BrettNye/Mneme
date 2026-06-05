@@ -440,6 +440,7 @@ ClaimSchema {
   keys               : Map<Subject, KeyPattern>      -- allowed keys per subject
   scopeFields        : Map<string, FieldType>        -- declared scope fields and types
   valueSchemas       : Map<Key, ValueSchema>         -- value type per key (optional)
+  keyCardinality     : Map<Key, "single" | "multi">  -- cardinality intent per key (optional)
   required           : Set<FieldName>                -- which top-level fields are required
   similarities       : Map<ValueTypeId, SimilarityFn>-- registered similarity functions
   scalarPseudocount  : Map<Source, Number>           -- per-source pseudo-count for scalar→Beta coercion
@@ -447,6 +448,8 @@ ClaimSchema {
 ```
 
 Schemas declare what *can* exist in the corpus. Writes that do not conform are rejected. Queries reference field names that MUST exist in the schema; a missing field is a query-time error, not a silent empty result. Where a key declares a `valueSchema`, value predicates against that key are type-checked at parse time against the declared structure (see §4).
+
+**`keyCardinality` — accumulation vs. conflict.** Keys not present in the map default to `"single"`. A `"single"` key asserts that at most one value is correct for a given `(subject, key, scope)` triple — multiple distinct values are a contradiction. A `"multi"` key asserts that accumulation is expected and correct: distinct values are not in conflict, they are members of a set. Cardinality is domain knowledge that cannot be inferred from the data; it MUST be declared by the schema author, not derived. Validation of this field is a manual strict check — there is no runtime schema-validation library (mirroring the strict-scope discipline of §3.1).
 
 Schema versions are tracked per claim: the `Claim.schema` field records the version under which each claim was written. The catalog tracks active schema versions and migration paths.
 
@@ -481,6 +484,8 @@ CorpusDefaults {
 ```
 
 These are *defaults*. An individual query MAY override any of them. The purpose is to factor common settings out of query expressions: without defaults, every query would have to redeclare its decay policy, confidence threshold, and contradiction policy.
+
+**`confidenceThreshold` wiring.** This is the read-path wiring of the field's "default confidence floor for queries" role: contradiction-detection expressions (`⊥` within resolve pipelines) carrying no explicit threshold are stamped with this value at expression-build time on the derive path, before serialization, so replayed expressions are deterministic regardless of subsequent changes to the corpus default.
 
 ### 3.4 AccessPolicy
 
@@ -713,6 +718,12 @@ Contradiction detection finds claims that conflict. Unlike the retrieval operato
 2. They have different `value`s.
 3. Both are above the corpus's contradiction confidence threshold.
 
+**Threshold as eligibility dial.** Criterion 3 means `eff(claim) > threshold` — claims at or below the threshold are ineligible to contest and are excluded from contest (no pair or cluster is formed with them). The threshold is an ELIGIBILITY dial, not a resolution policy; it controls which claims are considered live enough to matter. The recommended default is `0` (every claim with nonzero effective confidence contests), which is the most conservative choice — no pair is silently excluded without explicit configuration. When recency and confidence point in opposite directions, there is no universal resolution; the caller's chosen resolution rule IS the policy, and it is the caller's responsibility to select a rule that matches the domain's semantics.
+
+**Multi-valued key exemption.** Keys declared `"multi"` in the schema's `keyCardinality` (§3.2) are excluded from contest entirely (no pair or cluster is formed with them). This exemption is applied at grouping time, before pairs or clusters are constructed: triples whose key maps to `"multi"` are never grouped, and distinct values for those keys are never reported as contradictions. This keeps `⊥` well-defined for heterogeneous corpora where some keys accumulate and others assert.
+
+**Canonical read-side composition.** The recommended ordering when composing a read pipeline is: `τ_valid → ⊕_dedupe (similarity mode) → ⊥ → resolve → drop deprecated/flag artifacts → rank`. Running `⊕_dedupe` in similarity mode before `⊥` prevents near-duplicate restatements from forming spurious contradictions that would otherwise require resolution — restatements merge before the conflict detector sees them, and genuinely distinct dissenting values survive to be detected. This ordering is recommended, not enforced; callers MAY omit `⊕_dedupe` or place it after `⊥` when the corpus structure makes near-duplicate restatements impossible or irrelevant.
+
 The output is the set of pairs, NOT a corpus — contradictions are meta-relations over the corpus.
 
 ```
@@ -818,6 +829,16 @@ The rule names are referenced here only; their per-distribution math (Beta, Diri
 - `⊕_synthesize_as` has no idempotence — it is a single-shot synthesis.
 
 **Incremental evaluation.** `⊕_dedupe` is streamable (a new claim either merges with an existing key or stands alone). `⊕_synthesize_as` is streamable for monotonic combination rules and non-streamable for others (`rule_dempster`, in particular, can have order-dependent results in edge cases).
+
+#### Similarity-partitioned merge mode (opt-in)
+
+When `⊕_dedupe` is configured with a similarity function and a cutoff, its grouping step is extended: after collecting all claims that share a `(subject, key, scope)` triple, each group is sub-partitioned by single-link clustering over pairwise value similarity ≥ cutoff before merging. Claims whose values are similar enough (similarity ≥ cutoff) are merged into one representative claim; claims with sufficiently dissimilar values form separate merge groups and survive as distinct claims in the output corpus. This makes `⊕_dedupe` safe to apply before `⊥` (see §4.8 canonical pipeline note): restatements merge, dissimilar values survive to be detected as contradictions.
+
+When the similarity function or cutoff is omitted, `⊕_dedupe` uses whole-group semantics — all claims sharing the triple are merged — exactly as specified above. The similarity-partitioned mode is a strict extension; omitting its configuration produces the base semantics verbatim.
+
+**Determinism.** Within each similarity cluster, members are processed in lexicographic claim-id order to guarantee a deterministic merge sequence. The representative claim for a merged group carries the value and identity (including `id`) of the member with the latest `valid.from`; when two members share the same `valid.from`, the lexicographically larger `id` breaks the tie. Confidence is combined by the configured combination rule applied in the same lexicographic order.
+
+**Scope of equational laws.** The associativity law ("⊕_dedupe is associative for symmetric rules") and the streamable incremental-evaluation characterization stated above apply to the base whole-group mode only. In similarity-partitioned mode the partition depends on the full input set — single-link clusters form over pairwise similarity across all claims in a triple group — so associativity does not hold: splitting the input and recombining can bridge or miss clusters that would form over the complete group. In addition, each new claim requires pairwise comparison within its triple group (O(n)) with possible cascading cluster merges, so evaluation is not streamable in constant work per claim.
 
 ### 4.10 Layered override — ⊳ `[C]`
 

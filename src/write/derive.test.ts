@@ -1,8 +1,11 @@
-import { deriveClaimFrom } from "./derive.js";
-import { leaf, sigma } from "../algebra/ast.js";
-import { serializeExpr } from "../algebra/serialize.js";
+import { deriveClaimFrom, stampResolveDefaults } from "./derive.js";
+import { leaf, sigma, resolve } from "../algebra/ast.js";
+import { serializeExpr, parseExpr } from "../algebra/serialize.js";
+import { evaluate } from "../algebra/expression.js";
+import { compile } from "../algebra/compile.js";
 import type { ExprNode } from "../algebra/ast.js";
 import type { Claim } from "../core/claim.js";
+import type { Corpus } from "../algebra/types.js";
 
 // Minimal claim factory
 function makeClaim(id: string, value: string, confidence = 0.9): Claim {
@@ -44,6 +47,19 @@ function makeAdapter(claims: Claim[] = [], recordedSeq = 42) {
 
 // Minimal catalog — getCorpus must not throw for "test-corpus"
 const catalog = { getCorpus: (_id: string) => ({}) } as any;
+
+// Rich catalog factory for stamping tests — corpus carries defaults + schema keyCardinality
+function makeRichCatalog(opts: {
+  confidenceThreshold: number;
+  keyCardinality?: Record<string, "single" | "multi">;
+}) {
+  return {
+    getCorpus: (_id: string) => ({
+      defaults: { confidenceThreshold: opts.confidenceThreshold },
+      schema: { keyCardinality: opts.keyCardinality },
+    }),
+  } as any;
+}
 
 describe("deriveClaimFrom (ExprNode API)", () => {
   it("records a non-empty queryExpression equal to serializeExpr(expr)", () => {
@@ -158,5 +174,154 @@ describe("deriveClaimFrom (ExprNode API)", () => {
     expect(cand.value).toBe("alpha");
     expect(cand.provenance!.derivedFrom?.inputClaims).toEqual([]);
     expect(cand.provenance!.derivedFrom!.queryExpression).toBe(serializeExpr(expr));
+  });
+});
+
+describe("stampResolveDefaults", () => {
+  it("stamps corpus confidenceThreshold and keyCardinality onto an unstamped resolve node", () => {
+    const richCatalog = makeRichCatalog({
+      confidenceThreshold: 0.5,
+      keyCardinality: { hobby: "multi" },
+    });
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"));
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    expect((stamped as any).threshold).toBe(0.5);
+    expect((stamped as any).keyCardinality).toEqual({ hobby: "multi" });
+  });
+
+  it("does NOT add keyCardinality when schema has none — field must be absent", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.7 });
+    // no keyCardinality in schema
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"));
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    expect((stamped as any).threshold).toBe(0.7);
+    expect("keyCardinality" in stamped).toBe(false);
+  });
+
+  it("explicit threshold wins over corpus default — corpus default NOT applied", () => {
+    const richCatalog = makeRichCatalog({
+      confidenceThreshold: 0.5,
+      keyCardinality: { k: "single" },
+    });
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"), undefined, 0.9, { k: "single" });
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    expect((stamped as any).threshold).toBe(0.9);
+    expect((stamped as any).keyCardinality).toEqual({ k: "single" });
+  });
+
+  it("explicit keyCardinality wins over schema default — corpus schema NOT applied", () => {
+    const richCatalog = makeRichCatalog({
+      confidenceThreshold: 0.5,
+      keyCardinality: { k: "multi" },
+    });
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"), undefined, 0.9, { k: "single" });
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    // explicit k: "single" wins, not corpus schema k: "multi"
+    expect((stamped as any).keyCardinality).toEqual({ k: "single" });
+  });
+
+  it("is pure: does not mutate the input expression", () => {
+    const richCatalog = makeRichCatalog({
+      confidenceThreshold: 0.5,
+      keyCardinality: { hobby: "multi" },
+    });
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"));
+    const exprBefore = JSON.parse(JSON.stringify(expr));
+    stampResolveDefaults(expr, richCatalog);
+    expect(expr).toEqual(exprBefore);
+  });
+
+  it("passes through non-resolve nodes unchanged (rebuilds with stamped src)", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5, keyCardinality: { k: "multi" } });
+    // sigma wrapping a resolve — sigma should pass through, resolve gets stamped
+    const inner = resolve("resolveDeprecateOlder", leaf("test-corpus"));
+    const expr = sigma({ op: "subjectEq", value: "s" }, inner);
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    expect((stamped as any).op).toBe("sigma");
+    expect((stamped as any).src.threshold).toBe(0.5);
+    expect((stamped as any).src.keyCardinality).toEqual({ k: "multi" });
+  });
+
+  it("stamped expression parses cleanly (parseExpr succeeds with threshold present)", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.42 });
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"));
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    // serializeExpr + parseExpr round-trip must succeed
+    const parsed = parseExpr(serializeExpr(stamped));
+    expect((parsed as any).threshold).toBe(0.42);
+  });
+});
+
+describe("deriveClaimFrom stamping integration", () => {
+  it("stamps corpus confidenceThreshold and keyCardinality into queryExpression", () => {
+    const richCatalog = makeRichCatalog({
+      confidenceThreshold: 0.5,
+      keyCardinality: { hobby: "multi" },
+    });
+    const inputClaim = makeClaim("in-1", "hello");
+    const adapter = makeAdapter([inputClaim], 42);
+    const cand = deriveClaimFrom(
+      adapter,
+      richCatalog,
+      resolve("resolveDeprecateOlder", leaf("test-corpus")),
+      { subject: "t", key: "t.k", scope: {}, evaluationClock: 1000 },
+    );
+    const expr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
+    expect(expr.threshold).toBe(0.5);
+    expect(expr.keyCardinality).toEqual({ hobby: "multi" });
+  });
+
+  it("replay determinism: mutating corpus default does not affect stored queryExpression threshold", () => {
+    const corpusObj = {
+      defaults: { confidenceThreshold: 0.5 },
+      schema: { keyCardinality: undefined as Record<string, "single" | "multi"> | undefined },
+    };
+    const mutableCatalog = { getCorpus: (_id: string) => corpusObj } as any;
+    const inputClaim = makeClaim("in-1", "hello");
+    const adapter = makeAdapter([inputClaim], 42);
+    const cand = deriveClaimFrom(
+      adapter,
+      mutableCatalog,
+      resolve("resolveDeprecateOlder", leaf("test-corpus")),
+      { subject: "t", key: "t.k", scope: {}, evaluationClock: 1000 },
+    );
+    const originalThreshold = JSON.parse(cand.provenance!.derivedFrom!.queryExpression).threshold;
+    // mutate corpus default AFTER derive
+    corpusObj.defaults.confidenceThreshold = 0.99;
+    // stored value must not change
+    const storedExpr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
+    expect(storedExpr.threshold).toBe(originalThreshold);
+    expect(storedExpr.threshold).toBe(0.5);
+
+    // AC5 end-to-end replay fidelity: re-running the stored expression with the
+    // recorded evaluationClock reproduces the original result claims, even though
+    // the corpus default has since been mutated to 0.99.
+    const storedClock = cand.provenance!.derivedFrom!.evaluationClock!;
+    const replayCtx = { adapter, catalog: mutableCatalog, evaluationClock: storedClock };
+    const replayResult = evaluate<Corpus>(
+      compile(parseExpr(cand.provenance!.derivedFrom!.queryExpression)),
+      replayCtx,
+    );
+    const replayRep = replayResult.claims[replayResult.claims.length - 1];
+    expect(replayRep.value).toEqual(cand.value);
+    expect(replayRep.confidence.raw).toBe(cand.confidence.raw);
+  });
+
+  it("old-format expression (threshold present, no keyCardinality) evaluates identically", () => {
+    // Pre-stamped expr — no change in behavior expected
+    const oldStyleExpr = resolve("resolveDeprecateOlder", leaf("test-corpus"), undefined, 0.75);
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5 });
+    const inputClaim = makeClaim("in-1", "hello");
+    const adapter = makeAdapter([inputClaim], 42);
+    const cand = deriveClaimFrom(
+      adapter,
+      richCatalog,
+      oldStyleExpr,
+      { subject: "t", key: "t.k", scope: {}, evaluationClock: 1000 },
+    );
+    // threshold is explicit 0.75, corpus default 0.5 NOT applied
+    const expr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
+    expect(expr.threshold).toBe(0.75);
+    expect("keyCardinality" in expr).toBe(false);
   });
 });

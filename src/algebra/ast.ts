@@ -4,6 +4,7 @@ import type { Value } from "../core/value.js";
 import type { Instant } from "../core/time.js";
 import type { Claim } from "../core/claim.js";
 import type { Format } from "./composition.js";
+import type { SimilarityConfig } from "./combination.js";
 
 export type Field = keyof Claim;
 
@@ -17,9 +18,10 @@ export type ExprNode =
   | { op: "gamma"; depth: number; src: ExprNode }
   | { op: "kappa"; fmt: Format; maxTokens: number; dedupThreshold?: number; src: ExprNode }
   /** combine is ⊕_dedupe (spec §4.9) — combine same-(subject,key,scope) claims via a rule. */
-  | { op: "combine"; rule: string; params?: Value; src: ExprNode }
+  | { op: "combine"; rule: string; params?: Value; similarity?: SimilarityConfig; src: ExprNode }
   | { op: "synthesize"; subject: string; key: string; rule: string; params?: Value; src: ExprNode }
-  | { op: "resolve"; policy: string; threshold: number; rule?: string; src: ExprNode }
+  | { op: "resolve"; policy: string; threshold?: number; rule?: string;
+      keyCardinality?: Record<string, "single" | "multi">; src: ExprNode }
   | { op: "aggregate"; fn: string; reweight?: string; where?: Predicate; groupBy?: string; src: ExprNode };
 
 export const leaf = (corpusId: string): ExprNode =>
@@ -57,10 +59,17 @@ export const kappa = (
     ? { op: "kappa", fmt, maxTokens, dedupThreshold, src }
     : { op: "kappa", fmt, maxTokens, src };
 
-export const DEFAULT_RESOLVE_THRESHOLD = 0.5;
-
-export const combine = (rule: string, src: ExprNode, params?: Value): ExprNode =>
-  params !== undefined ? { op: "combine", rule, params, src } : { op: "combine", rule, src };
+export const combine = (
+  rule: string,
+  src: ExprNode,
+  params?: Value,
+  similarity?: SimilarityConfig,
+): ExprNode => {
+  const node: Extract<ExprNode, { op: "combine" }> = { op: "combine", rule, src };
+  if (params !== undefined) node.params = params;
+  if (similarity !== undefined) node.similarity = similarity;
+  return node;
+};
 
 export const synthesize = (
   subject: string,
@@ -73,15 +82,24 @@ export const synthesize = (
     ? { op: "synthesize", subject, key, rule, params, src }
     : { op: "synthesize", subject, key, rule, src };
 
+/**
+ * threshold omitted ⇒ the node is intentionally UNSTAMPED: the derive path stamps
+ * CorpusDefaults.confidenceThreshold before serialization (the wire format requires
+ * threshold — see serialize.ts REQUIRED_FIELDS), and compile() rejects unstamped nodes.
+ */
 export const resolve = (
   policy: string,
   src: ExprNode,
   rule?: string,
-  threshold: number = DEFAULT_RESOLVE_THRESHOLD,
-): ExprNode =>
-  rule !== undefined
-    ? { op: "resolve", policy, threshold, rule, src }
-    : { op: "resolve", policy, threshold, src };
+  threshold?: number,
+  keyCardinality?: Record<string, "single" | "multi">,
+): ExprNode => {
+  const node: Extract<ExprNode, { op: "resolve" }> = { op: "resolve", policy, src };
+  if (threshold !== undefined) node.threshold = threshold;
+  if (rule !== undefined) node.rule = rule;
+  if (keyCardinality !== undefined) node.keyCardinality = keyCardinality;
+  return node;
+};
 
 export const aggregate = (
   fn: string,

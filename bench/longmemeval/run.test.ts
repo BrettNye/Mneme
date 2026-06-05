@@ -102,15 +102,22 @@ it("corrupted claims cache header: nonzero exit and error names the mismatch", a
   }
 });
 
-it("duplicate record causes conservation failure: nonzero exit", async () => {
+it("duplicate record is absorbed by arm A's read-side dedupe: clean run, exit 0", async () => {
+  // History: this test originally asserted a nonzero exit and was named for
+  // IngestConservationError — but the duplicate never violated conservation
+  // (writeMany commits it as a distinct claim; ingest-conservation passed in
+  // both eras). The nonzero exit came from a side-effect: the duplicate
+  // corrupted arm A's ranking and failed the score-A:fx-ku-1 check. Since the
+  // similarity-mode ⊕_dedupe stage landed in answerArmA, identical restatements
+  // merge before ⊥, so arm A now answers correctly despite the corrupted input
+  // and the run is fully green. IngestConservationError itself remains covered
+  // by the unit tests in ingest.test.ts.
   const dir = mkdtempSync(join(tmpdir(), "mneme-lme-test-"));
   try {
     const dupClaims = join(dir, "dup-claims.jsonl");
-    // Use a duplicate record for fx-ku-1 to trigger IngestConservationError
     const header = JSON.stringify({ kind: "lme-extraction-header", model: "claude-sonnet-4-6", promptVersion: "lme-extract-v1" });
     const r1 = JSON.stringify({ subject: "alice", key: "employer", value: "Initech", validFrom: 1680361200000, confidence: 0.95, tags: ["session:fx-s1", "turn:0"] });
     const r2 = JSON.stringify({ subject: "alice", key: "employer", value: "Globex", validFrom: 1684162800000, confidence: 0.97, tags: ["session:fx-s2", "turn:0"] });
-    // Duplicate r1 to cause conservation error (same claim written twice = duplicate)
     writeFileSync(dupClaims, [header, r1, r1, r2].join("\n") + "\n");
 
     const code = await main([
@@ -119,7 +126,7 @@ it("duplicate record causes conservation failure: nonzero exit", async () => {
       "--k", "1",
     ]);
 
-    expect(code).not.toBe(0);
+    expect(code).toBe(0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
