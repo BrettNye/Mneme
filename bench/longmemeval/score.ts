@@ -1,5 +1,6 @@
 import {
   categoryOf,
+  parseLmeInstant,
   type Category,
   type LmeQuestionT,
   type AnswerResult,
@@ -38,19 +39,10 @@ export interface ScoreRow {
 
 /**
  * Parse an LME date string ("YYYY/MM/DD (Day) HH:MM") into epoch ms.
- * Throws with a descriptive message if Date.parse returns NaN.
+ * Delegates to parseLmeInstant (single source of truth for UTC-frame LME date parsing).
  */
 function parseLmeDate(raw: string): number {
-  // Convert "2023/06/01 (Thu) 10:00" → "2023-06-01T10:00:00Z"
-  // Strip the day-of-week annotation, replace slashes, append UTC offset.
-  const cleaned = raw.replace(/\s*\([^)]+\)\s*/, " ").trim();
-  // cleaned = "2023/06/01 10:00"
-  const iso = cleaned.replace(/\//g, "-").replace(" ", "T") + ":00Z";
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) {
-    throw new Error(`parseLmeDate: cannot parse date string "${raw}"`);
-  }
-  return ms;
+  return parseLmeInstant(raw);
 }
 
 /**

@@ -4,15 +4,19 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { extractClaims, buildPrompt, EXTRACTION_MODEL, PROMPT_VERSION, validateCacheHeader, loadFileCache, NonRetryableLlmError, parseLlmClaims } from "./longmemeval.js";
 import type { LmeQuestionT } from "../longmemeval/types.js";
-import { ClaimRecord } from "../longmemeval/types.js";
+import { ClaimRecord, parseLmeInstant } from "../longmemeval/types.js";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
 // ---------------------------------------------------------------------------
 
+// Canonical LME date format: "YYYY/MM/DD (Day) HH:MM"
+// Tests use this format so parseLmeInstant produces deterministic UTC epochs.
+const CANONICAL_SESSION_DATE = "2024/03/15 (Fri) 00:00";
+
 function oneSessionFixture(
   sessionId = "session-1",
-  date = "2024-03-15",
+  date = CANONICAL_SESSION_DATE,
 ): LmeQuestionT["sessions"][number] {
   return {
     sessionId,
@@ -32,8 +36,8 @@ function oneQuestionFixture(opts: {
     question_id: "q1",
     question_type: "knowledge-update",
     question: "Where does the user live?",
-    question_date: "2024-04-01",
-    sessions: [oneSessionFixture(opts.sessionId ?? "session-1", opts.date ?? "2024-03-15")],
+    question_date: "2024/04/01 (Mon) 00:00",
+    sessions: [oneSessionFixture(opts.sessionId ?? "session-1", opts.date ?? CANONICAL_SESSION_DATE)],
     answer_session_ids: ["session-1"],
   };
 }
@@ -86,14 +90,14 @@ describe("conservation invariant", () => {
   });
 
   it("handles mixed: some sessions good, some bad", async () => {
-    const goodSession = oneSessionFixture("session-good", "2024-01-01");
-    const badSession = oneSessionFixture("session-bad", "2024-02-01");
+    const goodSession = oneSessionFixture("session-good", "2024/01/01 (Mon) 00:00");
+    const badSession = oneSessionFixture("session-bad", "2024/02/01 (Thu) 00:00");
 
     const q: LmeQuestionT = {
       question_id: "q-mixed",
       question_type: "knowledge-update",
       question: "Test?",
-      question_date: "2024-05-01",
+      question_date: "2024/05/01 (Wed) 00:00",
       sessions: [goodSession, badSession],
       answer_session_ids: [],
     };
@@ -225,7 +229,7 @@ describe("emitted record shape", () => {
       JSON.stringify([{ subject: "user", key: "city", value: "Berlin" }]);
     const emitted: unknown[] = [];
     await extractClaims(
-      [oneQuestionFixture("sess-99", "2024-03-15")],
+      [oneQuestionFixture({ sessionId: "sess-99", date: "2024/03/15 (Fri) 00:00" })],
       {
         has: () => false,
         emit: (r) => emitted.push(r),
@@ -240,11 +244,12 @@ describe("emitted record shape", () => {
     expect(rec.tags.some((t) => t.startsWith("turn:"))).toBe(true);
   });
 
-  it("stamps validFrom from session date (epoch ms)", async () => {
+  it("stamps validFrom from session date in UTC frame (exact epoch via parseLmeInstant)", async () => {
+    const sessionDate = "2024/03/15 (Fri) 00:00";
     const llm = async () => validLlmResponse();
     const emitted: unknown[] = [];
     await extractClaims(
-      [oneQuestionFixture("s1", "2024-03-15")],
+      [oneQuestionFixture({ sessionId: "s1", date: sessionDate })],
       {
         has: () => false,
         emit: (r) => emitted.push(r),
@@ -255,7 +260,28 @@ describe("emitted record shape", () => {
 
     const rec = emitted[0] as { validFrom: number };
     expect(Number.isNaN(rec.validFrom)).toBe(false);
-    expect(rec.validFrom).toBe(Date.parse("2024-03-15"));
+    // validFrom must match parseLmeInstant (UTC-frame), not Date.parse (local-frame)
+    expect(rec.validFrom).toBe(parseLmeInstant(sessionDate));
+    // Sanity: this is 2024-03-15T00:00:00Z in UTC
+    expect(rec.validFrom).toBe(new Date("2024-03-15T00:00:00Z").getTime());
+  });
+
+  it("stamps validFrom with non-midnight canonical date in UTC frame", async () => {
+    const sessionDate = "2023/06/01 (Thu) 10:30";
+    const llm = async () => validLlmResponse();
+    const emitted: unknown[] = [];
+    await extractClaims(
+      [oneQuestionFixture({ sessionId: "s1", date: sessionDate })],
+      {
+        has: () => false,
+        emit: (r) => emitted.push(r),
+        markSkipped: () => {},
+      },
+      { llm, delayMs: 0 },
+    );
+
+    const rec = emitted[0] as { validFrom: number };
+    expect(rec.validFrom).toBe(new Date("2023-06-01T10:30:00Z").getTime());
   });
 
   it("skips (not crashes) when session date is unparseable", async () => {
@@ -631,14 +657,14 @@ describe("extractClaims fail-fast on NonRetryableLlmError", () => {
 
   it("does not process subsequent sessions after NonRetryableLlmError", async () => {
     const sessions = [
-      oneSessionFixture("sess-1", "2024-01-01"),
-      oneSessionFixture("sess-2", "2024-02-01"),
+      oneSessionFixture("sess-1", "2024/01/01 (Mon) 00:00"),
+      oneSessionFixture("sess-2", "2024/02/01 (Thu) 00:00"),
     ];
     const q: LmeQuestionT = {
       question_id: "q1",
       question_type: "knowledge-update",
       question: "Test?",
-      question_date: "2024-05-01",
+      question_date: "2024/05/01 (Wed) 00:00",
       sessions,
       answer_session_ids: [],
     };

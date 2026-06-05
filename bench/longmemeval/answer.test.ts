@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { answerArmA, answerArmB, questionInstant, resolveDeprecateOlder } from "./answer.js";
+import { answerArmA, answerArmB, questionInstant, evaluationInstant, resolveDeprecateOlder } from "./answer.js";
 import { seedSupersedingPair, openTmpSession, claimTagged } from "./test-support.js";
 import type { Claim } from "../../src/core/claim.js";
 import { corpusOf } from "../../src/algebra/types.js";
@@ -165,6 +165,93 @@ describe("questionInstant", () => {
       answer_session_ids: [],
     };
     expect(() => questionInstant(q)).toThrow("not-a-date");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// evaluationInstant
+// ---------------------------------------------------------------------------
+
+describe("evaluationInstant", () => {
+  it("returns epoch of 2023-05-28T23:59:59.999Z for question_date '2023/05/28 (Sun) 06:47'", () => {
+    const q = {
+      question_id: "ei-001",
+      question_type: "temporal-reasoning",
+      question: "test",
+      question_date: "2023/05/28 (Sun) 06:47",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+    const result = evaluationInstant(q);
+    expect(result).toBe(new Date("2023-05-28T23:59:59.999Z").getTime());
+  });
+
+  it("arm A INCLUDES a claim whose valid.from is the same day at 21:04 (calibration fix)", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-same-day-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    // Question at 06:47 on 2023-05-28
+    const q = {
+      question_id: "same-day-001",
+      question_type: "temporal-reasoning",
+      question: "Where does the user work?",
+      question_date: "2023/05/28 (Sun) 06:47",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // Evidence session from same day at 21:04 (later than the question timestamp but same day)
+    const sameDayEveningMs = new Date("2023-05-28T21:04:00Z").getTime();
+    session.write(corpusId, {
+      subject: "employer",
+      key: "employer",
+      value: "SameDayCorp",
+      valid: { from: sameDayEveningMs, to: Infinity },
+      tags: ["session:sess-same-day", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const a = answerArmA(session, corpusId, q, { k: 10 });
+    // Arm A must INCLUDE SameDayCorp (same-day later session is known)
+    expect(a.claims.map((c) => c.value)).toContain("SameDayCorp");
+
+    close();
+  });
+
+  it("arm A still EXCLUDES a claim from weeks later (genuinely future)", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-future-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    const q = {
+      question_id: "future-001",
+      question_type: "temporal-reasoning",
+      question: "Where does the user work?",
+      question_date: "2023/05/28 (Sun) 06:47",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // Claim from a full day later (2023-05-29) — genuinely future, must be excluded
+    const nextDayMs = new Date("2023-05-29T10:00:00Z").getTime();
+    session.write(corpusId, {
+      subject: "employer",
+      key: "employer",
+      value: "FutureCorp",
+      valid: { from: nextDayMs, to: Infinity },
+      tags: ["session:sess-future", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const a = answerArmA(session, corpusId, q, { k: 10 });
+    // Arm A must NOT include FutureCorp (next day is genuinely future)
+    expect(a.claims.map((c) => c.value)).not.toContain("FutureCorp");
+
+    close();
   });
 });
 

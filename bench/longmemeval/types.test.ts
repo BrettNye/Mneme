@@ -1,5 +1,38 @@
 import { describe, it, expect } from "vitest";
-import { ClaimRecord, CacheHeader, LmeQuestion, categoryOf, normalizeQuestion } from "./types.js";
+import { ClaimRecord, CacheHeader, LmeQuestion, categoryOf, normalizeQuestion, parseLmeInstant } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// parseLmeInstant
+// ---------------------------------------------------------------------------
+
+describe("parseLmeInstant", () => {
+  it("parses canonical format '2023/05/28 (Sun) 06:47' to exact UTC epoch", () => {
+    const result = parseLmeInstant("2023/05/28 (Sun) 06:47");
+    expect(result).toBe(new Date("2023-05-28T06:47:00Z").getTime());
+  });
+
+  it("parses '2023/06/01 (Thu) 10:00' to exact UTC epoch", () => {
+    const result = parseLmeInstant("2023/06/01 (Thu) 10:00");
+    expect(result).toBe(new Date("2023-06-01T10:00:00Z").getTime());
+  });
+
+  it("throws naming the raw string on garbage input", () => {
+    expect(() => parseLmeInstant("not-a-date")).toThrow("not-a-date");
+  });
+
+  it("throws when time component is missing (date-only)", () => {
+    expect(() => parseLmeInstant("2023/05/28")).toThrow("2023/05/28");
+  });
+
+  it("throws when date is missing but time is present", () => {
+    expect(() => parseLmeInstant("06:47")).toThrow("06:47");
+  });
+
+  it("throws naming the raw string when result would be NaN", () => {
+    const raw = "2023/99/99 25:99";
+    expect(() => parseLmeInstant(raw)).toThrow(raw);
+  });
+});
 
 describe("ClaimRecord", () => {
   it("rejects a claim record without turn: tag", () => {

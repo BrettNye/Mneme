@@ -4,6 +4,7 @@ import { filterCorpus, type Corpus, type RankedCorpus } from "../../src/algebra/
 import type { Session } from "../../src/surface/index.js";
 import type { Claim } from "../../src/core/claim.js";
 import type { LmeQuestionT, AnswerResult } from "./types.js";
+import { parseLmeInstant } from "./types.js";
 
 /**
  * conflictThreshold is the confidence floor for ⊥ DETECTION (claims at or below it are
@@ -48,39 +49,32 @@ export const resolveDeprecateOlder =
   };
 
 /**
- * Parse question_date → epoch ms. V8's Date.parse happens to accept the dataset's
- * "(Thu)"-style parenthetical (treated as a comment) but that is NON-STANDARD —
- * guard with Number.isNaN and throw naming the raw string.
+ * Parse question_date → epoch ms. Delegates to parseLmeInstant (single source of truth).
  *
  * Handles format: "2023/06/01 (Thu) 10:00"
- * Normalises to: "2023-06-01T10:00:00Z" for deterministic UTC parsing.
+ * Normalises to UTC epoch ms.
  */
 export function questionInstant(q: LmeQuestionT): number {
-  const raw = q.question_date;
+  return parseLmeInstant(q.question_date);
+}
 
-  // Strip the parenthetical day-of-week: "2023/06/01 (Thu) 10:00" → "2023/06/01 10:00"
-  const stripped = raw.replace(/\s*\([^)]*\)\s*/g, " ").trim();
-
-  // Convert slashes to dashes and append :00Z for UTC: "2023/06/01 10:00" → "2023-06-01T10:00:00Z"
-  // Expected shape after strip: "YYYY/MM/DD HH:MM"
-  const match = stripped.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})$/);
-  if (!match) {
-    throw new Error(
-      `questionInstant: unparseable question_date "${raw}"`
-    );
-  }
-
-  const [, year, month, day, hour, min] = match;
-  const iso = `${year}-${month}-${day}T${hour}:${min}:00Z`;
-  const ms = Date.parse(iso);
-
-  if (Number.isNaN(ms)) {
-    throw new Error(
-      `questionInstant: unparseable question_date "${raw}"`
-    );
-  }
-
-  return ms;
+/**
+ * Return the epoch ms of the end of the question_date's UTC day (23:59:59.999Z).
+ *
+ * LongMemEval question timestamps have same-day granularity: evidence sessions are
+ * frequently timestamped later on the same calendar day as the question. The question
+ * is asked "at the end of this day's history" — same-day later sessions represent
+ * facts the agent already knows, while genuinely future facts (the next day or later)
+ * remain excluded.
+ *
+ * armA uses this as both the τ_valid cutoff and the evaluationClock.
+ */
+export function evaluationInstant(q: LmeQuestionT): number {
+  const dayStart = parseLmeInstant(q.question_date);
+  // Build a Date from the epoch, set time to end of UTC day
+  const d = new Date(dayStart);
+  d.setUTCHours(23, 59, 59, 999);
+  return d.getTime();
 }
 
 /** top-k is bench-local and trivial: ranked.scored.slice(0, k).map(s => s.claim). */
@@ -121,7 +115,9 @@ export function answerArmA(
   q: LmeQuestionT,
   opts: AnswerOpts
 ): AnswerResult {
-  const t = questionInstant(q);
+  // Use end-of-day as the evaluation instant: LongMemEval question timestamps have
+  // same-day granularity, so evidence sessions later the same calendar day are known.
+  const t = evaluationInstant(q);
   const threshold = opts.conflictThreshold ?? 0.5;
 
   const stages = pipe(

@@ -86,6 +86,38 @@ export function normalizeQuestion(raw: unknown): LmeQuestionT {
   };
 }
 
+/**
+ * Parse a LongMemEval date string into epoch ms (UTC).
+ *
+ * Accepts the dataset's canonical format: "YYYY/MM/DD (Day) HH:MM"
+ * Strips the parenthetical day-of-week, requires shape "YYYY/MM/DD HH:MM" after strip,
+ * parses as UTC ("YYYY-MM-DDTHH:MM:00Z").
+ * Throws an Error naming the raw string on mismatch or NaN result.
+ *
+ * This is the single source of truth for LME date parsing — used by answer.ts,
+ * score.ts, and the converter.
+ */
+export function parseLmeInstant(raw: string): number {
+  // Strip the parenthetical day-of-week: "2023/06/01 (Thu) 10:00" → "2023/06/01 10:00"
+  const stripped = raw.replace(/\s*\([^)]*\)\s*/g, " ").trim();
+
+  // Require shape "YYYY/MM/DD HH:MM" after strip
+  const match = stripped.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})$/);
+  if (!match) {
+    throw new Error(`parseLmeInstant: unparseable date string "${raw}"`);
+  }
+
+  const [, year, month, day, hour, min] = match;
+  const iso = `${year}-${month}-${day}T${hour}:${min}:00Z`;
+  const ms = Date.parse(iso);
+
+  if (Number.isNaN(ms)) {
+    throw new Error(`parseLmeInstant: unparseable date string "${raw}"`);
+  }
+
+  return ms;
+}
+
 export type Category = "knowledge-update" | "temporal-reasoning" | "abstention" | "other";
 
 /**

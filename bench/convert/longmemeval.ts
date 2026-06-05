@@ -10,6 +10,7 @@
 import { z } from "zod";
 import {
   ClaimRecord,
+  parseLmeInstant,
   type ClaimRecordT,
   type LmeQuestionT,
   CacheHeader,
@@ -245,9 +246,13 @@ export async function extractClaims(
       continue;
     }
 
-    // Guard: parse the session date up front — NaN date means skip
-    const validFrom = Date.parse(session.date);
-    if (Number.isNaN(validFrom)) {
+    // Guard: parse the session date up front — invalid date means skip.
+    // parseLmeInstant throws on unparseable input (including bare ISO dates without time,
+    // garbage strings, etc.); catch and map to the existing "nan-date" skip path.
+    let validFrom: number;
+    try {
+      validFrom = parseLmeInstant(session.date);
+    } catch {
       cache.markSkipped(sessionId);
       stats.skipped++;
       bumpReason("nan-date");

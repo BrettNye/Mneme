@@ -6,6 +6,7 @@ import {
   type QuestionScore,
   type ScoreRow,
 } from "./score.js";
+import { parseLmeInstant } from "./types.js";
 import {
   kuQuestion,
   temporalQuestion,
@@ -13,6 +14,44 @@ import {
   claimTagged,
   armResult,
 } from "./test-support.js";
+
+// ---------------------------------------------------------------------------
+// UTC-frame date parsing (parseLmeDate uses parseLmeInstant internally)
+// ---------------------------------------------------------------------------
+
+describe("temporalCorrect UTC frame (parseLmeDate delegates to parseLmeInstant)", () => {
+  it("session date before question date in UTC frame → temporalCorrect true", () => {
+    // Session date "2023/03/15 (Wed) 09:00" is before question_date "2023/12/01 (Fri) 10:00" in UTC
+    const q = {
+      question_id: "utc-tc-001",
+      question_type: "temporal-reasoning",
+      question: "When?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [
+        {
+          sessionId: "sess-utc-1",
+          date: "2023/03/15 (Wed) 09:00",
+          turns: [{ role: "user" as const, content: "Some info." }],
+        },
+      ],
+      answer_session_ids: ["sess-utc-1"],
+    };
+    const r = armResult("A", [claimTagged("sess-utc-1", "0")]);
+    // Session date from parseLmeInstant: 2023-03-15T09:00:00Z
+    // Question date from parseLmeInstant: 2023-12-01T10:00:00Z
+    // Session is before question → temporalCorrect should be true
+    const score = scoreQuestion(q, r, [1]);
+    expect(score.temporalCorrect).toBe(true);
+  });
+
+  it("parseLmeInstant produces same epoch as score uses internally for '2023/12/01 (Fri) 10:00'", () => {
+    // Sanity check: the epoch used in temporalCorrect should match parseLmeInstant output
+    const questionDate = "2023/12/01 (Fri) 10:00";
+    const expectedMs = parseLmeInstant(questionDate);
+    expect(expectedMs).toBe(new Date("2023-12-01T10:00:00Z").getTime());
+  });
+});
 
 // ---------------------------------------------------------------------------
 // evidenceSessionsHit
