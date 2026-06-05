@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { extractClaims, buildPrompt, EXTRACTION_MODEL, PROMPT_VERSION, validateCacheHeader, loadFileCache, NonRetryableLlmError } from "./longmemeval.js";
+import { extractClaims, buildPrompt, EXTRACTION_MODEL, PROMPT_VERSION, validateCacheHeader, loadFileCache, NonRetryableLlmError, parseLlmClaims } from "./longmemeval.js";
 import type { LmeQuestionT } from "../longmemeval/types.js";
 import { ClaimRecord } from "../longmemeval/types.js";
 
@@ -286,7 +286,7 @@ describe("emitted record shape", () => {
 // ---------------------------------------------------------------------------
 
 describe("retry backoff", () => {
-  it("retries up to maxRetries times on malformed output before skipping", async () => {
+  it("retries unparseable output at most once (not maxRetries times) before skipping", async () => {
     let callCount = 0;
     const llm = async () => {
       callCount++;
@@ -299,16 +299,16 @@ describe("retry backoff", () => {
       { llm, maxRetries: 3, delayMs: 0 },
     );
 
-    // 1 initial attempt + 3 retries = 4 total calls
-    expect(callCount).toBe(4);
+    // 1 initial attempt + 1 retry = 2 total calls (unparseable capped at 1 retry)
+    expect(callCount).toBe(2);
     expect(stats.skipped).toBe(1);
   });
 
-  it("emits (not skips) when valid output arrives after retry", async () => {
+  it("emits (not skips) when valid output arrives on the one allowed retry", async () => {
     let callCount = 0;
     const llm = async () => {
       callCount++;
-      if (callCount < 3) return "BAD JSON";
+      if (callCount < 2) return "BAD JSON"; // fail once, succeed on retry
       return validLlmResponse();
     };
 
@@ -319,7 +319,8 @@ describe("retry backoff", () => {
       { llm, maxRetries: 3, delayMs: 0 },
     );
 
-    expect(callCount).toBe(3);
+    // 1 failure + 1 retry = 2 calls
+    expect(callCount).toBe(2);
     expect(stats.extracted).toBe(1);
     expect(stats.skipped).toBe(0);
     expect(emitted.length).toBeGreaterThan(0);
@@ -343,10 +344,9 @@ describe("retry backoff", () => {
       { llm, maxRetries: 2, delayMs: 100, sleep: fakeSleep },
     );
 
-    // 2 retries → 2 delays; exponential: 100ms, 200ms
-    expect(delays).toHaveLength(2);
+    // Unparseable is capped at 1 retry → 1 delay of 100ms (not 2)
+    expect(delays).toHaveLength(1);
     expect(delays[0]).toBe(100);
-    expect(delays[1]).toBe(200);
   });
 });
 
@@ -750,3 +750,160 @@ describe("extractClaims skipReasons in stats", () => {
 // (The existing tests use individual field access, not whole-object equality,
 // so they should pass after the skipReasons field is added to ExtractStats.
 // The tests below confirm whole-object shape for completeness.)
+
+// ---------------------------------------------------------------------------
+// parseLlmClaims — Fix 2: lenient response parsing
+// ---------------------------------------------------------------------------
+
+describe("parseLlmClaims", () => {
+  it("parses a bare JSON array", () => {
+    const result = parseLlmClaims(
+      JSON.stringify([{ subject: "user", key: "city", value: "Berlin" }]),
+    );
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(result![0]).toMatchObject({ subject: "user", key: "city", value: "Berlin" });
+  });
+
+  it("parses an object wrapper with claims key", () => {
+    const result = parseLlmClaims(
+      JSON.stringify({ claims: [{ subject: "user", key: "job", value: "engineer" }] }),
+    );
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(result![0]).toMatchObject({ subject: "user", key: "job", value: "engineer" });
+  });
+
+  it("parses a markdown-fenced JSON array", () => {
+    const fenced = "```json\n[{\"subject\":\"user\",\"key\":\"city\",\"value\":\"Berlin\"}]\n```";
+    const result = parseLlmClaims(fenced);
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(result![0]).toMatchObject({ subject: "user", key: "city", value: "Berlin" });
+  });
+
+  it("parses a markdown-fenced object wrapper", () => {
+    const fenced = "```json\n{\"claims\":[{\"subject\":\"user\",\"key\":\"job\",\"value\":\"engineer\"}]}\n```";
+    const result = parseLlmClaims(fenced);
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(result![0]).toMatchObject({ subject: "user", key: "job", value: "engineer" });
+  });
+
+  it("falls back to bracket-slice when there is leading prose", () => {
+    const prose =
+      'Here are the claims:\n[{"subject":"user","key":"city","value":"Berlin"}]';
+    const result = parseLlmClaims(prose);
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(result![0]).toMatchObject({ subject: "user", key: "city", value: "Berlin" });
+  });
+
+  it("falls back to brace-slice when response is object-wrapped with prose prefix", () => {
+    const prose =
+      'Here are the claims:\n{"claims":[{"subject":"user","key":"city","value":"Berlin"}]}';
+    const result = parseLlmClaims(prose);
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(result![0]).toMatchObject({ subject: "user", key: "city", value: "Berlin" });
+  });
+
+  it("returns null for a genuinely unparseable string", () => {
+    expect(parseLlmClaims("not json at all")).toBeNull();
+    expect(parseLlmClaims("")).toBeNull();
+    expect(parseLlmClaims("{ broken json")).toBeNull();
+  });
+
+  it("drops invalid elements and keeps valid ones", () => {
+    const mixed = JSON.stringify([
+      { subject: "user", key: "city", value: "Berlin" },
+      { subject: "user" }, // missing key and value
+      { subject: "user", key: "job", value: "engineer" },
+    ]);
+    const result = parseLlmClaims(mixed);
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(2);
+  });
+
+  it("returns empty array for an empty array input", () => {
+    const result = parseLlmClaims("[]");
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractClaims: lenient parsing handles fenced and object-wrapped responses
+// ---------------------------------------------------------------------------
+
+describe("extractClaims with lenient parsing", () => {
+  it("succeeds when mock llm returns a fenced JSON array", async () => {
+    const llm = async () =>
+      "```json\n[{\"subject\":\"user\",\"key\":\"city\",\"value\":\"Berlin\"}]\n```";
+    const emitted: unknown[] = [];
+    const stats = await extractClaims(
+      [oneQuestionFixture()],
+      { has: () => false, emit: (r) => emitted.push(r), markSkipped: () => {} },
+      { llm, delayMs: 0 },
+    );
+    expect(stats.extracted).toBe(1);
+    expect(stats.skipped).toBe(0);
+    expect(emitted).toHaveLength(1);
+  });
+
+  it("succeeds when mock llm returns object-wrapped claims", async () => {
+    const llm = async () =>
+      JSON.stringify({ claims: [{ subject: "user", key: "city", value: "Berlin" }] });
+    const emitted: unknown[] = [];
+    const stats = await extractClaims(
+      [oneQuestionFixture()],
+      { has: () => false, emit: (r) => emitted.push(r), markSkipped: () => {} },
+      { llm, delayMs: 0 },
+    );
+    expect(stats.extracted).toBe(1);
+    expect(stats.skipped).toBe(0);
+    expect(emitted).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 3: unparseable-response retried at most ONCE (not maxRetries times)
+// ---------------------------------------------------------------------------
+
+describe("unparseable-response retry cap", () => {
+  it("retries unparseable response at most once (llm called at most 2 times)", async () => {
+    let callCount = 0;
+    const llm = async () => {
+      callCount++;
+      return "not json at all — deterministic formatting failure";
+    };
+
+    const stats = await extractClaims(
+      [oneQuestionFixture()],
+      { has: () => false, emit: () => {}, markSkipped: () => {} },
+      { llm, maxRetries: 5, delayMs: 0 }, // maxRetries=5 but unparseable should cap at 1 retry
+    );
+
+    // 1 initial attempt + 1 retry = 2 total calls (not 6)
+    expect(callCount).toBe(2);
+    expect(stats.skipped).toBe(1);
+    expect(stats.skipReasons["unparseable-response"]).toBe(1);
+  });
+
+  it("still retries llm-errors up to maxRetries times", async () => {
+    let callCount = 0;
+    const llm = async () => {
+      callCount++;
+      throw new Error("429 Too Many Requests");
+    };
+
+    await extractClaims(
+      [oneQuestionFixture()],
+      { has: () => false, emit: () => {}, markSkipped: () => {} },
+      { llm, maxRetries: 3, delayMs: 0 },
+    );
+
+    // 1 initial + 3 retries = 4 total calls (no cap on retryable errors)
+    expect(callCount).toBe(4);
+  });
+});

@@ -115,7 +115,86 @@ const LlmClaim = z.object({
   value: z.string(),
 });
 
-type LlmClaimT = z.infer<typeof LlmClaim>;
+export type LlmClaimT = z.infer<typeof LlmClaim>;
+
+// ---------------------------------------------------------------------------
+// parseLlmClaims: lenient parsing with defense-in-depth fallbacks
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse an LLM response string into validated claim objects.
+ *
+ * Accepts (in priority order):
+ *   1. Bare JSON array: `[...]`
+ *   2. Object wrapper: `{"claims": [...]}` (structured-output shape)
+ *   3. Markdown-fenced JSON: ```json ... ``` (strip fences, then try 1 and 2)
+ *   4. Bracket-slice fallback: substring from first `[` to last `]`
+ *      (or first `{` to last `}`), then try 1 and 2
+ *
+ * Invalid elements are dropped; only elements that pass LlmClaim.safeParse
+ * are included. Returns null if the input is truly unparseable.
+ */
+export function parseLlmClaims(raw: string): LlmClaimT[] | null {
+  /** Validate a parsed JSON value as a claims array */
+  function validateClaims(val: unknown): LlmClaimT[] | null {
+    if (Array.isArray(val)) {
+      const valid = val
+        .map((item) => LlmClaim.safeParse(item))
+        .filter((r): r is { success: true; data: LlmClaimT } => r.success)
+        .map((r) => r.data);
+      return valid;
+    }
+    if (val !== null && typeof val === "object" && "claims" in val) {
+      const wrapper = val as { claims: unknown };
+      if (Array.isArray(wrapper.claims)) {
+        const valid = wrapper.claims
+          .map((item) => LlmClaim.safeParse(item))
+          .filter((r): r is { success: true; data: LlmClaimT } => r.success)
+          .map((r) => r.data);
+        return valid;
+      }
+    }
+    return null;
+  }
+
+  /** Try to parse a string as JSON and validate as claims */
+  function tryParse(s: string): LlmClaimT[] | null {
+    try {
+      const val = JSON.parse(s);
+      return validateClaims(val);
+    } catch {
+      return null;
+    }
+  }
+
+  // Attempt 1 & 2: bare JSON (array or object wrapper)
+  const direct = tryParse(raw);
+  if (direct !== null) return direct;
+
+  // Attempt 3: strip markdown fences
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    const stripped = tryParse(fenceMatch[1].trim());
+    if (stripped !== null) return stripped;
+  }
+
+  // Attempt 4: bracket-slice fallback
+  const firstBracket = raw.indexOf("[");
+  const lastBracket = raw.lastIndexOf("]");
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    const sliced = tryParse(raw.slice(firstBracket, lastBracket + 1));
+    if (sliced !== null) return sliced;
+  }
+
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const sliced = tryParse(raw.slice(firstBrace, lastBrace + 1));
+    if (sliced !== null) return sliced;
+  }
+
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // extractClaims: pure core
@@ -182,6 +261,9 @@ export async function extractClaims(
     let extracted = false;
     // Track per-session skip reason to record after exhausting retries
     let sessionSkipReason: string | null = null;
+    // Track how many times we've had an unparseable response for this session
+    // (unparseable is deterministic — retry only once to avoid wasted spend)
+    let unparseableAttempts = 0;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
         const waitMs = delayMs * Math.pow(2, attempt - 1);
@@ -207,22 +289,16 @@ export async function extractClaims(
         continue;
       }
 
-      // Parse LLM response
-      let parsed: LlmClaimT[];
-      try {
-        const jsonVal = JSON.parse(raw);
-        if (!Array.isArray(jsonVal)) {
-          sessionSkipReason = "unparseable-response";
-          continue;
-        }
-        // Validate each element
-        const results = jsonVal.map((item: unknown) => LlmClaim.safeParse(item));
-        const valid = results
-          .filter((r): r is { success: true; data: LlmClaimT } => r.success)
-          .map((r) => r.data);
-        parsed = valid;
-      } catch {
+      // Parse LLM response using lenient parser
+      const parsed = parseLlmClaims(raw);
+      if (parsed === null) {
         sessionSkipReason = "unparseable-response";
+        unparseableAttempts++;
+        // A deterministic formatting failure won't fix itself — cap at 1 retry
+        // to avoid burning money on repeated identical failures
+        if (unparseableAttempts > 1) {
+          break;
+        }
         continue;
       }
 
@@ -453,8 +529,33 @@ async function runCli(): Promise<void> {
       },
       body: JSON.stringify({
         model: EXTRACTION_MODEL,
-        max_tokens: 4096,
+        max_tokens: 8192,
         messages: [{ role: "user", content: prompt }],
+        output_config: {
+          format: {
+            type: "json_schema",
+            schema: {
+              type: "object",
+              properties: {
+                claims: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      subject: { type: "string" },
+                      key: { type: "string" },
+                      value: { type: "string" },
+                    },
+                    required: ["subject", "key", "value"],
+                    additionalProperties: false,
+                  },
+                },
+              },
+              required: ["claims"],
+              additionalProperties: false,
+            },
+          },
+        },
       }),
     });
     if (!response.ok) {
