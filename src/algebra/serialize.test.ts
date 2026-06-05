@@ -42,8 +42,8 @@ const allVariants: Array<[string, ExprNode]> = [
   ["combine (with params)", combine("weightedAvg", leaf("c"), { weights: [0.5, 0.5] })],
   ["synthesize (no params)", synthesize("subj", "bio", "llmSynth", leaf("c"))],
   ["synthesize (with params)", synthesize("subj", "bio", "llmSynth", leaf("c"), { temperature: 0.7 })],
-  ["resolve (no rule)", resolve("latestWins", leaf("c"))],
-  ["resolve (with rule)", resolve("latestWins", leaf("c"), "deprecate_lower")],
+  ["resolve (no rule)", resolve("latestWins", leaf("c"), undefined, 0.5)],
+  ["resolve (with rule)", resolve("latestWins", leaf("c"), "deprecate_lower", 0.5)],
   ["aggregate (minimal)", aggregate("count", leaf("c"))],
   [
     "aggregate (full)",
@@ -161,4 +161,18 @@ it("round-trips a resolve node with threshold", () => {
 
 it("rejects a resolve node missing threshold", () => {
   expect(() => parseExpr('{"op":"resolve","policy":"resolveKeepBoth","src":{"op":"leaf","corpusId":"c"}}')).toThrow();
+});
+
+// -- new optional fields: keyCardinality + combine.similarity --
+
+it("round-trips resolve.keyCardinality and combine.similarity", () => {
+  const expr = resolve(
+    "resolveDeprecateOlder",
+    combine("rule_weighted_avg", leaf("c"), undefined, { fn: "jaccard", cutoff: 0.5 }),
+    undefined,
+    0,
+    { hobby: "multi" },
+  );
+  const parsed = parseExpr(serializeExpr(expr));
+  expect(serializeExpr(parsed)).toBe(serializeExpr(expr));
 });

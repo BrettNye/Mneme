@@ -1,4 +1,4 @@
-import { leaf, sigma, tau, delta, pi, rho, gamma, kappa, combine, synthesize, resolve, aggregate, DEFAULT_RESOLVE_THRESHOLD } from "./ast.js";
+import { leaf, sigma, tau, delta, pi, rho, gamma, kappa, combine, synthesize, resolve, aggregate } from "./ast.js";
 import type { ExprNode } from "./ast.js";
 
 it("leaf constructor builds leaf shape", () => {
@@ -92,6 +92,21 @@ it("combine constructor builds combination shape with optional params", () => {
   });
 });
 
+it("combine records similarity when supplied", () => {
+  const n = combine("rule_weighted_avg", leaf("c"), undefined, { fn: "jaccard", cutoff: 0.5 });
+  expect(n).toEqual({
+    op: "combine",
+    rule: "rule_weighted_avg",
+    similarity: { fn: "jaccard", cutoff: 0.5 },
+    src: { op: "leaf", corpusId: "c" },
+  });
+});
+
+it("combine omits similarity key when not supplied", () => {
+  const n = combine("rule", leaf("c"));
+  expect("similarity" in n).toBe(false);
+});
+
 it("synthesize constructor builds synthesis shape with optional params", () => {
   const withoutParams = synthesize("subject1", "bio", "llmSynth", leaf("c"));
   expect(withoutParams).toEqual({
@@ -118,7 +133,6 @@ it("resolve constructor builds resolution shape with optional rule", () => {
   expect(withoutRule).toEqual({
     op: "resolve",
     policy: "latestWins",
-    threshold: 0.5,
     src: { op: "leaf", corpusId: "c" },
   });
 
@@ -126,16 +140,14 @@ it("resolve constructor builds resolution shape with optional rule", () => {
   expect(withRule).toEqual({
     op: "resolve",
     policy: "latestWins",
-    threshold: 0.5,
     rule: "deprecate_lower",
     src: { op: "leaf", corpusId: "c" },
   });
 });
 
-it("resolve records a default threshold", () => {
-  expect(resolve("resolveKeepBoth", leaf("c"))).toEqual({
-    op: "resolve", policy: "resolveKeepBoth", threshold: 0.5, src: { op: "leaf", corpusId: "c" },
-  });
+it("resolve omits threshold key when not supplied (omit-undefined house style)", () => {
+  const n = resolve("resolveKeepBoth", leaf("c"));
+  expect("threshold" in n).toBe(false);
 });
 
 it("resolve records an explicit threshold when supplied", () => {
@@ -145,10 +157,22 @@ it("resolve records an explicit threshold when supplied", () => {
   expect(resolve("latestWins", leaf("c"), "deprecate_lower", 0.9)).toEqual({
     op: "resolve", policy: "latestWins", threshold: 0.9, rule: "deprecate_lower", src: { op: "leaf", corpusId: "c" },
   });
+  expect(resolve("p", leaf("c"), undefined, 0)).toEqual({
+    op: "resolve", policy: "p", threshold: 0, src: { op: "leaf", corpusId: "c" },
+  });
 });
 
-it("DEFAULT_RESOLVE_THRESHOLD is 0.5", () => {
-  expect(DEFAULT_RESOLVE_THRESHOLD).toBe(0.5);
+it("resolve records keyCardinality when supplied", () => {
+  const n = resolve("p", leaf("c"), undefined, 0, { hobby: "multi" });
+  expect(n).toEqual({
+    op: "resolve", policy: "p", threshold: 0, keyCardinality: { hobby: "multi" },
+    src: { op: "leaf", corpusId: "c" },
+  });
+});
+
+it("resolve omits keyCardinality key when not supplied", () => {
+  const n = resolve("p", leaf("c"), undefined, 0.3);
+  expect("keyCardinality" in n).toBe(false);
 });
 
 it("aggregate constructor builds aggregation shape with optional fields", () => {
