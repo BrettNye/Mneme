@@ -1,5 +1,6 @@
 import { leaf, pipe, rho, tau } from "../../src/index.js";
 import { pairsOf } from "../../src/algebra/contradiction.js";
+import { oplusDedupe } from "../../src/algebra/combination.js";
 import { filterCorpus, type Corpus, type RankedCorpus } from "../../src/algebra/types.js";
 import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../../src/algebra/resolution.js";
 import type { Session } from "../../src/surface/index.js";
@@ -8,11 +9,20 @@ import type { LmeQuestionT, AnswerResult } from "./types.js";
 import { endOfUtcDay, parseLmeInstant } from "./types.js";
 
 /**
- * conflictThreshold is the confidence floor for ⊥ DETECTION (claims at or below it are
- * ignored by pairsOf/clustersOf — see src/algebra/contradiction.ts). It is NOT an
- * abstention threshold: abstention is structural — no claim survives the pipeline.
+ * conflictThreshold is the confidence ELIGIBILITY floor for ⊥ detection (claims at or
+ * below it are excluded from pairsOf/clustersOf — see src/algebra/contradiction.ts).
+ * Default 0 = corpus default (session.createCorpus): all claims are eligible to contest.
+ * It is NOT an abstention threshold: abstention is structural — no claim survives the pipeline.
  */
-export interface AnswerOpts { k: number; conflictThreshold?: number }
+export interface AnswerOpts {
+  k: number;
+  /** ⊥ eligibility floor; default 0 = corpus default (session.createCorpus). */
+  conflictThreshold?: number;
+  /** Per-key cardinality map forwarded to detection (additive keys never contest). */
+  keyCardinality?: Record<string, "single" | "multi">;
+  /** Jaccard cutoff for the dedupe stage — a measured dial. Default 0.5. */
+  dedupeCutoff?: number;
+}
 
 /**
  * Parse question_date → epoch ms. Delegates to parseLmeInstant (single source of truth).
@@ -81,12 +91,15 @@ export function answerArmA(
   // Use end-of-day as the evaluation instant: LongMemEval question timestamps have
   // same-day granularity, so evidence sessions later the same calendar day are known.
   const t = evaluationInstant(q);
-  const threshold = opts.conflictThreshold ?? 0.5;
+  const threshold = opts.conflictThreshold ?? 0;
+  const cutoff = opts.dedupeCutoff ?? 0.5;
 
   const stages = pipe(
     leaf(corpusId),
     tau.valid(t),
-    (c: Corpus) => resolveDeprecateOlder(pairsOf(c, threshold))(c),
+    (c: Corpus) => oplusDedupe("rule_weighted_avg", undefined,
+      { similarity: { fn: "jaccard", cutoff } })(c),
+    (c: Corpus) => resolveDeprecateOlder(pairsOf(c, threshold, { keyCardinality: opts.keyCardinality }))(c),
     (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY),
     rho.jaccard(q.question)
   );

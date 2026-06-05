@@ -305,3 +305,280 @@ it("arm B always returns abstained: false regardless of content", () => {
   expect(b.abstained).toBe(false);
   close();
 });
+
+// ---------------------------------------------------------------------------
+// Probe-1: keyCardinality multi keeps both hobby claims
+// ---------------------------------------------------------------------------
+
+it("keeps both values of a key declared multi (probe-1 shape)", () => {
+  const { session, close } = openTmpSession();
+  const corpusId = "lme-hobby-multi-test";
+  session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+  // painting day 0
+  const day0 = new Date("2023-01-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "hobby",
+    value: "painting landscapes",
+    valid: { from: day0, to: Infinity },
+    tags: ["session:sess-hobby-1", "turn:0"],
+    confidence: 0.9,
+  });
+
+  // running day 30
+  const day30 = new Date("2023-01-31T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "hobby",
+    value: "running marathons",
+    valid: { from: day30, to: Infinity },
+    tags: ["session:sess-hobby-2", "turn:0"],
+    confidence: 0.9,
+  });
+
+  const q = {
+    question_id: "hobby-multi-001",
+    question_type: "knowledge-update",
+    question: "What are the user's hobbies?",
+    question_date: "2023/12/01 (Fri) 10:00",
+    answer: undefined,
+    sessions: [],
+    answer_session_ids: [],
+  };
+
+  const a = answerArmA(session, corpusId, q, { k: 5, keyCardinality: { hobby: "multi" } });
+  expect(a.claims.map((c) => c.value)).toEqual(
+    expect.arrayContaining(["painting landscapes", "running marathons"])
+  );
+  close();
+});
+
+it("without keyCardinality multi, older hobby is deprecated (single-cardinality default)", () => {
+  const { session, close } = openTmpSession();
+  const corpusId = "lme-hobby-single-test";
+  session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+  const day0 = new Date("2023-01-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "hobby",
+    value: "painting landscapes",
+    valid: { from: day0, to: Infinity },
+    tags: ["session:sess-hobby-1", "turn:0"],
+    confidence: 0.9,
+  });
+
+  const day30 = new Date("2023-01-31T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "hobby",
+    value: "running marathons",
+    valid: { from: day30, to: Infinity },
+    tags: ["session:sess-hobby-2", "turn:0"],
+    confidence: 0.9,
+  });
+
+  const q = {
+    question_id: "hobby-single-001",
+    question_type: "knowledge-update",
+    question: "What is the user's hobby?",
+    question_date: "2023/12/01 (Fri) 10:00",
+    answer: undefined,
+    sessions: [],
+    answer_session_ids: [],
+  };
+
+  // No keyCardinality map → single-cardinality default → older deprecated
+  const a = answerArmA(session, corpusId, q, { k: 5 });
+  expect(a.claims.map((c) => c.value)).not.toContain("painting landscapes");
+  expect(a.claims.map((c) => c.value)).toContain("running marathons");
+  close();
+});
+
+// ---------------------------------------------------------------------------
+// Probe-6: floor 0 semantics — fresh low-confidence contests stale high-confidence
+// ---------------------------------------------------------------------------
+
+it("probe-6: fresh p=0.4 claim contests stale p=1.0 at default floor 0", () => {
+  const { session, close } = openTmpSession();
+  const corpusId = "lme-probe6-test";
+  session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+  // Stale high-confidence claim
+  const staleMs = new Date("2023-01-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "city",
+    value: "old city",
+    valid: { from: staleMs, to: Infinity },
+    tags: ["session:sess-stale", "turn:0"],
+    confidence: 1.0,
+  });
+
+  // Fresh low-confidence claim
+  const freshMs = new Date("2023-06-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "city",
+    value: "new city",
+    valid: { from: freshMs, to: Infinity },
+    tags: ["session:sess-fresh", "turn:0"],
+    confidence: 0.4,
+  });
+
+  const q = {
+    question_id: "probe6-001",
+    question_type: "knowledge-update",
+    question: "What city does the user live in?",
+    question_date: "2023/12/01 (Fri) 10:00",
+    answer: undefined,
+    sessions: [],
+    answer_session_ids: [],
+  };
+
+  // Default floor 0: fresh p=0.4 claim eligible → resolveDeprecateOlder picks fresh (later valid.from)
+  const a = answerArmA(session, corpusId, q, { k: 5 });
+  expect(a.claims.map((c) => c.value)).toContain("new city");
+  expect(a.claims.map((c) => c.value)).not.toContain("old city");
+  close();
+});
+
+it("probe-6: conflictThreshold 0.5 hides fresh p=0.4 challenger (old hidden-challenger behavior)", () => {
+  const { session, close } = openTmpSession();
+  const corpusId = "lme-probe6-threshold-test";
+  session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+  const staleMs = new Date("2023-01-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "city",
+    value: "old city",
+    valid: { from: staleMs, to: Infinity },
+    tags: ["session:sess-stale", "turn:0"],
+    confidence: 1.0,
+  });
+
+  const freshMs = new Date("2023-06-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "city",
+    value: "new city",
+    valid: { from: freshMs, to: Infinity },
+    tags: ["session:sess-fresh", "turn:0"],
+    confidence: 0.4,
+  });
+
+  const q = {
+    question_id: "probe6-threshold-001",
+    question_type: "knowledge-update",
+    question: "What city does the user live in?",
+    question_date: "2023/12/01 (Fri) 10:00",
+    answer: undefined,
+    sessions: [],
+    answer_session_ids: [],
+  };
+
+  // conflictThreshold 0.5: fresh p=0.4 is <= 0.5 so not eligible → no contest → both survive
+  const a = answerArmA(session, corpusId, q, { k: 5, conflictThreshold: 0.5 });
+  expect(a.claims.map((c) => c.value)).toContain("old city");
+  expect(a.claims.map((c) => c.value)).toContain("new city");
+  close();
+});
+
+// ---------------------------------------------------------------------------
+// Dedupe: token-overlap paraphrase merged before ⊥ detection
+// ---------------------------------------------------------------------------
+
+it("token-overlap paraphrase (jaccard >= 0.5) merges before detection — one claim, no flag artifact", () => {
+  const { session, close } = openTmpSession();
+  const corpusId = "lme-dedupe-overlap-test";
+  session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+  const day0 = new Date("2023-01-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "job_title",
+    value: "senior software engineer",
+    valid: { from: day0, to: Infinity },
+    tags: ["session:sess-title-1", "turn:0"],
+    confidence: 0.8,
+  });
+
+  const day10 = new Date("2023-01-11T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "job_title",
+    value: "senior software engineer at Globex",
+    valid: { from: day10, to: Infinity },
+    tags: ["session:sess-title-2", "turn:0"],
+    confidence: 0.9,
+  });
+
+  const q = {
+    question_id: "dedupe-overlap-001",
+    question_type: "knowledge-update",
+    question: "What is the user's job title?",
+    question_date: "2023/12/01 (Fri) 10:00",
+    answer: undefined,
+    sessions: [],
+    answer_session_ids: [],
+  };
+
+  const a = answerArmA(session, corpusId, q, { k: 5 });
+  // Only one claim for the triple (merged)
+  const jobTitleClaims = a.claims.filter((c) => c.key === "job_title");
+  expect(jobTitleClaims).toHaveLength(1);
+  // Value is the latest member's value
+  expect(jobTitleClaims[0].value).toBe("senior software engineer at Globex");
+  // No contradiction flag artifact
+  expect(a.claims.some((c) => c.key === CONTRADICTION_FLAG_KEY)).toBe(false);
+  close();
+});
+
+// ---------------------------------------------------------------------------
+// Dedupe: acronym paraphrase NOT merged (jaccard 0) — older deprecated by recency
+// ---------------------------------------------------------------------------
+
+it("acronym paraphrase (NYC vs New York City) NOT merged — older deprecated by recency", () => {
+  const { session, close } = openTmpSession();
+  const corpusId = "lme-dedupe-acronym-test";
+  session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+  const day0 = new Date("2023-01-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "city",
+    value: "NYC",
+    valid: { from: day0, to: Infinity },
+    tags: ["session:sess-city-1", "turn:0"],
+    confidence: 0.9,
+  });
+
+  const day30 = new Date("2023-01-31T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "city",
+    value: "New York City",
+    valid: { from: day30, to: Infinity },
+    tags: ["session:sess-city-2", "turn:0"],
+    confidence: 0.9,
+  });
+
+  const q = {
+    question_id: "dedupe-acronym-001",
+    question_type: "knowledge-update",
+    question: "What city does the user live in?",
+    question_date: "2023/12/01 (Fri) 10:00",
+    answer: undefined,
+    sessions: [],
+    answer_session_ids: [],
+  };
+
+  const a = answerArmA(session, corpusId, q, { k: 5 });
+  // NYC and "New York City" have jaccard 0 (no shared tokens) — NOT merged
+  // resolveDeprecateOlder picks later valid.from → "New York City" survives
+  expect(a.claims.map((c) => c.value)).toContain("New York City");
+  expect(a.claims.map((c) => c.value)).not.toContain("NYC");
+  close();
+});
