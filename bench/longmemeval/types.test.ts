@@ -1,14 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { ClaimRecord, CacheHeader, LmeQuestion, categoryOf, normalizeQuestion } from "./types.js";
 
-it("rejects a claim record without provenance tags", () => {
-  const r = ClaimRecord.safeParse({
-    subject: "user", key: "city", value: "Paris", validFrom: 1, tags: ["session:s1"],
-  });
-  expect(r.success).toBe(false); // no turn: tag
-});
-
 describe("ClaimRecord", () => {
+  it("rejects a claim record without turn: tag", () => {
+    const r = ClaimRecord.safeParse({
+      subject: "user", key: "city", value: "Paris", validFrom: 1, tags: ["session:s1"],
+    });
+    expect(r.success).toBe(false); // no turn: tag
+  });
+
   it("passes when both session: and turn: tags are present", () => {
     const r = ClaimRecord.safeParse({
       subject: "user",
@@ -213,5 +213,18 @@ describe("normalizeQuestion", () => {
   it("maps answer_session_ids correctly", () => {
     const normalized = normalizeQuestion(rawRecord);
     expect(normalized.answer_session_ids).toEqual(["session-B"]);
+  });
+
+  it("preserves has_answer: false on turns", () => {
+    const normalized = normalizeQuestion(rawRecord);
+    expect(normalized.sessions[0].turns[0].has_answer).toBe(false);
+  });
+
+  it("throws on array-length mismatch between haystack arrays", () => {
+    const bad = {
+      ...rawRecord,
+      haystack_dates: ["2024-01-01"], // length 1 vs ids/sessions length 2
+    };
+    expect(() => normalizeQuestion(bad)).toThrow(/length mismatch/i);
   });
 });

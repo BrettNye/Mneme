@@ -53,10 +53,22 @@ export function normalizeQuestion(raw: unknown): LmeQuestionT {
     has_answer?: boolean;
   }>>;
 
+  if (
+    sessionIds.length !== sessionDates.length ||
+    sessionIds.length !== haystackSessions.length
+  ) {
+    throw new Error(
+      `length mismatch for question_id=${r.question_id as string}: ` +
+      `haystack_session_ids=${sessionIds.length}, ` +
+      `haystack_dates=${sessionDates.length}, ` +
+      `haystack_sessions=${haystackSessions.length}`
+    );
+  }
+
   const sessions = sessionIds.map((sessionId, i) => ({
     sessionId,
-    date: sessionDates[i] ?? "",
-    turns: (haystackSessions[i] ?? []).map((turn) => ({
+    date: sessionDates[i],
+    turns: haystackSessions[i].map((turn) => ({
       role: turn.role as "user" | "assistant",
       content: turn.content,
       ...(turn.has_answer !== undefined ? { has_answer: turn.has_answer } : {}),
@@ -117,6 +129,8 @@ export const CacheHeader = z.object({
   model: z.string(),
   promptVersion: z.string(),
 });
+
+export type CacheHeaderT = z.infer<typeof CacheHeader>;
 
 /** What one arm returns for one question. */
 export interface AnswerResult {
