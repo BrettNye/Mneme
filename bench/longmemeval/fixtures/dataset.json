@@ -1,0 +1,74 @@
+[
+  {
+    "question_id": "fx-ku-1",
+    "question_type": "knowledge-update",
+    "question": "Where does Alice work now?",
+    "question_date": "2023/06/01 (Thu) 10:00",
+    "answer": "Globex",
+    "answer_session_ids": ["fx-s1", "fx-s2"],
+    "sessions": [
+      {
+        "sessionId": "fx-s1",
+        "date": "2023/04/01 (Sat) 09:00",
+        "turns": [
+          { "role": "user", "content": "I started at Initech this week.", "has_answer": true }
+        ]
+      },
+      {
+        "sessionId": "fx-s2",
+        "date": "2023/05/15 (Mon) 09:00",
+        "turns": [
+          { "role": "user", "content": "I left Initech and joined Globex.", "has_answer": true }
+        ]
+      }
+    ]
+  },
+  {
+    "question_id": "fx-tr-1",
+    "question_type": "temporal-reasoning",
+    "question": "Where did Bob live before he moved away?",
+    "question_date": "2023/06/15 (Thu) 09:00",
+    "answer": "Denver",
+    "answer_session_ids": ["fx-s3"],
+    "sessions": [
+      {
+        "sessionId": "fx-s3",
+        "date": "2023/03/10 (Fri) 08:00",
+        "turns": [
+          { "role": "user", "content": "I've been living in Denver for five years.", "has_answer": true }
+        ]
+      },
+      {
+        "sessionId": "fx-s4",
+        "date": "2023/07/20 (Thu) 14:00",
+        "turns": [
+          { "role": "user", "content": "Just finished moving to Austin last week.", "has_answer": false }
+        ]
+      }
+    ]
+  },
+  {
+    "question_id": "fx-abs-1_abs",
+    "question_type": "single-session-user",
+    "question": "What is Carol's favorite color?",
+    "question_date": "2023/10/01 (Sun) 09:00",
+    "answer": null,
+    "answer_session_ids": [],
+    "sessions": [
+      {
+        "sessionId": "fx-s5",
+        "date": "2023/08/01 (Tue) 09:00",
+        "turns": [
+          { "role": "user", "content": "I had a great lunch today.", "has_answer": false }
+        ]
+      },
+      {
+        "sessionId": "fx-s6",
+        "date": "2023/09/01 (Fri) 10:00",
+        "turns": [
+          { "role": "user", "content": "Work has been busy this month.", "has_answer": false }
+        ]
+      }
+    ]
+  }
+]

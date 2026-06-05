@@ -1,0 +1,5 @@
+{"kind":"lme-extraction-header","model":"claude-sonnet-4-6","promptVersion":"lme-extract-v1"}
+{"subject":"alice","key":"employer","value":"Initech","validFrom":1680361200000,"confidence":0.95,"tags":["session:fx-s1","turn:0"]}
+{"subject":"alice","key":"employer","value":"Globex","validFrom":1684162800000,"confidence":0.97,"tags":["session:fx-s2","turn:0"]}
+{"subject":"bob","key":"residence","value":"Denver","validFrom":1678460400000,"confidence":0.92,"tags":["session:fx-s3","turn:0"]}
+{"subject":"bob","key":"residence","value":"Austin","validFrom":1689883200000,"confidence":0.90,"tags":["session:fx-s4","turn:0"]}
