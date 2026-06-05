@@ -173,17 +173,9 @@ export async function extractClaims(
         continue;
       }
 
-      // Stamp provenance tags and validFrom, emit each claim
-      for (let turnIdx = 0; turnIdx < session.turns.length; turnIdx++) {
-        // Each claim gets turn:0 initially; if we have multiple claims,
-        // we assign them to turn:0 (the first user turn that carries the info)
-        // We use turn:0 as default; a more sophisticated approach could
-        // map by content but the spec says stamp ourselves.
-        break; // processed per-claim below
-      }
-
       for (const rawClaim of parsed) {
         // Build the record with provenance; use turn:0 as the canonical provenance
+        // (turn:0 is the first turn — the simplest conservative attribution)
         const record = {
           subject: rawClaim.subject,
           key: rawClaim.key,
@@ -267,56 +259,72 @@ export function validateCacheHeader(headerLine: string): void {
  * Returns `{ extractedSessions }`: the set of sessionIds that are complete.
  */
 export function loadFileCache(filePath: string): { extractedSessions: Set<string> } {
-  return _loadFileCacheWithFs(filePath, _readFileSync, _truncateSync);
+  return _loadFileCacheWithFs(filePath, (p) => _readFileSync(p) as Buffer, _truncateSync);
 }
 
 /**
  * Testable core of loadFileCache: inject fs operations so tests can use the
  * real filesystem without relying on `require` being available in all runtimes.
+ *
+ * Reads the file as a raw Buffer to get unambiguous byte positions on every
+ * platform (no CRLF encoding drift). JSON.parse receives each line with the
+ * optional trailing \r stripped so both LF and CRLF files parse correctly.
+ * Byte offsets always come from raw buffer positions, so truncateSync cuts
+ * exactly at the byte just past the last valid line's \n — leaving the file
+ * properly terminated for subsequent appendFileSync calls.
+ *
  * @internal exported for testing only
  */
 function _loadFileCacheWithFs(
   filePath: string,
-  readFileSync: (path: string, enc: "utf8") => string,
+  readFileSync: (path: string) => Buffer,
   truncateSync: (path: string, len: number) => void,
 ): { extractedSessions: Set<string> } {
-  const content = readFileSync(filePath, "utf8");
-  const lines = content.split("\n");
+  const buf = readFileSync(filePath);
+
+  // Split raw buffer into lines at each \n boundary.
+  // For each line we record: start byte offset, end byte offset (exclusive,
+  // i.e. the index of the \n or buf.length if no trailing \n), and the
+  // string content with any trailing \r stripped for JSON parsing.
+  const lines: Array<{ start: number; afterNewline: number; text: string }> = [];
+  let lineStart = 0;
+  for (let i = 0; i <= buf.length; i++) {
+    if (i === buf.length || buf[i] === 0x0a /* \n */) {
+      const lineEnd = i; // exclusive, points at \n (or past end)
+      // Strip trailing \r for string form
+      let textEnd = lineEnd;
+      if (textEnd > lineStart && buf[textEnd - 1] === 0x0d /* \r */) {
+        textEnd--;
+      }
+      const text = buf.slice(lineStart, textEnd).toString("utf8");
+      // afterNewline = byte offset just past the \n (= start of next line)
+      const afterNewline = i < buf.length ? i + 1 : i;
+      lines.push({ start: lineStart, afterNewline, text });
+      lineStart = i + 1;
+    }
+  }
 
   // Validate header (throws on mismatch)
-  const headerLine = lines[0] ?? "";
+  const headerLine = lines[0]?.text ?? "";
   validateCacheHeader(headerLine);
 
   const extractedSessions = new Set<string>();
-  const encoder = new TextEncoder();
 
-  // Track byte position incrementally through the file.
-  // We need the byte length of each line + its trailing "\n" separator.
-  // The file was written as lines joined with "\n" — content.split("\n")
-  // preserves the original order; we reconstruct byte positions by summing
-  // encoded lengths + 1 (for the "\n") for every line up to (but not
-  // including) the current one.
-  let currentByteStart = 0;
-  // After the header line, advance past header + newline
-  const headerBytes = encoder.encode(lines[0]).length + 1;
-  let lastValidByteEnd = headerBytes - 1; // byte index of end of header line content
-
-  currentByteStart = headerBytes;
+  // lastValidTruncPoint: byte offset to which we would truncate if we
+  // encounter a torn write. This is the afterNewline of the last valid line —
+  // i.e., the file is left with a trailing \n after that line, ready for append.
+  let lastValidTruncPoint = lines[0]?.afterNewline ?? 0;
 
   for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    const lineBytes = encoder.encode(line).length;
+    const { afterNewline, text } = lines[i];
 
     // Skip blank lines (trailing newline at end of file produces an empty line)
-    if (!line.trim()) {
-      currentByteStart += lineBytes + 1;
+    if (!text.trim()) {
       continue;
     }
 
-    let parsedOk = false;
     try {
-      const parsed = JSON.parse(line) as { tags?: string[] };
-      parsedOk = true;
+      const parsed = JSON.parse(text) as { tags?: string[] };
       if (parsed.tags) {
         for (const tag of parsed.tags) {
           if (tag.startsWith("session:")) {
@@ -324,19 +332,15 @@ function _loadFileCacheWithFs(
           }
         }
       }
+      // Line parsed OK: advance the truncation checkpoint to just past its \n
+      lastValidTruncPoint = afterNewline;
     } catch {
       // Torn write: this line is not valid JSON.
-      // Truncate file to end of last valid line + newline.
-      truncateSync(filePath, lastValidByteEnd + 1);
+      // Truncate the file to the byte just past the last valid line's \n,
+      // so the file is properly newline-terminated and ready for append.
+      truncateSync(filePath, lastValidTruncPoint);
       break;
     }
-
-    if (parsedOk) {
-      // Advance lastValidByteEnd to the end of this line's content
-      lastValidByteEnd = currentByteStart + lineBytes - 1;
-    }
-
-    currentByteStart += lineBytes + 1;
   }
 
   return { extractedSessions };
@@ -431,7 +435,7 @@ async function runCli(): Promise<void> {
     // Validate header and load extracted session set, recovering from torn writes.
     // validateCacheHeader (called inside _loadFileCacheWithFs) will process.exit if header mismatches.
     try {
-      ({ extractedSessions } = _loadFileCacheWithFs(outPath, readFileSync, truncateSync));
+      ({ extractedSessions } = _loadFileCacheWithFs(outPath, (p) => readFileSync(p) as Buffer, truncateSync));
     } catch (err) {
       console.error(`Cache resume failed: ${(err as Error).message}`);
       process.exit(1);

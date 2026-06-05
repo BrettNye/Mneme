@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { extractClaims, buildPrompt, EXTRACTION_MODEL, PROMPT_VERSION, validateCacheHeader, loadFileCache } from "./longmemeval.js";
@@ -527,5 +527,53 @@ describe("loadFileCache", () => {
     const content = readFileSync(filePath, "utf8");
     const lines = content.split("\n").filter((l) => l.trim().length > 0);
     expect(lines).toHaveLength(3);
+  });
+
+  it("handles CRLF-terminated cache file: torn last line removed, all valid lines retained", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lme-test-crlf-"));
+    const filePath = join(dir, "cache-crlf.jsonl");
+    // Write file with CRLF line endings (as Windows tools might produce)
+    const crlfContent = [headerLine(), claimLine("sess-A"), '{"partial":true'].join("\r\n") + "\r\n";
+    writeFileSync(filePath, Buffer.from(crlfContent, "utf8"));
+
+    const { extractedSessions } = loadFileCache(filePath);
+
+    // sess-A is valid and should be retained
+    expect(extractedSessions.has("sess-A")).toBe(true);
+
+    // File should only have header + valid claim line
+    const rawContent = readFileSync(filePath);
+    const rawStr = rawContent.toString("utf8");
+    // Split on LF to get lines (stripping \r from each)
+    const lines = rawStr.split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+  });
+
+  it("after torn-write truncation, appending a new JSONL line yields no concatenated lines", () => {
+    const filePath = makeTempCache([
+      headerLine(),
+      claimLine("sess-A"),
+      '{"partial":true', // torn write
+    ]);
+
+    // Perform truncation recovery
+    loadFileCache(filePath);
+
+    // Append a new valid line (the way the real CLI does it)
+    appendFileSync(filePath, claimLine("sess-B") + "\n", "utf8");
+
+    // Now verify every line in the file is valid JSON and no lines are concatenated
+    const finalContent = readFileSync(filePath, "utf8");
+    const lines = finalContent.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines.length).toBeGreaterThanOrEqual(3); // header + sess-A + sess-B
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+    // sess-B must be a standalone JSON object (not concatenated with previous line)
+    const lastLine = lines[lines.length - 1];
+    expect(JSON.parse(lastLine)).toMatchObject({ tags: expect.arrayContaining(["session:sess-B"]) });
   });
 });
