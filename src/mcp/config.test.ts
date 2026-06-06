@@ -54,6 +54,31 @@ describe("loadMnemeConfig", () => {
     }
   });
 
+  it("re-throws non-ENOENT read errors instead of returning {}", () => {
+    const { db, cfg } = makeTmpDb();
+    // config.json as a directory => EISDIR on read, must not be masked as "absent"
+    mkdirSync(cfg);
+    expect(() => loadMnemeConfig(db)).toThrow();
+  });
+
+  it("throws when keyCardinality is a non-object string", () => {
+    const { db, cfg } = makeTmpDb();
+    writeFileSync(cfg, JSON.stringify({ keyCardinality: "single" }));
+    expect(() => loadMnemeConfig(db)).toThrow(/keyCardinality must be a plain object/);
+  });
+
+  it("throws when keyCardinality is an array", () => {
+    const { db, cfg } = makeTmpDb();
+    writeFileSync(cfg, JSON.stringify({ keyCardinality: [1, 2] }));
+    expect(() => loadMnemeConfig(db)).toThrow(/keyCardinality must be a plain object/);
+  });
+
+  it("throws when a keyCardinality map value is a non-string", () => {
+    const { db, cfg } = makeTmpDb();
+    writeFileSync(cfg, JSON.stringify({ keyCardinality: { decision: 42 } }));
+    expect(() => loadMnemeConfig(db)).toThrow(/keyCardinality\["decision"\]/);
+  });
+
   it("warns and drops unknown top-level keys", () => {
     const { db, cfg } = makeTmpDb();
     writeFileSync(cfg, JSON.stringify({ keyCardinality: { x: "single" }, unknownKey: 42 }));

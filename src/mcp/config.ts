@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export interface MnemeConfig {
@@ -12,7 +12,8 @@ const VALID_CARDINALITY = new Set(["single", "multi"]);
  * Load `config.json` from the same directory as `dbPath`.
  *
  * - dbPath `./.mneme/store.db` => `./.mneme/config.json`
- * - Absent file => `{}`
+ * - Absent file (ENOENT) => `{}`
+ * - Any other read error (EACCES, EISDIR, ...) => re-thrown
  * - Malformed JSON => throws, naming the path
  * - Invalid cardinality value => throws, naming key + value
  * - Unknown top-level keys => `console.warn`, dropped
@@ -20,12 +21,15 @@ const VALID_CARDINALITY = new Set(["single", "multi"]);
 export function loadMnemeConfig(dbPath: string): MnemeConfig {
   const configPath = join(dirname(dbPath), "config.json");
 
-  if (!existsSync(configPath)) {
-    return {};
-  }
-
   let raw: string;
-  raw = readFileSync(configPath, "utf-8");
+  try {
+    raw = readFileSync(configPath, "utf-8");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return {};
+    }
+    throw err;
+  }
 
   let parsed: unknown;
   try {
