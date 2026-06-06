@@ -432,8 +432,7 @@ describe("recall — alias-aware key matching", () => {
       if ((opts as { key?: string }).key === "alias-of") {
         throw new Error("simulated alias read failure");
       }
-      // Fall through to real implementation for non-alias reads
-      // We can't call original here easily, so just return empty for alias reads
+      // Non-alias reads return empty — the test only cares that recall succeeds with a warning, not that claims are returned.
       return [];
     });
 

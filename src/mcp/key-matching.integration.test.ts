@@ -283,6 +283,7 @@ describe("mneme MCP key-matching (detect → declare → contest loop)", () => {
     // (deprecation is a read-time view, not a physical mutation of the store record)
     expect(vimClaim?.status).not.toBe("deleted");
 
+    rawSession.close();
     await client.close();
   });
 

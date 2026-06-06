@@ -464,7 +464,6 @@ describe("mneme MCP server (key_census wiring)", () => {
    */
   it("warnings from census are surfaced to stderr and in structuredContent.warnings", async () => {
     const stderrLines: string[] = [];
-    const originalWrite = process.stderr.write.bind(process.stderr);
     const spy = vi.spyOn(process.stderr, "write").mockImplementation((...args: Parameters<typeof process.stderr.write>) => {
       const [chunk] = args;
       if (typeof chunk === "string") stderrLines.push(chunk);
@@ -478,29 +477,30 @@ describe("mneme MCP server (key_census wiring)", () => {
     try {
       const { client } = await connected("warn-test");
 
-      // Remember an alias claim with a malformed (numeric) value to trigger a warning.
+      // Seed a content claim so the census has real content.
+      await client.callTool({
+        name: "remember",
+        arguments: { subject: "e", key: "alpha", value: "go", corpus: "warn-test" },
+      });
+
+      // Seed an alias cycle (alpha → beta, beta → alpha) — aliasMapOf will
+      // detect the cycle and emit a warning into structuredContent.warnings,
+      // which the server then routes to stderr via console.error.
       await client.callTool({
         name: "remember",
         arguments: {
-          subject: "key:my-variant",
+          subject: "key:alpha",
           key: "alias-of",
-          value: "123",  // numeric string — valid alias value, maps to "123"
+          value: "beta",
           corpus: "warn-test",
         },
       });
-      // Also remember a legitimate claim so the census has real content
-      await client.callTool({
-        name: "remember",
-        arguments: { subject: "e", key: "status", value: "go", corpus: "warn-test" },
-      });
-
-      // Remember a self-alias (variant === canonical) — this triggers an unratified warning path
       await client.callTool({
         name: "remember",
         arguments: {
-          subject: "key:status",
+          subject: "key:beta",
           key: "alias-of",
-          value: "status",  // self-alias: variant "status" → "status"
+          value: "alpha",
           corpus: "warn-test",
         },
       });
@@ -512,8 +512,10 @@ describe("mneme MCP server (key_census wiring)", () => {
         arguments: { corpus: "warn-test" },
       })) as StructuredCensus;
 
-      // structuredContent.warnings is always an array (may be empty if no path produces warnings)
-      expect(Array.isArray(result.structuredContent?.warnings)).toBe(true);
+      // structuredContent.warnings must contain the cycle warning from aliasMapOf.
+      expect(result.structuredContent?.warnings.length).toBeGreaterThan(0);
+      // The cycle warning must have been routed to stderr with the census prefix.
+      expect(stderrLines.some((l) => l.includes("[mneme/key_census]"))).toBe(true);
 
       await client.close();
     } finally {
