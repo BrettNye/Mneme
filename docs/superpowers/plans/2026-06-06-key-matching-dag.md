@@ -5,16 +5,16 @@ created: 2026-06-06
 
 ```mermaid
 flowchart TD
-    task-keyin-predicate["task-keyin-predicate: keyIn predicate<br/>files: src/algebra/predicate.ts +1 more"]
-    task-detection-aliases["task-detection-aliases: alias-aware ⊥ grouping<br/>files: src/algebra/contradiction.ts +1 more"]
-    task-alias-loader["task-alias-loader: alias map loader<br/>files: src/retrieval/key-alias.ts +1 more"]
-    task-pipeline-threading["task-pipeline-threading: read-pipeline threading<br/>files: src/retrieval/read-pipeline.ts +1 more"]
-    task-compile-threading["task-compile-threading: compile-path keyAliases<br/>files: src/algebra/ast.ts +4 more"]
-    task-derive-snapshot["task-derive-snapshot: derive-time alias snapshot<br/>files: src/write/derive.ts +2 more"]
-    task-recall-family["task-recall-family: recall family expansion<br/>files: src/mcp/tools.ts +1 more"]
-    task-census-tool["task-census-tool: key_census tool fn<br/>files: src/mcp/tools.ts +1 more"]
-    task-server-wiring["task-server-wiring: server wiring<br/>files: src/mcp/server.ts +2 more"]
-    task-q2-integration["task-q2-integration: Q2 end-to-end scenario<br/>files: src/mcp/key-matching.integration.test.ts"]
+    task-keyin-predicate["task-keyin-predicate: keyIn predicate<br/>files: src/algebra/predicate.ts +1 more"]:::done
+    task-detection-aliases["task-detection-aliases: alias-aware ⊥ grouping<br/>files: src/algebra/contradiction.ts +1 more"]:::done
+    task-alias-loader["task-alias-loader: alias map loader<br/>files: src/retrieval/key-alias.ts +1 more"]:::done
+    task-pipeline-threading["task-pipeline-threading: read-pipeline threading<br/>files: src/retrieval/read-pipeline.ts +1 more"]:::done
+    task-compile-threading["task-compile-threading: compile-path keyAliases<br/>files: src/algebra/ast.ts +4 more"]:::done
+    task-derive-snapshot["task-derive-snapshot: derive-time alias snapshot<br/>files: src/write/derive.ts +2 more"]:::done
+    task-recall-family["task-recall-family: recall family expansion<br/>files: src/mcp/tools.ts +1 more"]:::done
+    task-census-tool["task-census-tool: key_census tool fn<br/>files: src/mcp/tools.ts +1 more"]:::done
+    task-server-wiring["task-server-wiring: server wiring<br/>files: src/mcp/server.ts +2 more"]:::done
+    task-q2-integration["task-q2-integration: Q2 end-to-end scenario<br/>files: src/mcp/key-matching.integration.test.ts"]:::done
 
     task-detection-aliases --> task-alias-loader
     task-detection-aliases --> task-pipeline-threading
@@ -56,7 +56,7 @@ depends_on: []
 files:
   - src/algebra/predicate.ts
   - src/algebra/predicate.test.ts
-status: pending
+status: done
 ```
 
 Add a `keyIn` member to the σ `Predicate` union, mirroring the existing `subjectIn` (spec A13). Additive: a union member plus one `matches` case. No sqlite pushdown work — non-value predicates evaluate in memory.
@@ -96,7 +96,7 @@ depends_on: []
 files:
   - src/algebra/contradiction.ts
   - src/algebra/contradiction.test.ts
-status: pending
+status: done
 ```
 
 Declare `KeyAliasMap` in algebra (spec A3) and extend `DetectionOptions` with `keyAliases`. Grouping and cardinality consult the canonical key: `canonical(k) = keyAliases?.[k] ?? k`. Flag artifacts and `cluster.triple.key` carry the canonical key (spec Decision 3). The map arrives flat and pre-resolved — no chains, cycles, or meta-aliases reach algebra.
@@ -145,7 +145,7 @@ depends_on: [task-detection-aliases]
 files:
   - src/retrieval/key-alias.ts
   - src/retrieval/key-alias.test.ts
-status: pending
+status: done
 ```
 
 The single owner of the alias shape (spec A4) and the claims→map recipe (spec §2). Pass 1 is alias-blind and deliberately NOT `canonicalReadStages` — three documented divergences (A7): the serving filter would drop alias claims; no ⊕_dedupe (jaccard@0.5 could merge same-variant claims pointing at token-similar but different canonicals, corrupting the map); cardinality forced all-single ignoring project config. Pass 2 resolves chains to fixpoint with deterministic degradation. Pure: warnings are returned, never printed. (Barrel export of the new module lands in task-server-wiring, which owns `src/index.ts`.)
@@ -223,7 +223,7 @@ depends_on: [task-detection-aliases, task-alias-loader]
 files:
   - src/retrieval/read-pipeline.ts
   - src/retrieval/read-pipeline.test.ts
-status: pending
+status: done
 ```
 
 `ReadPipelineOpts` gains `keyAliases?: KeyAliasMap`, forwarded into the resolve stage's `DetectionOptions` (the keyCardinality path, currently read-pipeline.ts:64). The post-resolve serving filter (a retrieval Stage closure — NOT compiled, spec A1) additionally drops `isKeyAliasShaped` claims.
@@ -269,7 +269,7 @@ files:
   - src/algebra/ast.test.ts
   - src/algebra/compile.test.ts
   - src/algebra/serialize.test.ts
-status: pending
+status: done
 ```
 
 The resolve `ExprNode` gains an optional `keyAliases` field (additive, spec A2); `compile.ts` threads it into the `detectionOpts` passed to `pairsOf`/`clustersOf` (parallel to `keyCardinality`, currently compile.ts:106-112). Serialization is free via the generic canonicalizer — but round-trip is explicitly tested.
@@ -314,7 +314,7 @@ files:
   - src/write/derive.ts
   - src/write/derive.test.ts
   - src/write/replay.test.ts
-status: pending
+status: done
 ```
 
 Spec A2 mechanism: `deriveClaimFrom` — which holds the adapter — computes `aliasMapOf` over the corpus at `evaluationClock` and sets `keyAliases` explicitly on any resolve node that lacks it. `stampResolveDefaults` preserves an explicit field (explicit-wins, like `threshold`) and NEVER stamps aliases from corpus schema (aliases are claims; C3). The serialized `queryExpression` therefore snapshots the active map; replay re-executes the node, not the live map. write→retrieval import is acyclic (retrieval imports nothing from write).
@@ -363,7 +363,7 @@ depends_on: [task-alias-loader, task-pipeline-threading, task-keyin-predicate]
 files:
   - src/mcp/tools.ts
   - src/mcp/tools.test.ts
-status: pending
+status: done
 ```
 
 MCP `recall` becomes alias-aware (spec §4): fetch alias claims (adapter plan `{ corpusId, key: KEY_ALIAS_KEY }`, index-backed) → `aliasMapOf` → thread `map` into `ReadPipelineOpts`; expand the `key` argument to its family via `keyIn`; warm-up reads use the SAME expanded family (A8 — otherwise cross-family claims silently degrade to jaccard); emit variant-declared-cardinality warnings (A11). `recall` stays pure: warnings are returned on the result for the server layer to surface.
@@ -411,7 +411,7 @@ depends_on: [task-alias-loader, task-recall-family]
 files:
   - src/mcp/tools.ts
   - src/mcp/tools.test.ts
-status: pending
+status: done
 ```
 
 Read-only census (spec §5) as a pure function over `Session` in `tools.ts` (house structure): distinct keys + counts; O(K²) candidate pairs scored by the registered rank fn (hybrid when loaded — key strings warmed via `warmValues` first — jaccard fallback), sorted desc, truncated to `limit`, `rankFn` reported like recall; resolved alias map; `selfAliases` listed as un-ratified; loader + variant-cardinality warnings; ready-to-paste `remember` ratification shape in the composed text. **Census population (pinned):** counts non-deprecated claims valid at `evaluationInstant`, EXCLUDING `isKeyAliasShaped` claims and `CONTRADICTION_FLAG_KEY` artifacts; pairs are scored over that key set only (alias/flag infrastructure keys never appear as candidates). Census never writes and never logs to the recall-log. Depends on task-recall-family for file-scope serialization on `tools.ts` (and reuses its alias-load block — extract a small shared private helper rather than duplicating).
@@ -462,7 +462,7 @@ files:
   - src/mcp/server.ts
   - src/mcp/server.integration.test.ts
   - src/index.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
@@ -484,7 +484,7 @@ id: task-q2-integration
 depends_on: [task-server-wiring, task-derive-snapshot]
 files:
   - src/mcp/key-matching.integration.test.ts
-status: pending
+status: done
 ```
 
 The spec's acceptance criterion 1 as one integration test file exercising the full detect → declare → contest loop at the MCP boundary (house pattern: server.integration.test.ts style harness, fake or real-temp adapter).
