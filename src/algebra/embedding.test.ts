@@ -2,6 +2,7 @@ import {
   EmbeddingAdapter,
   EmbeddingCache,
   warmEmbeddings,
+  warmValues,
   cosineOver,
   registerEmbeddingAdapter,
   embeddingAdapter,
@@ -281,4 +282,32 @@ it("registerEmbeddingAdapter: collision with different object throws", () => {
   };
   registerEmbeddingAdapter(adapter1);
   expect(() => registerEmbeddingAdapter(adapter2)).toThrow();
+});
+
+// ── warmValues ───────────────────────────────────────────────────────────────
+
+it("warmValues canonicalizes non-strings exactly like cosineOver and warms extras", async () => {
+  const cache = new EmbeddingCache();
+  await warmValues(fake, cache, ["plain", { a: 1 }], ["the query"]);
+  const sim = cosineOver(fake, cache);
+  expect(() => sim.scoreOne({ a: 1 }, "the query")).not.toThrow();
+});
+
+it("warmValues: string values pass through unchanged", async () => {
+  const cache = new EmbeddingCache();
+  await warmValues(fake, cache, ["hello", "world"], []);
+  const sim = cosineOver(fake, cache);
+  expect(() => sim.scoreOne("hello", "world")).not.toThrow();
+});
+
+it("warmValues: empty values and extra arrays are fine (no-op, no throw)", async () => {
+  const cache = new EmbeddingCache();
+  await expect(warmValues(fake, cache, [], [])).resolves.toBeUndefined();
+});
+
+it("warmValues: extra strings default to empty array", async () => {
+  const cache = new EmbeddingCache();
+  await warmValues(fake, cache, ["only-value"]);
+  const sim = cosineOver(fake, cache);
+  expect(() => sim.scoreOne("only-value", "only-value")).not.toThrow();
 });

@@ -4,6 +4,12 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
+    // skipLibCheck: @huggingface/transformers ships type declarations that fail
+    // self-checks under NodeNext (missing extensions, Float16Array pre-ES2024).
+    // Our own sources remain fully strict-checked; only dependency .d.ts
+    // self-consistency is skipped (standard practice). Added when the embedding
+    // adapter graduated into src/ (dynamic import pulls the package types).
+    "skipLibCheck": true,
     "outDir": "dist",
     "rootDir": "src",
     "types": ["vitest/globals"]

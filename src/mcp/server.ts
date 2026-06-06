@@ -9,6 +9,9 @@ import { z } from "zod";
 import { basename } from "node:path";
 import { openSession } from "../surface/index.js";
 import { remember, recall, listCorpora } from "./tools.js";
+import { initEmbeddings } from "./embeddings.js";
+import { loadMnemeConfig } from "./config.js";
+import { appendRecallLog } from "./recall-log.js";
 
 export interface McpServerOptions {
   dbPath?: string;
@@ -29,6 +32,10 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
   const defaultCorpus =
     opts.defaultCorpus ?? process.env.MNEME_CORPUS ?? (basename(projectDir) || "default");
 
+  // Config at startup: bad config prevents the server from reaching ready state.
+  // loadMnemeConfig throws on invalid config — intentionally NOT wrapped in try/catch.
+  const config = loadMnemeConfig(dbPath);
+
   const session = openSession({ dbPath, writer: "mcp" });
   const server = new McpServer({ name: "mneme", version: "0.2.0" });
 
@@ -45,6 +52,14 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         confidence: z.number().min(0).max(1).optional().describe("0..1 certainty; defaults to 1"),
         tags: z.array(z.string()).optional(),
         corpus: z.string().optional().describe(`corpus to write to; defaults to '${defaultCorpus}'`),
+        scope: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe("optional scope fields for this claim, e.g. { project: 'mneme', context: 'prod' }"),
+        validFrom: z
+          .string()
+          .optional()
+          .describe("optional ISO-8601 date-time string for the start of the validity interval, e.g. '2026-01-01T00:00:00Z'"),
       },
       // Append-only write: not read-only, but non-destructive (never overwrites or deletes)
       // and not idempotent (each call commits a new claim).
@@ -63,6 +78,8 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         confidence: a.confidence,
         tags: a.tags,
         corpus: a.corpus ?? defaultCorpus,
+        scope: a.scope,
+        validFrom: a.validFrom,
       });
       const structuredContent = { id: r.id, status: r.status, corpus: r.corpus };
       return {
@@ -85,6 +102,18 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         maxTokens: z.number().int().positive().optional().describe("token budget for the composed context (default 2000)"),
         limit: z.number().int().positive().optional().describe("how many top matches to return (default 5)"),
         corpus: z.string().optional().describe(`corpus to read; defaults to '${defaultCorpus}'`),
+        abstainBelowTop: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe("abstention threshold 0..1: if the top score is strictly below this value, the entire result is suppressed and abstained=true (default 0 = off)"),
+        relevanceFloor: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe("per-entry precision floor 0..1: entries with score below this are dropped; abstained stays false even if floor empties the result (default 0 = off)"),
       },
       // Pure read: no state change, repeatable.
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -100,24 +129,53 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
             score: z.number().describe("similarity score against the query"),
           }),
         ),
+        topScore: z.number().optional().describe("pre-knob top similarity score; present when the corpus has at least one scored claim"),
+        abstained: z.boolean().describe("true when abstainBelowTop was applied and the top score was below the threshold"),
+        rankFn: z.string().describe("the similarity function name used for ranking (e.g. 'jaccard' or 'hybrid')"),
       },
     },
     async (a) => {
-      const r = recall(session, {
+      const resolvedCorpus = a.corpus ?? defaultCorpus;
+
+      // Embeddings lazy: first recall pays the init cost; boot stays instant.
+      // RecallDeps includes keyCardinality from config loaded at startup.
+      const embeddings = await initEmbeddings();
+      const r = await recall(session, {
         about: a.about,
         subject: a.subject,
         key: a.key,
         maxTokens: a.maxTokens,
         limit: a.limit,
-        corpus: a.corpus ?? defaultCorpus,
+        corpus: resolvedCorpus,
+        abstainBelowTop: a.abstainBelowTop,
+        relevanceFloor: a.relevanceFloor,
+      }, { embeddings, keyCardinality: config.keyCardinality });
+
+      // Append recall-log entry (best-effort, synchronous, never throws into handler).
+      appendRecallLog(dbPath, {
+        ts: new Date().toISOString(),
+        corpus: resolvedCorpus,
+        about: a.about,
+        topScore: r.topScore,
+        matchCount: r.matches.length,
+        abstained: r.abstained,
+        rankFn: r.rankFn,
       });
+
       const matchLines = r.matches
         .map((m) => `- ${m.subject} ${m.key} = ${JSON.stringify(m.value)} (p=${m.confidence.toFixed(2)}, score=${m.score.toFixed(2)})`)
         .join("\n");
       const text = `# Recall: ${a.about}\n\n${r.content || "(no composed context)"}\n\n## Top matches\n${matchLines || "(none)"}`;
       return {
         content: [{ type: "text" as const, text }],
-        structuredContent: { corpus: r.corpus, content: r.content, matches: r.matches },
+        structuredContent: {
+          corpus: r.corpus,
+          content: r.content,
+          matches: r.matches,
+          topScore: r.topScore,
+          abstained: r.abstained,
+          rankFn: r.rankFn,
+        },
       };
     },
   );

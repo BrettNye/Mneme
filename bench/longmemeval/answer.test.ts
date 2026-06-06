@@ -2,8 +2,16 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { answerArmA, answerArmB, questionInstant, evaluationInstant } from "./answer.js";
 import { seedSupersedingPair, openTmpSession } from "./test-support.js";
 import type { Claim } from "../../src/core/claim.js";
-import { CONTRADICTION_FLAG_KEY } from "../../src/algebra/resolution.js";
-import { registerSimilarity } from "../../src/algebra/similarity.js";
+import { CONTRADICTION_FLAG_KEY, resolveDeprecateOlder } from "../../src/algebra/resolution.js";
+import { registerSimilarity, relevanceFloor as relevanceFloorFn, abstainBelowTop as abstainBelowTopFn } from "../../src/algebra/similarity.js";
+// Used by the recipe-based equivalence regression pin (old pipeline reference imports)
+import { leaf, pipe, rho } from "../../src/index.js";
+import { pairsOf } from "../../src/algebra/contradiction.js";
+import { oplusDedupe } from "../../src/algebra/combination.js";
+import { filterCorpus } from "../../src/algebra/types.js";
+import { tauValid } from "../../src/algebra/temporal.js";
+import type { Corpus, RankedCorpus } from "../../src/algebra/types.js";
+import { canonicalReadStages, rankedTailStages } from "../../src/retrieval/read-pipeline.js";
 
 // Helper to extract the string value from a claim
 function valueOf(cl: Claim): unknown {
@@ -845,5 +853,138 @@ it("arm A with no rankFn specified is synchronous and produces same result as ex
   expect(a1.claims.map((c) => c.value)).toEqual(a2.claims.map((c) => c.value));
   // Must return a plain object (not a Promise)
   expect(typeof (a1 as unknown as Promise<unknown>).then).toBe("undefined");
+  close();
+});
+
+// ---------------------------------------------------------------------------
+// Regression pin: recipe-based arm A matches hand-rolled stage list claim-for-claim
+// ---------------------------------------------------------------------------
+
+it("recipe-based arm A matches the hand-rolled stage list claim-for-claim", () => {
+  const { session, close } = openTmpSession();
+  const corpusId = "lme-recipe-regression-pin";
+  session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+  // Superseding pair (employer key, single cardinality)
+  const fromInitech = new Date("2023-01-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "employer",
+    key: "employer",
+    value: "Initech",
+    valid: { from: fromInitech, to: Infinity },
+    tags: ["session:sess-rp-1", "turn:0"],
+    confidence: 0.8,
+  });
+  const fromGlobex = new Date("2023-06-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "employer",
+    key: "employer",
+    value: "Globex",
+    valid: { from: fromGlobex, to: Infinity },
+    tags: ["session:sess-rp-2", "turn:0"],
+    confidence: 0.9,
+  });
+
+  // Multi-key pair (hobby key, multi cardinality — both survive)
+  const day0 = new Date("2023-01-15T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "hobby",
+    value: "painting landscapes",
+    valid: { from: day0, to: Infinity },
+    tags: ["session:sess-rp-3", "turn:0"],
+    confidence: 0.9,
+  });
+  const day30 = new Date("2023-02-15T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "hobby",
+    value: "running marathons",
+    valid: { from: day30, to: Infinity },
+    tags: ["session:sess-rp-4", "turn:0"],
+    confidence: 0.9,
+  });
+
+  // Paraphrase pair (job_title key — jaccard >= 0.5, should be deduped)
+  const titleDay1 = new Date("2023-03-01T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "job_title",
+    value: "senior software engineer",
+    valid: { from: titleDay1, to: Infinity },
+    tags: ["session:sess-rp-5", "turn:0"],
+    confidence: 0.8,
+  });
+  const titleDay2 = new Date("2023-03-11T10:00:00Z").getTime();
+  session.write(corpusId, {
+    subject: "user",
+    key: "job_title",
+    value: "senior software engineer at Globex",
+    valid: { from: titleDay2, to: Infinity },
+    tags: ["session:sess-rp-6", "turn:0"],
+    confidence: 0.9,
+  });
+
+  const q = {
+    question_id: "recipe-pin-001",
+    question_type: "knowledge-update",
+    question: "What is the user's job and hobbies?",
+    question_date: "2023/12/01 (Fri) 10:00",
+    answer: undefined,
+    sessions: [],
+    answer_session_ids: [],
+  };
+
+  const keyCardinality: Record<string, "single" | "multi"> = { hobby: "multi" };
+  const dedupeCutoff = 0.5;
+  const rankFn = "jaccard";
+
+  // ── inline reference: OLD hand-rolled construction (copied from pre-migration answer.ts) ──
+  const t = evaluationInstant(q);
+  const threshold = 0; // conflictThreshold default
+  const cutoff = dedupeCutoff;
+
+  const oldStages = pipe(
+    leaf(corpusId),
+    (c: Corpus) => tauValid(t)(c),
+    (c: Corpus) => oplusDedupe("rule_weighted_avg", undefined,
+      { similarity: { fn: "jaccard", cutoff } })(c),
+    (c: Corpus) => resolveDeprecateOlder(pairsOf(c, threshold, { keyCardinality }))(c),
+    (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY),
+    rho.by(rankFn, q.question),
+    (r: RankedCorpus) => abstainBelowTopFn(0)(r),
+    (r: RankedCorpus) => relevanceFloorFn(0)(r),
+  );
+
+  // ── recipe-based construction ──
+  const recipeStages = pipe(
+    leaf(corpusId),
+    ...canonicalReadStages({
+      evaluationInstant: t,
+      keyCardinality,
+      dedupe: { fn: "jaccard", cutoff: dedupeCutoff },
+    }),
+    ...rankedTailStages({
+      rankFn,
+      query: q.question,
+      abstainBelowTop: 0,
+      relevanceFloor: 0,
+    }),
+  );
+
+  // Execute both pipelines against the same session
+  const oldResult = session.mneme.query<RankedCorpus>(corpusId, oldStages, { evaluationClock: t });
+  const recipeResult = session.mneme.query<RankedCorpus>(corpusId, recipeStages, { evaluationClock: t });
+
+  // Compare claim-for-claim: same IDs, same order
+  const oldIds = oldResult.scored.map((s) => s.claim.id);
+  const recipeIds = recipeResult.scored.map((s) => s.claim.id);
+  expect(recipeIds).toEqual(oldIds);
+
+  // Also compare values for readability in failure output
+  const oldValues = oldResult.scored.map((s) => s.claim.value);
+  const recipeValues = recipeResult.scored.map((s) => s.claim.value);
+  expect(recipeValues).toEqual(oldValues);
+
   close();
 });
