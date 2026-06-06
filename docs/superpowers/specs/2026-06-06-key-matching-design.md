@@ -57,6 +57,7 @@ export type KeyAliasMap = ... // re-export from "../algebra/contradiction.js"
 
 export interface AliasLoadResult {
   map: KeyAliasMap;      // variant → canonical, chains pre-resolved, flat
+  selfAliases: string[]; // active identity mappings (un-ratified keys) — census observability (A12)
   warnings: string[];    // cycles dropped, ties dropped, meta-aliases dropped, malformed values ignored
 }
 

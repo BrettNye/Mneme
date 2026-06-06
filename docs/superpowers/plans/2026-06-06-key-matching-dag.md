@@ -29,6 +29,7 @@ flowchart TD
     task-recall-family --> task-census-tool
     task-census-tool --> task-server-wiring
     task-server-wiring --> task-q2-integration
+    task-derive-snapshot --> task-q2-integration
 
     classDef done fill:#90ee90,stroke:#333
     classDef ready fill:#fffacd,stroke:#333
@@ -122,15 +123,15 @@ const canonicalKeyOf = (key: string, aliases?: KeyAliasMap): string => aliases?.
 it("aliased keys contest: one pair across editor/preferred_editor", () => {
   const a = makeClaim({ subject: "user", key: "editor", value: "vim" });
   const b = makeClaim({ subject: "user", key: "preferred_editor", value: "emacs" });
-  expect(pairsOf([a, b], 0, { keyAliases: { preferred_editor: "editor" } })).toHaveLength(1);
-  expect(pairsOf([a, b], 0, {})).toHaveLength(0); // absent map = today's behavior
+  expect(pairsOf(corpusOf([a, b]), 0, { keyAliases: { preferred_editor: "editor" } })).toHaveLength(1);
+  expect(pairsOf(corpusOf([a, b]), 0, {})).toHaveLength(0); // absent map = today's behavior
 });
 ```
 
 ## Acceptance criteria
 
 - Two claims with same subject/scope, different stored keys, and a `keyAliases` entry mapping one to the other form a contest pair; without the map they do not.
-- `cluster.triple.key` and emitted flag-artifact content carry the canonical key.
+- `cluster.triple.key` carries the canonical key; flag artifacts pair claims that were grouped under the canonical key (their leftId/rightId may span stored keys — the artifact value carries claim ids, not keys, per `resolution.ts` flagArtifactFor).
 - `cardinalityOf` consults the canonical key: cardinality `"multi"` declared on the canonical exempts variant-key claims from clustering.
 - `keyAliases: undefined` and `keyAliases: {}` are byte-for-byte identical to current behavior (no existing test expectation changes).
 
@@ -154,7 +155,6 @@ The single owner of the alias shape (spec A4) and the claims→map recipe (spec 
 ```typescript
 // src/retrieval/key-alias.ts
 import type { Claim } from "../core/claim.js";
-import type { Corpus } from "../algebra/types.js";
 import type { KeyAliasMap } from "../algebra/contradiction.js";
 export type { KeyAliasMap } from "../algebra/contradiction.js";
 
@@ -178,8 +178,14 @@ export interface AliasLoadResult {
  * resolveDeprecateOlder) — small parallel recipe, divergences documented above.
  * Pass 2: variant = subject minus KEY_SUBJECT_PREFIX, canonical = String(value);
  * fixpoint chain resolution; case-sensitive exact strings throughout (A12).
+ * Takes Claim[] (what every call site has — session.mneme.read / adapter.query
+ * return Claim[]); wraps with corpusOf internally for the algebra stages.
+ * Deliberate deviation from spec §2's Corpus-typed sketch.
+ * LAYERING: this module imports algebra/core ONLY — never ../mneme.js
+ * (read-pipeline's rho import is NOT a precedent here; importing mneme.js
+ * would close a real cycle once write/derive.ts imports this module).
  */
-export function aliasMapOf(corpus: Corpus, opts: { evaluationInstant: number }): AliasLoadResult;
+export function aliasMapOf(claims: readonly Claim[], opts: { evaluationInstant: number }): AliasLoadResult;
 
 /** Family = all variants sharing key's canonical + the canonical itself; [key] when unmapped. Works from variant or canonical input. */
 export function keyFamilyOf(key: string, map: KeyAliasMap): string[];
@@ -239,7 +245,7 @@ export interface ReadPipelineOpts {
 // src/retrieval/read-pipeline.test.ts
 it("serving filter drops alias-shaped claims; aliased stale loser deprecated", () => {
   const stages = canonicalReadStages({ evaluationInstant: NOW, keyAliases: { preferred_editor: "editor" } });
-  const out = runStages(stages, [oldEditorClaim, newPreferredEditorClaim, aliasClaim("preferred_editor", "editor")]);
+  const out = applyStages(stages, [oldEditorClaim, newPreferredEditorClaim, aliasClaim("preferred_editor", "editor")]);
   expect(out.map((c) => c.key)).toEqual(["preferred_editor"]); // newer wins; alias claim filtered
 });
 ```
@@ -271,7 +277,9 @@ The resolve `ExprNode` gains an optional `keyAliases` field (additive, spec A2);
 ## Implementation
 
 ```typescript
-// src/algebra/ast.ts — resolve node (additive)
+// src/algebra/ast.ts — resolve node (additive field), AND the resolve() builder
+// (ast.ts ~:90-102, positional optionals ending in keyCardinality) gains a
+// trailing optional keyAliases param — serialize tests construct via the builder.
 keyAliases?: Record<string, string>;
 
 // src/algebra/compile.ts — detectionOpts build (mirror keyCardinality):
@@ -314,12 +322,18 @@ Spec A2 mechanism: `deriveClaimFrom` — which holds the adapter — computes `a
 ## Implementation
 
 ```typescript
-// src/write/derive.ts — inside deriveClaimFrom, before stamping/serialization:
-import { aliasMapOf } from "../retrieval/key-alias.js";
-const { map } = aliasMapOf(corpusClaims, { evaluationInstant: evaluationClock });
-// walk the expr chain (same walk stampResolveDefaults uses): for each resolve
-// node with keyAliases === undefined and a non-empty map, set keyAliases = map.
-// Explicit keyAliases on a node always wins (including explicit {}).
+// src/write/derive.ts
+import { KEY_ALIAS_KEY, aliasMapOf } from "../retrieval/key-alias.js";
+
+// (a) stampResolveDefaults rebuilds resolve nodes FIELD-BY-FIELD (derive.ts:49-76)
+//     and would silently drop keyAliases — add the carry-through to the rebuild:
+//       if (expr.keyAliases !== undefined) newNode.keyAliases = expr.keyAliases;
+// (b) ORDER MATTERS: stamp FIRST, then walk the STAMPED tree. In deriveClaimFrom:
+const aliasClaims = adapter.query({ corpusId: findLeafCorpusId(expr), key: KEY_ALIAS_KEY });
+const { map } = aliasMapOf(aliasClaims, { evaluationInstant: evaluationClock });
+// walk the stamped tree (same linear src-chain walk stampResolveDefaults uses):
+// for each resolve node with keyAliases === undefined and a non-empty map,
+// set keyAliases = map. Explicit keyAliases always wins (including explicit {}).
 ```
 
 ```typescript
@@ -334,6 +348,7 @@ it("replays exact after the alias is re-pointed post-derivation", () => {
 ## Acceptance criteria
 
 - A derived claim's `queryExpression` contains the alias map active at `evaluationClock`; an explicit `keyAliases` on the node (including `{}`) is never overwritten.
+- Explicit `keyAliases` survives `stampResolveDefaults` (carry-through in the resolve-node rebuild — extend the existing stampResolveDefaults describe block in `derive.test.ts`).
 - Empty resolved map ⇒ no field set (serialized expression byte-identical to pre-slice derivations).
 - Replay returns `exact` after a post-derivation alias re-point or un-ratify (the snapshot isolates).
 - Existing derive/replay tests green unmodified.
@@ -399,7 +414,7 @@ files:
 status: pending
 ```
 
-Read-only census (spec §5) as a pure function over `Session` in `tools.ts` (house structure): distinct keys + counts; O(K²) candidate pairs scored by the registered rank fn (hybrid when loaded — key strings warmed via `warmValues` first — jaccard fallback), sorted desc, truncated to `limit`, `rankFn` reported like recall; resolved alias map; `selfAliases` listed as un-ratified; loader + variant-cardinality warnings; ready-to-paste `remember` ratification shape in the composed text. Census never writes and never logs to the recall-log. Depends on task-recall-family for file-scope serialization on `tools.ts` (and reuses its alias-load block — extract a small shared private helper rather than duplicating).
+Read-only census (spec §5) as a pure function over `Session` in `tools.ts` (house structure): distinct keys + counts; O(K²) candidate pairs scored by the registered rank fn (hybrid when loaded — key strings warmed via `warmValues` first — jaccard fallback), sorted desc, truncated to `limit`, `rankFn` reported like recall; resolved alias map; `selfAliases` listed as un-ratified; loader + variant-cardinality warnings; ready-to-paste `remember` ratification shape in the composed text. **Census population (pinned):** counts non-deprecated claims valid at `evaluationInstant`, EXCLUDING `isKeyAliasShaped` claims and `CONTRADICTION_FLAG_KEY` artifacts; pairs are scored over that key set only (alias/flag infrastructure keys never appear as candidates). Census never writes and never logs to the recall-log. Depends on task-recall-family for file-scope serialization on `tools.ts` (and reuses its alias-load block — extract a small shared private helper rather than duplicating).
 
 ## Implementation
 
@@ -422,7 +437,7 @@ export async function keyCensus(session: Session, args: CensusArgs, deps: Recall
 ```typescript
 // src/mcp/tools.test.ts
 it("census scores key pairs with jaccard fallback and reports rankFn", async () => {
-  const r = await keyCensus(session, { corpus: "c", limit: 5 }, jaccardOnlyDeps);
+  const r = await keyCensus(session, { corpus: "c", limit: 5 }, jaccardDeps);
   expect(r.rankFn).toBe("jaccard");
   expect(r.candidates[0]).toMatchObject({ a: "editor", b: "preferred_editor" });
   expect(r.candidates.length).toBeLessThanOrEqual(5);
@@ -431,7 +446,7 @@ it("census scores key pairs with jaccard fallback and reports rankFn", async () 
 
 ## Acceptance criteria
 
-- Distinct keys + per-key claim counts for the target corpus; unknown corpus ⇒ empty report, no corpus created (spec §7).
+- Distinct keys + per-key claim counts for the target corpus (non-deprecated, valid at evaluationInstant; alias-shaped claims and flag artifacts excluded from keys AND candidate pairs); unknown corpus ⇒ empty report, no corpus created (spec §7).
 - All key pairs scored, sorted descending, truncated to `limit`; `rankFn` reflects the actual scorer (hybrid vs jaccard fallback).
 - Resolved aliases, un-ratified self-aliases, and all warnings present in the structured result; composed `content` includes the `remember` ratification shape.
 - Census performs zero writes and zero recall-log appends.
@@ -442,7 +457,7 @@ Test file: `src/mcp/tools.test.ts`.
 
 ```yaml
 id: task-server-wiring
-depends_on: [task-census-tool, task-recall-family]
+depends_on: [task-census-tool]
 files:
   - src/mcp/server.ts
   - src/mcp/server.integration.test.ts
@@ -451,7 +466,7 @@ status: pending
 is_wiring_task: true
 ```
 
-Register `key_census` with a Zod schema following the sibling tools' pattern (`corpus` defaulting to the server's `defaultCorpus` — A6; `limit` default 20); surface `warnings` returned by `recall`/`keyCensus` on stderr (house convention: tools stay pure, the server does I/O); barrel-export the key-alias module from `src/index.ts`. Recall-log behavior unchanged (census never logs).
+Register `key_census` with a Zod schema following the sibling tools' pattern (`corpus` defaulting to the server's `defaultCorpus` — A6; `limit` default 20); surface `warnings` returned by `recall`/`keyCensus` on stderr (house convention: tools stay pure, the server does I/O); barrel-export the key-alias module from `src/index.ts`. **Recall registration delta (explicit):** the recall `outputSchema` gains `warnings: z.array(z.string()).optional()` and the `structuredContent` literal passes it through — both enumerate fields explicitly, so omitting either silently drops the field. Recall-log behavior unchanged (census never logs).
 
 ## Acceptance criteria
 
@@ -466,7 +481,7 @@ Test file: `src/mcp/server.integration.test.ts`.
 
 ```yaml
 id: task-q2-integration
-depends_on: [task-server-wiring]
+depends_on: [task-server-wiring, task-derive-snapshot]
 files:
   - src/mcp/key-matching.integration.test.ts
 status: pending
