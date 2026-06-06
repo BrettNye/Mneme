@@ -1,9 +1,6 @@
-import { leaf, pipe, rho, tau } from "../../src/index.js";
-import { pairsOf } from "../../src/algebra/contradiction.js";
-import { oplusDedupe } from "../../src/algebra/combination.js";
-import { filterCorpus, type Corpus, type RankedCorpus } from "../../src/algebra/types.js";
-import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../../src/algebra/resolution.js";
-import { relevanceFloor, abstainBelowTop } from "../../src/algebra/similarity.js";
+import { leaf, pipe, rho } from "../../src/index.js";
+import { type RankedCorpus } from "../../src/algebra/types.js";
+import { canonicalReadStages, rankedTailStages } from "../../src/retrieval/read-pipeline.js";
 import type { Session } from "../../src/surface/index.js";
 import type { Claim } from "../../src/core/claim.js";
 import type { LmeQuestionT, AnswerResult } from "./types.js";
@@ -102,8 +99,6 @@ export function answerArmA(
   // Use end-of-day as the evaluation instant: LongMemEval question timestamps have
   // same-day granularity, so evidence sessions later the same calendar day are known.
   const t = evaluationInstant(q);
-  const threshold = opts.conflictThreshold ?? 0;
-  const cutoff = opts.dedupeCutoff ?? 0.5;
 
   // Default rankFn is pinned to "jaccard" — arm A never probes the registry.
   // Callers that want hybrid must register it AND pass rankFn: "hybrid" explicitly.
@@ -111,16 +106,18 @@ export function answerArmA(
 
   const stages = pipe(
     leaf(corpusId),
-    tau.valid(t),
-    (c: Corpus) => oplusDedupe("rule_weighted_avg", undefined,
-      { similarity: { fn: "jaccard", cutoff } })(c),
-    (c: Corpus) => resolveDeprecateOlder(pairsOf(c, threshold, { keyCardinality: opts.keyCardinality }))(c),
-    (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY),
-    rho.by(rankFn, q.question),
-    // Order is contractual: abstainBelowTop MUST run before relevanceFloor — abstention is
-    // decided on the raw ranked corpus, never the floor-filtered one.
-    (r: RankedCorpus) => abstainBelowTop(opts.abstainBelowTop ?? 0)(r),
-    (r: RankedCorpus) => relevanceFloor(opts.relevanceFloor ?? 0)(r)
+    ...canonicalReadStages({
+      evaluationInstant: t,
+      keyCardinality: opts.keyCardinality,
+      conflictThreshold: opts.conflictThreshold,
+      dedupe: { fn: "jaccard", cutoff: opts.dedupeCutoff ?? 0.5 },
+    }),
+    ...rankedTailStages({
+      rankFn,
+      query: q.question,
+      abstainBelowTop: opts.abstainBelowTop,
+      relevanceFloor: opts.relevanceFloor,
+    }),
   );
 
   const ranked = session.mneme.query<RankedCorpus>(corpusId, stages, {
