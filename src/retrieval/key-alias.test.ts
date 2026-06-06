@@ -273,7 +273,23 @@ describe("aliasMapOf — ties", () => {
     c2.valueHash = "vh-canonical-b";
     const { map, warnings } = aliasMapOf([c1, c2], { evaluationInstant: NOW });
     expect(map).not.toHaveProperty("editor");
-    expect(warnings.some((w) => w.includes("tie") || w.includes("conflict") || w.includes("ambiguous") || w.includes("multiple"))).toBe(true);
+    expect(warnings.some((w) => w.includes("ambiguous") || w.includes("tie"))).toBe(true);
+  });
+
+  it("truncates the chain at a tie-dropped node: a→b survives when b's onward alias tied", () => {
+    // a→b is an unambiguous claim; b's onward hop is a tie (two competing b→? claims)
+    const aToB = aliasClaim("a", "b", { from: T_PAST });
+    // Two contesting alias claims for b (same valid.from → tie)
+    const bToC1 = aliasClaim("b", "c1", { from: T_PAST });
+    const bToC2 = aliasClaim("b", "c2", { from: T_PAST });
+    bToC1.valueHash = "vh-b-c1";
+    bToC2.valueHash = "vh-b-c2";
+    const { map, warnings } = aliasMapOf([aToB, bToC1, bToC2], { evaluationInstant: NOW });
+    // a→b must survive: a→b is independently ratified and unambiguous.
+    // The tie on b's onward hop drops b from rawMap, so the chain truncates at b.
+    // Cycles differ (ill-defined chain → drop all); ties merely truncate.
+    expect(map).toEqual({ a: "b" });
+    expect(warnings.some((w) => w.includes("tie") || w.includes("ambiguous"))).toBe(true);
   });
 });
 

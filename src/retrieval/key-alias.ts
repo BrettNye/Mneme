@@ -198,15 +198,25 @@ export function aliasMapOf(
   for (const variant of Object.keys(rawMap)) {
     if (cycleMembers.has(variant)) continue;
 
-    // Follow chain to fixpoint
+    // Follow chain to fixpoint.
+    //
+    // Truncate-at-tie semantics: when the next hop is NOT in rawMap (because it was
+    // tie-dropped in Pass 2), rawMap[current] === undefined and we stop, preserving
+    // variant→current as a valid, independently-ratified mapping. This differs from
+    // cycle handling: cycles represent an ill-defined chain and drop ALL members,
+    // whereas a tie on a downstream node merely truncates the chain at that node —
+    // the upstream mapping is still unambiguous and correct.
     let current = variant;
     while (rawMap[current] !== undefined && !cycleMembers.has(rawMap[current])) {
       current = rawMap[current];
     }
 
-    // Chain terminates legitimately only when rawMap[current] === undefined (true terminal).
-    // Any other exit means the next hop is a cycle member — drop this tail variant.
-    if (rawMap[current] !== undefined || cycleMembers.has(current)) continue;
+    // Chain terminates legitimately when rawMap[current] === undefined (true terminal,
+    // which includes tie-truncation: the tie-dropped node is absent from rawMap).
+    // If the loop exited because the next hop is a cycle member, drop this tail variant.
+    // Note: cycleMembers.has(current) is defensive only — current itself cannot be a
+    // cycle member here because the outer guard (line above) already skips those.
+    if (rawMap[current] !== undefined || cycleMembers.has(current)) continue; // defensive
 
     resolvedMap[variant] = current;
   }
