@@ -177,13 +177,8 @@ it("cosineOver: non-string values canonicalized via canonicalizeValue before loo
     dim: 2,
     embed: async (texts) => texts.map(() => [1, 0]),
   };
-  const cache = new EmbeddingCache();
-  // Warm with canonicalized form of the object
-  const objValue = { city: "nyc" };
-  await warmEmbeddings(objectAdapter, cache, [JSON.stringify({ city: "nyc" })]);
-  // Wait — canonicalizeValue({ city: "nyc" }) = '{"city":"nyc"}' — but we need to warm with the same key
-  // Reset and warm with the canonical string directly
   const { canonicalizeValue } = await import("../core/value.js");
+  const objValue = { city: "nyc" };
   const canonical = canonicalizeValue(objValue);
   const cache2 = new EmbeddingCache();
   await warmEmbeddings(objectAdapter, cache2, [canonical, canonical]);
@@ -196,6 +191,48 @@ it("cosineOver: cache miss throws matching /warmEmbeddings/", async () => {
   const cache = new EmbeddingCache();
   const sim = cosineOver(fake, cache);
   expect(() => sim.scoreOne("missing", "nyc")).toThrow(/warmEmbeddings/);
+});
+
+it("cosineOver: zero vector vs non-zero vector scores 0.5 (neutral midpoint)", async () => {
+  const zeroVsNonZeroAdapter: EmbeddingAdapter = {
+    id: "zero-nonzero-model",
+    version: "v1",
+    dim: 2,
+    embed: async (texts) =>
+      texts.map((t) => (t === "zero" ? [0, 0] : [1, 0])),
+  };
+  const cache = new EmbeddingCache();
+  await warmEmbeddings(zeroVsNonZeroAdapter, cache, ["zero", "nonzero"]);
+  const sim = cosineOver(zeroVsNonZeroAdapter, cache);
+  // zero vector vs non-zero → undefined cosine → neutral midpoint 0.5
+  expect(sim.scoreOne("zero", "nonzero")).toBe(0.5);
+});
+
+it("cosineOver: zero vector vs zero vector scores 1 (identical)", async () => {
+  const zeroAdapter: EmbeddingAdapter = {
+    id: "zero-zero-model",
+    version: "v1",
+    dim: 2,
+    embed: async (texts) => texts.map(() => [0, 0]),
+  };
+  const cache = new EmbeddingCache();
+  await warmEmbeddings(zeroAdapter, cache, ["zero1", "zero2"]);
+  const sim = cosineOver(zeroAdapter, cache);
+  // zero vs zero → treat as identical → 1
+  expect(sim.scoreOne("zero1", "zero2")).toBe(1);
+});
+
+it("EmbeddingCache: cache key separates id+version from text — no prefix collision", () => {
+  const cache = new EmbeddingCache();
+  // id="m@v1", version="a" vs id="m", version="v1@a" — same naive key, distinct \x1f-delimited key
+  const adapterA = { id: "m@v1", version: "a" };
+  const adapterB = { id: "m", version: "v1@a" };
+  const vecA = new Float32Array([1, 0]);
+  const vecB = new Float32Array([0, 1]);
+  cache.set(adapterA, "text", vecA);
+  cache.set(adapterB, "text", vecB);
+  expect(cache.get(adapterA, "text")).toBe(vecA);
+  expect(cache.get(adapterB, "text")).toBe(vecB);
 });
 
 // ── Registry ─────────────────────────────────────────────────────────────────

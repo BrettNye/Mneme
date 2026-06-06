@@ -17,12 +17,12 @@ export interface EmbeddingAdapter {
 
 // ── EmbeddingCache ───────────────────────────────────────────────────────────
 
-/** Cache keyed `${id}@${version}\x1f${canonicalText}` */
+/** Cache keyed `\x1f${id}\x1f${version}\x1f${canonicalText}` (unit-separator delimiters prevent prefix collisions for ids containing "@") */
 export class EmbeddingCache {
   private readonly store = new Map<string, Float32Array>();
 
   private key(adapter: { id: string; version: string }, text: string): string {
-    return `${adapter.id}@${adapter.version}\x1f${text}`;
+    return `\x1f${adapter.id}\x1f${adapter.version}\x1f${text}`;
   }
 
   get(adapter: { id: string; version: string }, text: string): Float32Array | undefined {
@@ -40,6 +40,9 @@ export class EmbeddingCache {
  * Batched warm-up: skips cache hits, validates dim + finiteness before storing.
  * Throws on dim mismatch or non-finite values (fail BEFORE queries).
  * Idempotent: re-running with already-warmed texts is a no-op.
+ *
+ * Note: on validation error, vectors before the failing index are already cached;
+ * re-running after fixing the adapter will not re-fetch those earlier texts.
  */
 export async function warmEmbeddings(
   adapter: EmbeddingAdapter,
@@ -87,8 +90,11 @@ function cosine(a: Float32Array, b: Float32Array): number {
     normA += a[i] * a[i];
     normB += b[i] * b[i];
   }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  if (denom === 0) return 1; // zero-vector vs zero-vector: treat as identical
+  const sqA = Math.sqrt(normA);
+  const sqB = Math.sqrt(normB);
+  if (sqA === 0 && sqB === 0) return 1; // zero vs zero: treat as identical
+  const denom = sqA * sqB;
+  if (denom === 0) return 0.5; // zero vs non-zero: undefined cosine → neutral midpoint
   const cos = dot / denom;
   return (1 + cos) / 2;
 }
