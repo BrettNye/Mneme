@@ -472,6 +472,10 @@ describe("recall — alias-aware key matching", () => {
     const deps = await makeFakeHybridDeps();
     const embedSpy = vi.spyOn(deps.embeddings.adapter!, "embed");
 
+    // Spy on mneme.read to capture which key arguments the warm-up uses.
+    // Each family member must be read with an explicit key — no unfiltered read.
+    const readSpy = vi.spyOn(s.mneme, "read");
+
     // Scoring may throw due to stale-closure; we still check warm-up coverage
     try {
       await recall(s, { about: "editor", key: "editor", corpus }, deps);
@@ -479,11 +483,24 @@ describe("recall — alias-aware key matching", () => {
       // expected in stale-closure test environment
     }
 
-    // The warm-up should have embedded BOTH the editor and preferred_editor values
-    // (family expansion) plus the query
+    // 1. BOTH claim values must be embedded (not just one).
     const allEmbedded = embedSpy.mock.calls.flatMap((call) => call[0] as string[]);
-    // At minimum, both claim values should have been submitted for embedding
-    expect(allEmbedded.some((v) => v === "vim" || v === "emacs")).toBe(true);
+    expect(allEmbedded).toContain("vim");
+    expect(allEmbedded).toContain("emacs");
+
+    // 2. Every warm-up read must carry an explicit key filter (no unfiltered read).
+    //    Alias reads use key === "alias-of"; exclude those. The remaining reads are
+    //    warm-up reads. Each must carry an explicit key value, and together they must
+    //    cover every family member ("editor" and "preferred_editor").
+    const warmupReadOpts = readSpy.mock.calls
+      .map(([, opts]) => opts as { key?: string; corpusId: string })
+      .filter((opts) => opts.key !== "alias-of");
+    const warmupReadKeys = warmupReadOpts.map((opts) => opts.key);
+    // Every warm-up read must have an explicit key (not undefined — no unfiltered read).
+    expect(warmupReadKeys.every((k) => k !== undefined)).toBe(true);
+    // There must be one read per family member — "editor" and "preferred_editor".
+    expect(warmupReadKeys).toContain("editor");
+    expect(warmupReadKeys).toContain("preferred_editor");
   });
 });
 

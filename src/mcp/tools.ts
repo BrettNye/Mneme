@@ -202,16 +202,34 @@ export async function recall(
   // using the FAMILY-expanded key set so variant-key claims are cosine-scored, not
   // jaccard-fallback (which would happen if they were not in the warm-up cache).
   if (embeddings.rankFn !== "jaccard" && embeddings.adapter && embeddings.cache) {
-    const rawClaims = session.mneme.read(args.corpus, {
-      corpusId: args.corpus,
-      subject: args.subject,
-      // Use keyIn for the family when there is a multi-key family; fall back to keyEq for
-      // a single key (or no key filter). This keeps the warm-up read scope identical to
-      // the σ filter the query will apply.
-      ...(family && family.length > 1
-        ? { keys: family }  // NOTE: passed as plain object — mneme.read accepts key or keys
-        : { key: args.key }),
-    });
+    // ExecutionPlan only has key?: string (singular), so for a multi-key family we
+    // issue one read per family member and deduplicate by claim id, mirroring the
+    // σ keyIn semantics. Single-key and no-key paths issue a single read as before.
+    const seenIds = new Set<string>();
+    const rawClaims: import("../core/claim.js").Claim[] = [];
+    if (family && family.length > 1) {
+      for (const k of family) {
+        for (const c of session.mneme.read(args.corpus, {
+          corpusId: args.corpus,
+          subject: args.subject,
+          key: k,
+        })) {
+          if (!seenIds.has(c.id)) {
+            seenIds.add(c.id);
+            rawClaims.push(c);
+          }
+        }
+      }
+    } else {
+      // Single key or no key: one read (key may be undefined → no key filter).
+      rawClaims.push(
+        ...session.mneme.read(args.corpus, {
+          corpusId: args.corpus,
+          subject: args.subject,
+          key: args.key,
+        }),
+      );
+    }
     const claimValues = rawClaims.map((c) => c.value);
     await warmValues(embeddings.adapter, embeddings.cache, claimValues, [args.about]);
   }
