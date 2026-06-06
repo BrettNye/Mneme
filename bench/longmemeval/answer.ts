@@ -3,7 +3,7 @@ import { pairsOf } from "../../src/algebra/contradiction.js";
 import { oplusDedupe } from "../../src/algebra/combination.js";
 import { filterCorpus, type Corpus, type RankedCorpus } from "../../src/algebra/types.js";
 import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../../src/algebra/resolution.js";
-import { relevanceFloor } from "../../src/algebra/similarity.js";
+import { relevanceFloor, abstainBelowTop } from "../../src/algebra/similarity.js";
 import type { Session } from "../../src/surface/index.js";
 import type { Claim } from "../../src/core/claim.js";
 import type { LmeQuestionT, AnswerResult } from "./types.js";
@@ -25,7 +25,11 @@ export interface AnswerOpts {
   dedupeCutoff?: number;
   /** Registered similarity fn for ranking; default "jaccard" — never probes the registry. */
   rankFn?: string;
-  /** Relevance floor for structural abstention; default 0 = disabled (filter is >=). */
+  /** Abstention knob (all-or-nothing on weak TOP match): if top score is strictly below this,
+   *  the entire result is discarded (abstained). Default 0 = off. */
+  abstainBelowTop?: number;
+  /** Precision knob (per-entry): filters individual entries whose score is below this value.
+   *  Default 0 = disabled (filter is >=). */
   relevanceFloor?: number;
 }
 
@@ -111,6 +115,7 @@ export function answerArmA(
     (c: Corpus) => resolveDeprecateOlder(pairsOf(c, threshold, { keyCardinality: opts.keyCardinality }))(c),
     (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY),
     rho.by(rankFn, q.question),
+    (r: RankedCorpus) => abstainBelowTop(opts.abstainBelowTop ?? 0)(r),
     (r: RankedCorpus) => relevanceFloor(opts.relevanceFloor ?? 0)(r)
   );
 

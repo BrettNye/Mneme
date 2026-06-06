@@ -596,12 +596,22 @@ const fakeRankOrderFn = {
   version: "fake-rank-order@1",
   scoreOne: (v: unknown) => (String(v) === "target value" ? 0.9 : 0.1),
 };
+// Scores all claims 0.7 — used for abstainBelowTop tests
+const fakeMidFn = { isPure: true as const, version: "fake-mid@1", scoreOne: () => 0.7 };
+// Scores "strong claim" 0.9, everything else 0.4 — used for combined-knob tests
+const fakeMixedFn = {
+  isPure: true as const,
+  version: "fake-mixed@1",
+  scoreOne: (v: unknown) => (String(v) === "strong claim" ? 0.9 : 0.4),
+};
 
 describe("rankFn + relevanceFloor", () => {
   // Register fakes before the describe block runs; same-object re-register is a no-op.
   beforeEach(() => {
     registerSimilarity("fake-low", fakeLowFn);
     registerSimilarity("fake-rank-order", fakeRankOrderFn);
+    registerSimilarity("fake-mid", fakeMidFn);
+    registerSimilarity("fake-mixed", fakeMixedFn);
   });
 
   // Use unique corpus IDs per test to avoid cross-test contamination.
@@ -706,6 +716,120 @@ describe("rankFn + relevanceFloor", () => {
     // So fake-rank-order must invert the default jaccard order => "target value" ranks first.
     const a = answerArmA(session, corpusId, q, { k: 2, rankFn: "fake-rank-order", keyCardinality: { pref: "multi" } });
     expect(a.claims[0].value).toBe("target value");
+    close();
+  });
+
+  // -------------------------------------------------------------------------
+  // abstainBelowTop knob tests
+  // -------------------------------------------------------------------------
+
+  it("abstainBelowTop 0.8 with all claims scoring 0.7: abstained true, zero claims", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-abstain-top-low-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    session.write(corpusId, {
+      subject: "user",
+      key: "city",
+      value: "Midcity",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-mid-1", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "abstain-top-low-001",
+      question_type: "knowledge-update",
+      question: "Where does the user live?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // All claims score 0.7 via fake-mid; threshold is 0.8 → top (0.7) < 0.8 → abstain
+    const a = answerArmA(session, corpusId, q, { k: 5, rankFn: "fake-mid", abstainBelowTop: 0.8 });
+    expect(a.abstained).toBe(true);
+    expect(a.claims).toHaveLength(0);
+    close();
+  });
+
+  it("abstainBelowTop 0.6 with all claims scoring 0.7: full results returned (not filtered)", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-abstain-top-pass-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    session.write(corpusId, {
+      subject: "user",
+      key: "city",
+      value: "Midcity",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-mid-2", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "abstain-top-pass-001",
+      question_type: "knowledge-update",
+      question: "Where does the user live?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // All claims score 0.7; threshold is 0.6 → top (0.7) >= 0.6 → identity (no abstention)
+    // Distinguishes abstainBelowTop (all-or-nothing) from relevanceFloor (per-entry)
+    const a = answerArmA(session, corpusId, q, { k: 5, rankFn: "fake-mid", abstainBelowTop: 0.6 });
+    expect(a.abstained).toBe(false);
+    expect(a.claims.length).toBeGreaterThan(0);
+    close();
+  });
+
+  it("both knobs: top 0.9 passes abstainBelowTop 0.8, relevanceFloor 0.5 filters weak entries", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-both-knobs-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    // "strong claim" scores 0.9; "weak claim" scores 0.4 via fake-mixed
+    session.write(corpusId, {
+      subject: "user",
+      key: "preference",
+      value: "strong claim",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-strong-1", "turn:0"],
+      confidence: 0.9,
+    });
+    session.write(corpusId, {
+      subject: "user",
+      key: "other_pref",
+      value: "weak claim",
+      valid: { from: new Date("2023-02-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-weak-1", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "both-knobs-001",
+      question_type: "knowledge-update",
+      question: "What is the user's preference?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // abstainBelowTop: 0.8 → top (0.9) >= 0.8 → not abstained
+    // relevanceFloor: 0.5 → filters "weak claim" (0.4 < 0.5) but keeps "strong claim" (0.9 >= 0.5)
+    const a = answerArmA(session, corpusId, q, {
+      k: 5,
+      rankFn: "fake-mixed",
+      abstainBelowTop: 0.8,
+      relevanceFloor: 0.5,
+    });
+    expect(a.abstained).toBe(false);
+    expect(a.claims.map((c) => c.value)).toContain("strong claim");
+    expect(a.claims.map((c) => c.value)).not.toContain("weak claim");
     close();
   });
 });
