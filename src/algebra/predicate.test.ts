@@ -50,6 +50,59 @@ it("subjectIn does not match when subject is not in list", () => {
   expect(matches(claim, { op: "subjectIn", values: ["alice", "bob"] })).toBe(false);
 });
 
+// ── keyIn ─────────────────────────────────────────────────────────────────
+it("keyIn matches any key in the set", () => {
+  const c = makeClaim({ key: "preferred_editor" as any });
+  expect(matches(c, { op: "keyIn", values: ["editor", "preferred_editor"] })).toBe(true);
+  expect(matches(c, { op: "keyIn", values: ["editor"] })).toBe(false);
+});
+
+it("keyIn with empty values matches nothing", () => {
+  const c = makeClaim({ key: "preferred_editor" as any });
+  expect(matches(c, { op: "keyIn", values: [] })).toBe(false);
+});
+
+it("keyIn composes under and", () => {
+  const c = makeClaim({ subject: "alice", key: "preferred_editor" as any });
+  expect(
+    matches(c, {
+      op: "and",
+      preds: [
+        { op: "subjectEq", value: "alice" },
+        { op: "keyIn", values: ["preferred_editor", "theme"] },
+      ],
+    })
+  ).toBe(true);
+  expect(
+    matches(c, {
+      op: "and",
+      preds: [
+        { op: "subjectEq", value: "alice" },
+        { op: "keyIn", values: ["theme"] },
+      ],
+    })
+  ).toBe(false);
+});
+
+it("keyIn composes under or", () => {
+  const c = makeClaim({ key: "preferred_editor" as any });
+  expect(
+    matches(c, {
+      op: "or",
+      preds: [
+        { op: "keyIn", values: ["theme"] },
+        { op: "keyIn", values: ["preferred_editor"] },
+      ],
+    })
+  ).toBe(true);
+});
+
+it("keyIn composes under not", () => {
+  const c = makeClaim({ key: "preferred_editor" as any });
+  expect(matches(c, { op: "not", pred: { op: "keyIn", values: ["theme"] } })).toBe(true);
+  expect(matches(c, { op: "not", pred: { op: "keyIn", values: ["preferred_editor"] } })).toBe(false);
+});
+
 // ── keyEq ─────────────────────────────────────────────────────────────────
 it("keyEq matches when key equals value", () => {
   const claim = makeClaim({ key: "email" as any });
