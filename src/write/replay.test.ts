@@ -1,12 +1,14 @@
 import { replayStatus } from "./replay.js";
+import { deriveClaimFrom } from "./derive.js";
 import { serializeExpr } from "../algebra/serialize.js";
-import { leaf } from "../algebra/ast.js";
+import { leaf, resolve } from "../algebra/ast.js";
 import type { Claim } from "../core/claim.js";
 import type { StorageAdapter, ExecutionPlan } from "../adapters/adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { MissingRule } from "../algebra/registries.js";
 import * as expression from "../algebra/expression.js";
 import { registerEmbeddingAdapter, embeddingAdapter } from "../algebra/embedding.js";
+import { KEY_ALIAS_KEY, KEY_SUBJECT_PREFIX } from "../retrieval/key-alias.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -528,4 +530,80 @@ it("absent embeddingModelVersions (legacy claim) behaves as before with no embed
   } as any;
   const result = replayStatus(derived, adapter);
   expect(result.missingDependencies.some((d) => d.kind === "embedding_version")).toBe(false);
+});
+
+// ─── New: alias snapshot isolation ───────────────────────────────────────────
+
+it("replays exact after the alias is re-pointed post-derivation", () => {
+  // Setup: corpus "c" with one input claim and an alias claim preferred_editor→editor.
+  // The alias is active at derivation time; after derivation, we supersede it with
+  // preferred_editor→ide. The stored queryExpression has the old snapshot, so
+  // re-execution uses the snapshotted alias map and returns "exact".
+
+  const adapter = makeAdapter();
+  const catalog = makeCatalog(["c"]);
+
+  // Input claim
+  const inputClaim = makeClaim("input-alias-replay-1", "vscode");
+  (inputClaim as any)._corpusId = "c";
+  adapter.insertBatch([inputClaim]);
+
+  // Alias claim: preferred_editor → editor (active at t=5000)
+  const aliasClaim = makeClaim("alias-claim-1", "editor", {
+    subject: `${KEY_SUBJECT_PREFIX}preferred_editor`,
+    key: KEY_ALIAS_KEY,
+    valueHash: "alias-hash",
+    status: "active",
+    valid: { from: 0, to: Number.MAX_SAFE_INTEGER },
+    recorded: 5000,
+    recordedSeq: 5,
+  } as any);
+  (aliasClaim as any)._corpusId = "c";
+  adapter.insertBatch([aliasClaim]);
+
+  // Derive at evaluationClock=6000 with the resolve node.
+  // deriveClaimFrom will snapshot the alias map {preferred_editor:"editor"} into the queryExpression.
+  const richCatalog = {
+    getCorpus: (_id: string) => ({
+      defaults: { confidenceThreshold: 0.1 },
+      schema: { keyCardinality: undefined },
+    }),
+  } as any;
+
+  const derived = deriveClaimFrom(
+    adapter,
+    richCatalog,
+    resolve("resolveDeprecateOlder", leaf("c")),
+    { subject: "t", key: "t.k", scope: {}, evaluationClock: 6000 },
+  );
+
+  // Verify the snapshot was captured
+  const storedExpr = JSON.parse(derived.provenance!.derivedFrom!.queryExpression);
+  expect(storedExpr.keyAliases).toEqual({ preferred_editor: "editor" });
+
+  // Now supersede the alias: preferred_editor → ide (re-point post-derivation)
+  const newAliasClaim = makeClaim("alias-claim-2", "ide", {
+    subject: `${KEY_SUBJECT_PREFIX}preferred_editor`,
+    key: KEY_ALIAS_KEY,
+    valueHash: "alias-hash-2",
+    status: "active",
+    valid: { from: 7000, to: Number.MAX_SAFE_INTEGER },
+    recorded: 7000,
+    recordedSeq: 7,
+  } as any);
+  (newAliasClaim as any)._corpusId = "c";
+  adapter.insertBatch([newAliasClaim]);
+
+  // Insert the derived claim into the adapter as a proper Claim (for replayStatus getClaim checks)
+  const storedClaim = makeClaim("derived-alias-replay-1", String(derived.value), {
+    confidence: derived.confidence,
+    provenance: derived.provenance,
+  } as any);
+  (storedClaim as any)._corpusId = "c";
+  adapter.insertBatch([storedClaim]);
+
+  // replayStatus should return "exact": the stored queryExpression has keyAliases snapshotted,
+  // so re-execution uses the old map and reproduces the same result.
+  const result = replayStatus(storedClaim, adapter, catalog);
+  expect(result.status).toBe("exact");
 });
