@@ -213,6 +213,7 @@ export async function recall(
   // Fetch alias claims (index-backed: adapter pushdown via key predicate).
   // On failure: degrade gracefully — recall proceeds alias-less with a warning.
   const now = Date.now();
+  // selfAliases is keyCensus-only; recall only needs aliasMap + warnings.
   const { aliasMap, warnings: aliasWarnings } = loadAliasContext(session, args.corpus, now, keyCardinality);
   const allWarnings: string[] = [...aliasWarnings];
 
@@ -419,12 +420,19 @@ export async function keyCensus(
   // ── Key pair scoring ─────────────────────────────────────────────────────────
   const keyStrings = [...keyCounts.keys()];
 
-  // Warm key strings when hybrid
+  // Warm key strings when hybrid; degrade gracefully on failure (mirrors loadAliasContext pattern).
+  let effectiveRankFn = embeddings.rankFn;
+  let scorerFn = similarityFn(embeddings.rankFn);
   if (embeddings.rankFn !== "jaccard" && embeddings.adapter && embeddings.cache) {
-    await warmValues(embeddings.adapter, embeddings.cache, keyStrings as unknown[], []);
+    try {
+      await warmValues(embeddings.adapter, embeddings.cache, keyStrings as unknown[], []);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`key-pair warm-up failed — scoring with jaccard fallback: ${msg}`);
+      scorerFn = similarityFn("jaccard");
+      effectiveRankFn = "jaccard";
+    }
   }
-
-  const scorerFn = similarityFn(embeddings.rankFn);
 
   // Score all O(K²) pairs
   const allPairs: { a: string; b: string; score: number }[] = [];
@@ -437,8 +445,8 @@ export async function keyCensus(
     }
   }
 
-  // Sort descending by score
-  allPairs.sort((x, y) => y.score - x.score);
+  // Sort descending by score; tiebreaker by key names for full determinism.
+  allPairs.sort((x, y) => y.score - x.score || x.a.localeCompare(y.a) || x.b.localeCompare(y.b));
 
   // Truncate to limit
   const candidates = allPairs.slice(0, limit);
@@ -490,7 +498,7 @@ export async function keyCensus(
     aliases: aliasMap,
     unratified: selfAliases,
     warnings,
-    rankFn: embeddings.rankFn,
+    rankFn: effectiveRankFn,
     content,
   };
 }

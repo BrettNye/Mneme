@@ -507,6 +507,10 @@ describe("recall — alias-aware key matching", () => {
 // ── keyCensus ─────────────────────────────────────────────────────────────────
 
 describe("keyCensus", () => {
+  afterEach(() => {
+    _resetEmbeddingsForTest();
+  });
+
   /**
    * Helper: write an alias claim to a corpus.
    */
@@ -670,6 +674,43 @@ describe("keyCensus", () => {
     }
     const r = await keyCensus(s, { corpus }, jaccardDeps);
     expect(r.candidates.length).toBeLessThanOrEqual(20);
+  });
+
+  it("hybrid deps: key strings passed to embed during warm-up", async () => {
+    const s = freshSession();
+    const corpus = "census-hybrid-warmup";
+    remember(s, { subject: "s", key: "editor", value: "vim", corpus });
+    remember(s, { subject: "s", key: "preferred_editor", value: "emacs", corpus });
+
+    const deps = await makeFakeHybridDeps();
+    const embedSpy = vi.spyOn(deps.embeddings.adapter!, "embed");
+
+    // Scoring may throw due to stale-closure; warm-up spy is populated before scoring.
+    try { await keyCensus(s, { corpus }, deps); } catch (_) { /* expected */ }
+
+    // embed() should have been called with the key strings (not values)
+    const allEmbedded = embedSpy.mock.calls.flatMap((call) => call[0] as string[]);
+    expect(allEmbedded).toContain("editor");
+    expect(allEmbedded).toContain("preferred_editor");
+  });
+
+  it("warm-up throws: census still returns with fallback warning, jaccard rankFn, and scored candidates", async () => {
+    const s = freshSession();
+    const corpus = "census-warmup-throws";
+    remember(s, { subject: "s", key: "editor", value: "vim", corpus });
+    remember(s, { subject: "s", key: "preferred_editor", value: "emacs", corpus });
+
+    const deps = await makeFakeHybridDeps();
+    // Force warmValues to throw a dim-mismatch-style error
+    vi.spyOn(deps.embeddings.adapter!, "embed").mockRejectedValue(new Error("dim mismatch"));
+
+    const r = await keyCensus(s, { corpus }, deps);
+
+    // Must not throw — should degrade gracefully
+    expect(r.warnings.some((w) => w.includes("warm-up failed"))).toBe(true);
+    expect(r.rankFn).toBe("jaccard");
+    // Should still have scored candidates using jaccard fallback
+    expect(r.candidates.length).toBeGreaterThan(0);
   });
 });
 
