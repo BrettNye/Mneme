@@ -53,6 +53,12 @@ export type { SummarizeFn, ProposedSummary, SummarizeInput, SummarizeReport } fr
 export { SUMMARY_WORKFLOW } from "./bio/processes/summarize-types.js";
 export { createSummarizePass } from "./bio/processes/summarize.js";
 
+// Similarity + embedding public surface
+export { registerSimilarity, hybridMax, relevanceFloor } from "./algebra/similarity.js";
+export type { SimilarityFn } from "./algebra/similarity.js";
+export { warmEmbeddings, cosineOver, registerEmbeddingAdapter, embeddingAdapter, EmbeddingCache } from "./algebra/embedding.js";
+export type { EmbeddingAdapter } from "./algebra/embedding.js";
+
 // Replay re-execution engine — AST
 // Names that clash with the existing stage-builder exports from mneme.js are
 // aliased with an "ast" prefix (leaf→astLeaf, sigma→astSigma, etc.).
