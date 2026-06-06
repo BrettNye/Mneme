@@ -5,15 +5,15 @@ created: 2026-06-05
 
 ```mermaid
 flowchart TD
-    task-similarity-core["task-similarity-core: registry + hybrid + floor<br/>files: src/algebra/similarity.ts +1 more"]
-    task-embedding-port["task-embedding-port: embedding adapter port<br/>files: src/algebra/embedding.ts +1 more"]
-    task-rho-by["task-rho-by: generic rho builder<br/>files: src/mneme.ts +1 more"]
-    task-replay-embedding["task-replay-embedding: replay embedding check<br/>files: src/write/replay.ts +1 more"]
-    task-exports["task-exports: public barrel exports<br/>files: src/index.ts"]
-    task-bench-adapter["task-bench-adapter: local model adapter<br/>files: bench/longmemeval/embeddings-local.ts +2 more"]
-    task-bench-arma["task-bench-arma: arm A ranking + floor<br/>files: bench/longmemeval/answer.ts +1 more"]
-    task-bench-harness["task-bench-harness: harness wiring + calibration<br/>files: bench/longmemeval/run.ts +1 more"]
-    task-canonical-spec["task-canonical-spec: canonical spec amendments<br/>files: mneme-spec-v0.2-consolidated.md"]
+    task-similarity-core["task-similarity-core: registry + hybrid + floor<br/>files: src/algebra/similarity.ts +1 more"]:::done
+    task-embedding-port["task-embedding-port: embedding adapter port<br/>files: src/algebra/embedding.ts +1 more"]:::done
+    task-rho-by["task-rho-by: generic rho builder<br/>files: src/mneme.ts +1 more"]:::done
+    task-replay-embedding["task-replay-embedding: replay embedding check<br/>files: src/write/replay.ts +1 more"]:::done
+    task-exports["task-exports: public barrel exports<br/>files: src/index.ts"]:::done
+    task-bench-adapter["task-bench-adapter: local model adapter<br/>files: bench/longmemeval/embeddings-local.ts +2 more"]:::done
+    task-bench-arma["task-bench-arma: arm A ranking + floor<br/>files: bench/longmemeval/answer.ts +1 more"]:::done
+    task-bench-harness["task-bench-harness: harness wiring + calibration<br/>files: bench/longmemeval/run.ts +1 more"]:::running
+    task-canonical-spec["task-canonical-spec: canonical spec amendments<br/>files: mneme-spec-v0.2-consolidated.md"]:::done
 
     task-similarity-core --> task-embedding-port
     task-similarity-core --> task-rho-by
@@ -89,7 +89,7 @@ depends_on: []
 files:
   - src/algebra/similarity.ts
   - src/algebra/similarity.test.ts
-status: pending
+status: done  # 24f460f+c8fa182+fb77fcc — registry+hybridMax(NaN-guarded)+relevanceFloor; spec+quality approved
 ```
 
 The similarity.ts surface grows four additive pieces (spec §2/§4, audit B5/B6):
@@ -165,7 +165,7 @@ depends_on: [task-similarity-core]
 files:
   - src/algebra/embedding.ts
   - src/algebra/embedding.test.ts
-status: pending
+status: done  # 763fd9e+9f2dc7b — adapter port+cache+warm+cosineOver(zero-vector fix); spec+quality approved
 ```
 
 NEW module (spec §1/§3): the `EmbeddingAdapter` protocol, `EmbeddingCache`,
@@ -240,7 +240,7 @@ depends_on: [task-similarity-core]
 files:
   - src/mneme.ts
   - src/mneme.test.ts
-status: pending
+status: done  # 65688e0+46c1504 — rho.by + delegation refactor (.jaccard/.exact now delegate); spec+quality approved
 ```
 
 `rho.by(name, query)` (spec §3): the generic Stage builder for any registered
@@ -297,7 +297,7 @@ depends_on: [task-embedding-port]
 files:
   - src/write/replay.ts
   - src/write/replay.test.ts
-status: pending
+status: done  # 69dbef3 — embedding_version replay arm; spec+quality approved
 ```
 
 Un-defer the documented deferral (spec §3, audit B3): `MissingDependency.kind`
@@ -350,7 +350,7 @@ id: task-exports
 depends_on: [task-embedding-port]
 files:
   - src/index.ts
-status: pending
+status: done  # 032a800 — barrel exports; spec+quality approved
 is_wiring_task: true
 ```
 
@@ -376,7 +376,7 @@ files:
   - bench/longmemeval/embeddings-local.ts
   - package.json
   - package-lock.json
-status: pending
+status: done  # e1cd659+ea7c144 — local bge adapter + warmForQuestion; smoke: NYC-NYCity 0.950 vs unrelated 0.702; spec+quality approved
 is_wiring_task: true
 single_threaded: true
 ```
@@ -416,7 +416,7 @@ depends_on: [task-rho-by, task-similarity-core]
 files:
   - bench/longmemeval/answer.ts
   - bench/longmemeval/answer.test.ts
-status: pending
+status: done  # fde31dc — rankFn+relevanceFloor in arm A (sync); spec+quality approved
 ```
 
 Arm A adopts `rho.by` + `relevanceFloor` (spec §6, audit B4): new `AnswerOpts`
@@ -476,7 +476,7 @@ depends_on: [task-bench-arma, task-bench-adapter]
 files:
   - bench/longmemeval/run.ts
   - bench/longmemeval/manual/adversarial-probe.ts
-status: pending
+status: running
 is_wiring_task: true
 ```
 
@@ -508,7 +508,7 @@ id: task-canonical-spec
 depends_on: [task-embedding-port]
 files:
   - mneme-spec-v0.2-consolidated.md
-status: pending
+status: done  # 87e4066 — Appendix B + §4.6 inserts; spec+quality approved
 is_wiring_task: true
 ```
 
@@ -528,3 +528,53 @@ normative style; insert-only.
 - The §4.6 note does not contradict §2.7's version-capture mandate or §7's replay stratification (it implements them).
 
 Test file: none (documentation — spec-reviewer verifies against design spec §8 and B2 separation).
+
+## Task: top-score abstention stage
+
+```yaml
+id: task-abstain-stage
+depends_on: [task-similarity-core, task-exports]
+files:
+  - src/algebra/similarity.ts
+  - src/algebra/similarity.test.ts
+  - src/index.ts
+status: pending
+```
+
+AMENDMENT (calibration finding, user-ratified two-knob design — see spec
+"Calibration amendment"): `abstainBelowTop(minTopScore)` colocated with
+relevanceFloor — empty `scored` when the TOP score < minTopScore (already-empty
+stays empty), identity otherwise, throws outside [0,1]; barrel export. NOTE:
+reuses files of DONE tasks — execution is sequential-solo at this point, no
+file-scope race exists.
+
+## Acceptance criteria
+
+- `abstainBelowTop(0.8)` on top=0.79 ⇒ empty scored; top=0.80 ⇒ identity (boundary: abstain only when STRICTLY below); empty input ⇒ empty (no throw); out-of-range throws; order preserved on pass-through.
+- relevanceFloor untouched; exported from barrel; tsc clean.
+
+Test file: src/algebra/similarity.test.ts.
+
+## Task: arm A abstention knob
+
+```yaml
+id: task-abstain-knob
+depends_on: [task-abstain-stage, task-bench-arma]
+files:
+  - bench/longmemeval/answer.ts
+  - bench/longmemeval/answer.test.ts
+status: pending
+```
+
+AMENDMENT: `AnswerOpts.abstainBelowTop?: number` (default 0 = off); pipeline
+tail becomes `rho.by → abstainBelowTop(opts.abstainBelowTop ?? 0) →
+relevanceFloor(opts.relevanceFloor ?? 0) → top-k`. Sync preserved; defaults
+byte-identical.
+
+## Acceptance criteria
+
+- Defaults (both knobs 0) byte-identical: all existing answer tests pass unchanged, sync.
+- fake fn top-score 0.7 + abstainBelowTop 0.8 ⇒ abstained true, zero claims; abstainBelowTop 0.6 ⇒ full results (no entry filtered — distinguishes from relevanceFloor).
+- Both knobs together: abstainBelowTop passes, relevanceFloor filters entries below it.
+
+Test file: bench/longmemeval/answer.test.ts.

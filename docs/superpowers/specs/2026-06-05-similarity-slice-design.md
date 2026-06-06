@@ -36,6 +36,46 @@ Three parallel scanners (repo-pattern/code-reality, bio + cross-layer embedding 
 - **B7 (verified): no embedding usage exists anywhere in the repo today** (exhaustive grep: zero matches) — this port is THE single embedding abstraction; see "Single embedding abstraction" section.
 - **Clean bills:** rho-builder hardcoding claim exact (mneme.ts:105-120); replay mirror-structure exact; `canonicalizeValue` parity verified; `EmbeddingCache`-as-class matches StagingBuffer/Promoter precedent; `src/algebra/` placement correct per the DreamFn port precedent (`src/adapters/` is persistence-only); warmEmbeddings eager validation = house pattern (oplusDedupe cutoff precedent).
 
+## Calibration amendment (2026-06-05, measured during execution, user-ratified)
+
+The single per-entry floor FAILED as an abstention mechanism on real bge score
+distributions: evidence claims span 0.64–0.94 and abstention-question survivors
+0.70–0.83, so no floor value meets abstention ≥0.6 without destroying recall
+(measured: floor 0.805 ⇒ abstention 3/5 but KU recall@3 0.85→0.65, recall@10
+1.0→0.70, temporal regressed). Per-question TOP scores separate far better:
+answerable tops 0.812–0.951 vs abstention tops 0.787–0.829.
+
+**Resolution — TWO separately-dialable knobs (user-ratified):**
+
+1. **Precision floor** — `relevanceFloor(minScore)`: per-entry filter ("don't
+   serve weak claims"). Stays as built. Bench default 0 = off (any per-entry
+   floor damages recall on this data); the knob exists for precision-sensitive
+   consumers (MCP recall).
+2. **Abstention threshold** — `abstainBelowTop(minTopScore)` (NEW, colocated
+   with relevanceFloor): `RankedCorpus → RankedCorpus`; returns empty `scored`
+   when `scored[0].score < minTopScore` (an already-empty corpus stays empty),
+   identity otherwise. Throws outside [0,1]. "Don't answer at all when even the
+   best match is weak." Zero recall impact on answerable questions by
+   construction. Bench calibrates ≈0.808. Exported through the barrel.
+
+`AnswerOpts` gains `abstainBelowTop?: number` (default 0 = off) beside
+`relevanceFloor`. Pipeline tail: `rho.by → abstainBelowTop(τ_a) →
+relevanceFloor(τ_p) → top-k`. The two knobs compose independently — abstention
+inspects only the top score, the floor filters entries.
+
+**Calibration caveats (recorded honestly):** the answerable-min vs
+abstention-max separation is razor-thin (overlap zone 0.812–0.829; threshold
+0.808 clears the weakest answerable question by 0.004) on N=20 — a measured
+dial, not a universal constant; bge-small compresses scores, a stronger
+embedding model would widen the gap. **3/5 abstention is the ceiling on this
+data** — the two non-firing abstention questions score above the weakest
+answerable question (LongMemEval's topically-adjacent traps working as
+designed); pushing to 4/5 necessarily false-abstains. Accepted targets:
+abstention ≥0.6 with zero false abstentions; KU recall@3 = 0.85 accepted as the
+measured outcome (3 receipt questions remain ranking-blocked by sibling-claim
+ordering under hybrid — the next ranking lever, documented, not chased this
+slice).
+
 ## Design
 
 ### 1. Embedding port + cache + warm-up (src/algebra/embedding.ts — NEW)
