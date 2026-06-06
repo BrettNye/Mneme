@@ -13,6 +13,17 @@
 3. **Cardinality — `.mneme/config.json` per project.** Optional file beside the db: `{ "keyCardinality": { "decision": "multi", ... } }`; validated at load (invalid values = loud startup error — never silently all-single); absent file = all-single (today's behavior). Versionable per repo; editable as dogfooding teaches which keys accumulate.
 4. **The pipeline becomes front-and-center — a retrieval LAYER (user elevation).** The canonical read composition is a primary piece of the methodology, so it gets a first-class home: **`src/retrieval/`**, a layer ABOVE algebra for named compositions of operators (SoC: algebra = operators, retrieval = recipes, surface = session facade). `read-pipeline.ts` exports the canonical core; **bench arm A migrates to consume it** in this slice — the deterministic benchmark re-run is the proof that the extraction is behavior-identical, and the benchmark becomes the recipe's standing verification instrument.
 
+## Audit amendments (2026-06-06, post-scan, fix-all authorized)
+
+- **C1:** `rankedTailStages` added to the retrieval layer (the ranking tail was duplicated across bench + MCP; the pipeline is front-and-center, so the tail is part of the recipe family).
+- **C2:** shared `warmValues` helper in src/algebra/embedding.ts (one canonicalization loop; bench `warmForQuestion` reimplemented over it).
+- **C3:** keyCardinality transport clarified — config → recall-time `DetectionOptions`; NOT corpus schema; no `CorpusSpec` change.
+- **C4:** embeddings init failure = permanent-until-restart (documented Known Limitation) + test-only singleton reset.
+- **C5:** `topScore` = pre-knob max, present even when abstained.
+- **C6:** `dedupe.rule` marked RESERVED (no consumer this slice).
+- **C7 (flagged landmine, deferred):** `session.createCorpus` hardcodes `scalarPseudocount: {}` while canonical §3.2 mandates no-silent-defaults and `pseudocountFor` throws on missing sources. No current MCP path hits it; it WILL bite the bio-efficacy slice (scalar→Beta promotion on dogfood corpora). Recorded here; fix belongs to the surface layer when bio attaches.
+- **Clean bills:** layering cycle-free (retrieval uses algebra `tauValid` op directly, never the facade for it); `WriteRecord.scope`/`valid` already exist; `CorpusSpec.scopeFields` exists; `query` accepts `evaluationClock`; `.mneme/` creation + gitignore in place; additive MCP schema fields break no existing test; dynamic-import/devDep typecheck safe; §4.8/§4.6/§2.7 + two-knob ordering conformance verified (version capture correctly NOT mandated for read-only recall).
+
 ## Design
 
 ### 1. Retrieval layer (src/retrieval/read-pipeline.ts — NEW LAYER)
@@ -29,7 +40,8 @@ export interface ReadPipelineOpts {
   /** ⊥ eligibility floor; default 0 (all contest). */
   conflictThreshold?: number;
   /** Dedupe config; defaults { fn: "jaccard", cutoff: 0.5, rule: "rule_weighted_avg" }
-   *  (the safe idempotent rule — the bio-layer precedent). */
+   *  (the safe idempotent rule — the bio-layer precedent). `rule` is RESERVED
+   *  (audit: no consumer overrides it this slice; MVP pins weighted_avg). */
   dedupe?: { fn: string; cutoff: number; rule?: string };
 }
 
@@ -37,19 +49,35 @@ export interface ReadPipelineOpts {
  * The canonical read-side core (canonical spec §4.8 composition note, reified):
  *   τ_valid(t) → ⊕_dedupe(rule, similarity) → ⊥(keyCardinality, floor)
  *   → resolveDeprecateOlder → drop deprecated + contradiction-flag artifacts
- * Returns Corpus→Corpus stages; callers prepend leaf/σ and append ranking + knobs:
- *   rho.by(fn, query) → abstainBelowTop(τ_a) → relevanceFloor(τ_p) → (top-k | κ)
+ * Returns Corpus→Corpus stages; callers prepend leaf/σ.
  */
 export function canonicalReadStages(opts: ReadPipelineOpts): Stage<Corpus, Corpus>[];
+
+export interface RankedTailOpts {
+  rankFn: string;            // registered similarity fn name
+  query: Value;
+  abstainBelowTop?: number;  // default 0 = off
+  relevanceFloor?: number;   // default 0 = off
+}
+
+/**
+ * The ranking tail recipe (audit DRY finding — bench + MCP both append it):
+ *   rho.by(rankFn, query) → abstainBelowTop(τ_a) → relevanceFloor(τ_p)
+ * Ordering contract: abstention is decided on the raw ranked corpus, never the
+ * floor-filtered one. Returns Corpus→RankedCorpus stages; callers append top-k/κ.
+ * (Uses the rho.by builder — retrieval MAY import the rho builders from the
+ * facade's home module; the layering rule constrains algebra←retrieval only.)
+ */
+export function rankedTailStages(opts: RankedTailOpts): Stage<any, any>[];
 ```
 
-- Pure composition of existing exports (oplusDedupe, pairsOf, resolveDeprecateOlder, filterCorpus, tauValid) — no new operator semantics. Composition-first: this layer ADDS no math, only names a recipe.
-- Layering rule (enforced by review): `src/retrieval/` imports from algebra/catalog only; surface, mcp, and bench import from retrieval. Algebra never imports retrieval.
-- Barrel-exported (`canonicalReadStages`, `ReadPipelineOpts`).
+- Pure composition of existing exports (oplusDedupe, pairsOf, resolveDeprecateOlder, filterCorpus, tauValid op, rho.by, abstainBelowTop, relevanceFloor) — no new operator semantics. Composition-first: this layer ADDS no math, only names recipes.
+- Layering rule (enforced by review): algebra NEVER imports retrieval; retrieval imports algebra/catalog (and the rho builders); surface, mcp, and bench import from retrieval.
+- Barrel-exported (`canonicalReadStages`, `rankedTailStages`, `ReadPipelineOpts`, `RankedTailOpts`).
 
 ### 2. Bench arm A migrates to the recipe (bench/longmemeval/answer.ts)
 
-`answerArmA`'s hand-rolled middle (τ_valid → dedupe → ⊥/resolve → drop) is replaced by `canonicalReadStages({ evaluationInstant: t, keyCardinality: opts.keyCardinality, dedupe: { fn: "jaccard", cutoff: opts.dedupeCutoff ?? 0.5 } })`. Ranking tail (rho.by → abstainBelowTop → relevanceFloor) unchanged. **Acceptance: the manual benchmark reproduces PR #21's exact numbers** (KU recall@3 0.95, abstention 1.0, updateCorrect 1.0, 60/60) — the behavior-identity proof for the extraction.
+`answerArmA`'s hand-rolled middle is replaced by `canonicalReadStages({ evaluationInstant: t, keyCardinality: opts.keyCardinality, dedupe: { fn: "jaccard", cutoff: opts.dedupeCutoff ?? 0.5 } })` and its tail by `rankedTailStages({ rankFn, query: q.question, abstainBelowTop: opts.abstainBelowTop, relevanceFloor: opts.relevanceFloor })`. **Acceptance: the manual benchmark reproduces PR #21's exact numbers** (KU recall@3 0.95, abstention 1.0, updateCorrect 1.0, 60/60) — the behavior-identity proof for the extraction.
 
 ### 3. MCP embeddings wiring (src/mcp/embeddings.ts — NEW; src/adapters/embedding/transformers-local.ts — MOVED)
 
@@ -59,23 +87,24 @@ export function canonicalReadStages(opts: ReadPipelineOpts): Stage<Corpus, Corpu
  *  "cosine" (cosineOver(adapter, cache)) + "hybrid" (hybridMax(simJaccard, cosine)),
  *  registerEmbeddingAdapter. Returns { rankFn: "hybrid", adapter, cache } on success;
  *  on ANY failure logs ONE stderr warning and returns { rankFn: "jaccard" } — cached
- *  either way (no retry storm). Injectable adapter factory for tests (fake adapter). */
+ *  either way (no retry storm). KNOWN LIMITATION (audit): a load failure is permanent
+ *  for the server's lifetime — restart to retry. Injectable adapter factory for tests
+ *  (fake adapter); exports a test-only reset for singleton state between cases. */
 export function initEmbeddings(factory?: () => Promise<EmbeddingAdapter>): Promise<EmbeddingState>;
 ```
 
-- Warm-up per recall: `await warmEmbeddings(adapter, cache, [...corpus claim values (canonicalized, same rule as cosineOver), query])` before the synchronous query — the cache makes repeat recalls incremental (only new claims embed).
-- The bench's `warmForQuestion` keeps its home in bench; MCP has its own corpus-shaped warm helper here.
+- Warm-up per recall via the SHARED helper (audit DRY finding): `warmValues(adapter, cache, values: unknown[], extra: string[])` — NEW in src/algebra/embedding.ts beside warmEmbeddings — canonicalizes values with cosineOver's exact rule (string pass-through, non-string → canonicalizeValue) plus extra strings, then delegates to warmEmbeddings. MCP passes corpus claim values + the query; **bench's `warmForQuestion` is reimplemented over it** (one canonicalization loop in the repo). Cache makes repeat recalls incremental (only new claims embed).
 
 ### 4. Recall runs the full pipeline (src/mcp/tools.ts)
 
 ```
 leaf → σ(subject/key filters) → ...canonicalReadStages({ evaluationInstant: now, keyCardinality, dedupe })
-     → rho.by(state.rankFn, about) → abstainBelowTop(args.abstainBelowTop ?? 0)
-     → relevanceFloor(args.relevanceFloor ?? 0) → matches(limit) / κ.markdown(maxTokens)
+     → ...rankedTailStages({ rankFn: state.rankFn, query: about, abstainBelowTop, relevanceFloor })
+     → matches(limit) / κ.markdown(maxTokens)
 ```
 
 - New optional args: `abstainBelowTop`, `relevanceFloor` (0..1, validated by the stages' own throws → tool error).
-- `RecallResult` gains `topScore?: number` (post-pipeline, pre-knob top — the calibration signal), `abstained: boolean`, `rankFn: string`. Existing fields unchanged (additive).
+- `RecallResult` gains `topScore?: number`, `abstained: boolean`, `rankFn: string`. **topScore semantics pinned (audit):** the maximum score in the ranked corpus BEFORE either knob — present even when `abstained: true`, so calibration logs distinguish "top was weak" from "nothing survived the floor". Existing fields unchanged (additive).
 - Read-only contract preserved: unknown corpus still returns empty without creating.
 
 ### 5. Observability (src/mcp/recall-log.ts — NEW, tiny)
@@ -84,7 +113,7 @@ Append one JSONL line per recall to `.mneme/recall-log.jsonl` (beside the db): `
 
 ### 6. Config (src/mcp/config.ts — NEW, tiny)
 
-Load `.mneme/config.json` (path derived from dbPath's directory) at server startup: `{ keyCardinality?: Record<string, "single" | "multi"> }`. Validation: unknown top-level keys warn; invalid cardinality values → loud startup error (uses the same "single"|"multi" discipline as `cardinalityOf`). Absent file = `{}`.
+Load `config.json` from dbPath's directory at server startup (e.g. dbPath `./.mneme/store.db` ⇒ config `./.mneme/config.json`): `{ keyCardinality?: Record<string, "single" | "multi"> }`. Validation: unknown top-level keys warn; invalid cardinality values → loud startup error (the same "single"|"multi" discipline as `cardinalityOf`). Absent file = `{}`. **Transport clarification (audit):** the map is passed to recall as `ReadPipelineOpts.keyCardinality` → `DetectionOptions` at READ time — it is NOT stored in the corpus schema (no `CorpusSpec` change; detection options are caller-supplied by design).
 
 ### 7. Remember-side ingest discipline (src/mcp/tools.ts, server.ts)
 
