@@ -671,6 +671,8 @@ Standard similarity functions (full input-type and cost table in Appendix B):
 
 Because `ρ_cosine` (and any embedding-based function) depends on the embedding model in use, a derived write whose query references a similarity-based operator MUST capture the similarity-function and embedding-model versions in derivation provenance (§2.7); replay is conditional on those versions remaining available (§6).
 
+**Composition at the `SimilarityFn` level.** Similarity functions compose at the `SimilarityFn` level: a combinator such as `hybrid-max` is itself a `SimilarityFn` whose score is the maximum of its component scores and whose `isPure` is the conjunction of its components' `isPure` flags. Combinators carry machine-generated version strings (e.g. `hybrid-max@1[jaccard@1,cosine@1]`) that are recorded in `similarityVersions` in derivation provenance (§2.7). Embedding-model identity is recorded SEPARATELY in `embeddingModelVersions` (also §2.7) — version strings in `similarityVersions` are math-only identifiers that do not embed the model name. This separation means that if the underlying embedding model changes (e.g. a model upgrade), the similarity-function version string is unchanged but a new `embeddingModelVersions` entry is recorded; the replay machinery (§7) surfaces the drift through the embedding-version check, not through the similarity-function-version check. Version strings stay math-only so that model drift surfaces exclusively through the embedding-version replay check.
+
 **Equational laws.**
 
 - Monotonicity under selection: `ρ_{sim,q}(σ_p(C))` produces a subset of the rankings of `ρ_{sim,q}(C)` — filtering before ranking yields a subset of the ranking obtained after filtering. (This is the basis for hoisting similarity to after selection in §4.14.)
@@ -2220,6 +2222,8 @@ These are the standard similarity functions referenced in §4.6. Each is registe
 | `sim_bm25`         | Text × Text     | [0, ∞)       | O(n)           | Normalized to [0, 1] for ranking |
 | `sim_exact`        | Any × Any       | {0, 1}       | O(1)           | Binary match                     |
 | `sim_structural`   | Typed × Typed   | [0, 1]       | varies         | Domain-specific; user-defined    |
+
+**`sim_cosine` reference implementation.** The reference implementation is adapter-backed and cache-backed. It depends on an `EmbeddingAdapter` protocol (§4.6) to produce embeddings and reads those embeddings from a pre-populated cache at query time. The warm-up contract is: embeddings for the corpus are computed OUTSIDE query evaluation via an async warm-up step (`warmEmbeddings`); at query time the implementation reads synchronously from the cache and MUST NOT trigger embedding computation. A cache miss at query time is an error (throw) — the caller is expected to have warmed the cache before invoking the operator. The raw cosine similarity is mapped to [0, 1] via `(1 + cos) / 2` so that the output range matches the `SimilarityFn` contract. The cost profile is: high at warm-up (one embedding-model call per uncached claim); O(dim) per pair at query time after the cache is populated, where `dim` is the embedding dimensionality. The embedding-model version is recorded in `embeddingModelVersions` in derivation provenance (§2.7), not in the similarity-function version string (see §4.6 composition note).
 
 ---
 
