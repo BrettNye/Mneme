@@ -18,6 +18,8 @@ import { canonicalReadStages } from "../retrieval/read-pipeline.js";
 import { abstainBelowTop, relevanceFloor } from "../algebra/similarity.js";
 import { warmValues } from "../algebra/embedding.js";
 import type { EmbeddingState } from "./embeddings.js";
+import { KEY_ALIAS_KEY, aliasMapOf, keyFamilyOf } from "../retrieval/key-alias.js";
+import type { KeyAliasMap } from "../retrieval/key-alias.js";
 
 export interface RecallDeps {
   embeddings: EmbeddingState;
@@ -124,6 +126,10 @@ export interface RecallResult {
   abstained: boolean;
   /** The similarity fn name used for ranking (from deps.embeddings.rankFn). */
   rankFn: string;
+  /** Non-fatal warnings surfaced during alias loading or cardinality checking.
+   *  Present only when there is at least one warning; undefined otherwise.
+   *  The server layer is responsible for surfacing these to the caller. */
+  warnings?: string[];
 }
 
 export async function recall(
@@ -150,33 +156,86 @@ export async function recall(
     return emptyResult;
   }
 
-  // If hybrid embeddings active: warm claim values (scoped to the same subject/key predicates
-  // the σ stages use) + the query before the single query execution.
+  // ── Alias map loading ────────────────────────────────────────────────────────
+  // Fetch alias claims (index-backed: adapter pushdown via key predicate).
+  // On failure: degrade gracefully — recall proceeds alias-less with a warning.
+  const now = Date.now();
+  const allWarnings: string[] = [];
+  let aliasMap: KeyAliasMap = {};
+
+  try {
+    const aliasClaims = session.mneme.read(args.corpus, {
+      corpusId: args.corpus,
+      key: KEY_ALIAS_KEY,
+    });
+    const { map, warnings: loaderWarnings } = aliasMapOf(aliasClaims, { evaluationInstant: now });
+    aliasMap = map;
+    allWarnings.push(...loaderWarnings);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    allWarnings.push(`alias load failed — proceeding without alias expansion: ${msg}`);
+    // aliasMap stays {}; family expansion below yields [args.key] (no expansion)
+  }
+
+  // ── Key family expansion ─────────────────────────────────────────────────────
+  // Expand the requested key to the full family (canonical + all variants).
+  // For a single unmapped key, keyFamilyOf returns [key] — no behavioral change.
+  const family: string[] | undefined = args.key ? keyFamilyOf(args.key, aliasMap) : undefined;
+
+  // ── Variant-cardinality warnings ─────────────────────────────────────────────
+  // Warn when any variant key in the alias map has a declared cardinality override
+  // in deps.keyCardinality. Variant keys are grouped with their canonical during
+  // contradiction detection, so a cardinality declaration authored for a variant
+  // name becomes ambiguous once the alias is active.
+  if (keyCardinality) {
+    for (const variant of Object.keys(aliasMap)) {
+      if (keyCardinality[variant] !== undefined) {
+        allWarnings.push(
+          `variant key "${variant}" (alias of "${aliasMap[variant]}") has a cardinality declaration (${keyCardinality[variant]}) — alias may shadow the override`,
+        );
+      }
+    }
+  }
+
+  // ── Warm-up (hybrid only) ────────────────────────────────────────────────────
+  // Warm claim values scoped to the same subject/key predicates as the σ stages,
+  // using the FAMILY-expanded key set so variant-key claims are cosine-scored, not
+  // jaccard-fallback (which would happen if they were not in the warm-up cache).
   if (embeddings.rankFn !== "jaccard" && embeddings.adapter && embeddings.cache) {
     const rawClaims = session.mneme.read(args.corpus, {
       corpusId: args.corpus,
       subject: args.subject,
-      key: args.key,
+      // Use keyIn for the family when there is a multi-key family; fall back to keyEq for
+      // a single key (or no key filter). This keeps the warm-up read scope identical to
+      // the σ filter the query will apply.
+      ...(family && family.length > 1
+        ? { keys: family }  // NOTE: passed as plain object — mneme.read accepts key or keys
+        : { key: args.key }),
     });
     const claimValues = rawClaims.map((c) => c.value);
     await warmValues(embeddings.adapter, embeddings.cache, claimValues, [args.about]);
   }
 
-  // Build filter stages (σ).
+  // ── σ filter stages ──────────────────────────────────────────────────────────
+  // Build filter predicates. When the key has a multi-key alias family, use keyIn
+  // so all family members (canonical + variants) are included in a single pass.
   const filters: Predicate[] = [];
   if (args.subject) filters.push({ op: "subjectEq", value: args.subject });
-  if (args.key) filters.push({ op: "keyEq", value: args.key });
+  if (family && family.length > 1) {
+    filters.push({ op: "keyIn", values: family });
+  } else if (args.key) {
+    filters.push({ op: "keyEq", value: args.key });
+  }
   const sigmas = filters.map((p) => sigma(p));
 
   // SINGLE query execution:
-  // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥ + drop) → ρ.by(rankFn, query)
-  const now = Date.now();
+  // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥(keyAliases) + drop) → ρ.by(rankFn, query)
   const ranked = session.mneme.query<RankedCorpus>(
     args.corpus,
     pipe(
       leaf(args.corpus),
       ...sigmas,
-      ...canonicalReadStages({ evaluationInstant: now, keyCardinality }),
+      ...canonicalReadStages({ evaluationInstant: now, keyCardinality, keyAliases: aliasMap }),
       rho.by(embeddings.rankFn, args.about),
     ),
     { evaluationClock: now },
@@ -218,6 +277,7 @@ export async function recall(
     topScore,
     abstained,
     rankFn: embeddings.rankFn,
+    warnings: allWarnings.length > 0 ? allWarnings : undefined,
   };
 }
 
