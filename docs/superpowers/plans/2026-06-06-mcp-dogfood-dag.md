@@ -5,16 +5,16 @@ created: 2026-06-06
 
 ```mermaid
 flowchart TD
-    task-retrieval-layer["task-retrieval-layer: canonical recipes<br/>files: src/retrieval/read-pipeline.ts +1 more"]
-    task-warm-values["task-warm-values: shared warm helper<br/>files: src/algebra/embedding.ts +1 more"]
-    task-mcp-config["task-mcp-config: config loader<br/>files: src/mcp/config.ts +1 more"]
-    task-recall-log["task-recall-log: observability log<br/>files: src/mcp/recall-log.ts +1 more"]
-    task-adapter-move["task-adapter-move: adapter graduation<br/>files: src/adapters/embedding/transformers-local.ts +1 more"]
-    task-mcp-embeddings["task-mcp-embeddings: lazy embeddings init<br/>files: src/mcp/embeddings.ts +1 more"]
-    task-bench-migrate["task-bench-migrate: arm A on recipes<br/>files: bench/longmemeval/answer.ts +1 more"]
-    task-mcp-tools["task-mcp-tools: full-pipeline recall<br/>files: src/mcp/tools.ts +1 more"]
-    task-exports-retrieval["task-exports-retrieval: barrel exports<br/>files: src/index.ts"]
-    task-mcp-server["task-mcp-server: server registration<br/>files: src/mcp/server.ts +1 more"]
+    task-retrieval-layer["task-retrieval-layer: canonical recipes<br/>files: src/retrieval/read-pipeline.ts +1 more"]:::done
+    task-warm-values["task-warm-values: shared warm helper<br/>files: src/algebra/embedding.ts +1 more"]:::done
+    task-mcp-config["task-mcp-config: config loader<br/>files: src/mcp/config.ts +1 more"]:::done
+    task-recall-log["task-recall-log: observability log<br/>files: src/mcp/recall-log.ts +1 more"]:::done
+    task-adapter-move["task-adapter-move: adapter graduation<br/>files: src/adapters/embedding/transformers-local.ts +1 more"]:::done
+    task-mcp-embeddings["task-mcp-embeddings: lazy embeddings init<br/>files: src/mcp/embeddings.ts +1 more"]:::done
+    task-bench-migrate["task-bench-migrate: arm A on recipes<br/>files: bench/longmemeval/answer.ts +1 more"]:::done
+    task-mcp-tools["task-mcp-tools: full-pipeline recall<br/>files: src/mcp/tools.ts +1 more"]:::done
+    task-exports-retrieval["task-exports-retrieval: barrel exports<br/>files: src/index.ts"]:::done
+    task-mcp-server["task-mcp-server: server registration<br/>files: src/mcp/server.ts +1 more"]:::done
 
     task-warm-values --> task-adapter-move
     task-adapter-move --> task-mcp-embeddings
@@ -29,7 +29,7 @@ flowchart TD
     task-mcp-config --> task-mcp-server
     task-recall-log --> task-mcp-server
     task-mcp-server --> task-dogfood-protocol
-    task-dogfood-protocol["task-dogfood-protocol: dogfood window artifact<br/>files: docs/dogfood/2026-06-06-dogfood-protocol.md"]
+    task-dogfood-protocol["task-dogfood-protocol: dogfood window artifact<br/>files: docs/dogfood/2026-06-06-dogfood-protocol.md"]:::done
 
     classDef done fill:#90ee90,stroke:#333
     classDef ready fill:#fffacd,stroke:#333
@@ -92,7 +92,7 @@ depends_on: []
 files:
   - src/retrieval/read-pipeline.ts
   - src/retrieval/read-pipeline.test.ts
-status: pending
+status: done  # 10796a3+05f7d18 — canonicalReadStages+rankedTailStages; spec+quality approved
 ```
 
 NEW LAYER (spec §1, user elevation): named compositions of algebra operators.
@@ -163,7 +163,7 @@ depends_on: []
 files:
   - src/algebra/embedding.ts
   - src/algebra/embedding.test.ts
-status: pending
+status: done  # bdb0f19+a839c3c — warmValues over toText; approved
 ```
 
 Audit C2: ONE canonicalization loop in the repo. `warmValues` sits beside
@@ -205,7 +205,7 @@ depends_on: [task-warm-values]
 files:
   - src/adapters/embedding/transformers-local.ts
   - bench/longmemeval/embeddings-local.ts
-status: pending
+status: done  # d6fe61b — adapter graduated to src/adapters/embedding; approved (+1692030 skipLibCheck controller fix)
 is_wiring_task: true
 ```
 
@@ -234,7 +234,7 @@ depends_on: []
 files:
   - src/mcp/config.ts
   - src/mcp/config.test.ts
-status: pending
+status: done  # b7a5da0+f39f563 — loader + ENOENT-only fallback; approved
 ```
 
 Spec §6 + audit C3: load `config.json` from dbPath's directory.
@@ -275,7 +275,7 @@ depends_on: []
 files:
   - src/mcp/recall-log.ts
   - src/mcp/recall-log.test.ts
-status: pending
+status: done  # 0abbab5 — appendRecallLog; approved
 ```
 
 Spec §5: best-effort JSONL appender — the knob-calibration dataset.
@@ -314,7 +314,7 @@ depends_on: [task-adapter-move]
 files:
   - src/mcp/embeddings.ts
   - src/mcp/embeddings.test.ts
-status: pending
+status: done  # 78eef06+94bbe48 — lazy singleton + promise-cache race fix; approved
 ```
 
 Spec §3 + audit C4: lazy singleton; success registers cosine+hybrid; ANY failure ⇒
@@ -366,7 +366,7 @@ depends_on: [task-retrieval-layer]
 files:
   - bench/longmemeval/answer.ts
   - bench/longmemeval/answer.test.ts
-status: pending
+status: done  # fbbbbbf — arm A on recipes + equivalence pin; approved
 ```
 
 Spec §2: arm A's hand-rolled middle + tail replaced by `canonicalReadStages` +
@@ -418,7 +418,7 @@ files:
   - src/mcp/tools.ts
   - src/mcp/tools.test.ts
   - src/mcp/test-support.ts
-status: pending
+status: done  # 76c9650+0df6858 — full-pipeline async recall + remember scope/validFrom; scope violation (server.ts compile bridge) logged+sanctioned; spec+quality approved
 ```
 
 Spec §4/§7: recall composes σ → canonicalReadStages → rho.by, becomes ASYNC
@@ -493,7 +493,7 @@ id: task-exports-retrieval
 depends_on: [task-retrieval-layer, task-warm-values]
 files:
   - src/index.ts
-status: pending
+status: done  # 13bdb42 — barrel exports; approved
 is_wiring_task: true
 ```
 
@@ -515,7 +515,7 @@ depends_on: [task-mcp-tools, task-mcp-config, task-recall-log]
 files:
   - src/mcp/server.ts
   - src/mcp/server.integration.test.ts
-status: pending
+status: done  # ebf7268 — full shell wiring + 5 integration tests; spec+quality approved
 is_wiring_task: true
 ```
 
@@ -549,7 +549,7 @@ id: task-dogfood-protocol
 depends_on: [task-mcp-server]
 files:
   - docs/dogfood/2026-06-06-dogfood-protocol.md
-status: pending
+status: done  # 0bb6e33 — 2-week protocol artifact; approved
 is_wiring_task: true
 ```
 
