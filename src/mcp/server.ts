@@ -9,6 +9,7 @@ import { z } from "zod";
 import { basename } from "node:path";
 import { openSession } from "../surface/index.js";
 import { remember, recall, listCorpora } from "./tools.js";
+import { initEmbeddings } from "./embeddings.js";
 
 export interface McpServerOptions {
   dbPath?: string;
@@ -103,14 +104,15 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
       },
     },
     async (a) => {
-      const r = recall(session, {
+      const embeddings = await initEmbeddings();
+      const r = await recall(session, {
         about: a.about,
         subject: a.subject,
         key: a.key,
         maxTokens: a.maxTokens,
         limit: a.limit,
         corpus: a.corpus ?? defaultCorpus,
-      });
+      }, embeddings);
       const matchLines = r.matches
         .map((m) => `- ${m.subject} ${m.key} = ${JSON.stringify(m.value)} (p=${m.confidence.toFixed(2)}, score=${m.score.toFixed(2)})`)
         .join("\n");
