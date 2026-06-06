@@ -117,6 +117,15 @@ export const rho = {
       }
       return rhoOp("exact", query)(c);
     },
+  by: (name: string, query: Value): Stage<Corpus, RankedCorpus> =>
+    (c, ctx) => {
+      const fn = similarityFn(name); // throws /no similarity fn/ for unknown names
+      if (ctx.usedSimilarityVersions) ctx.usedSimilarityVersions[name] = fn.version;
+      if (fn.embeddingVersions && ctx.usedEmbeddingModelVersions) {
+        Object.assign(ctx.usedEmbeddingModelVersions, fn.embeddingVersions);
+      }
+      return rhoOp(name, query)(c);
+    },
 };
 
 export const gamma = (depth: number): Stage<RankedCorpus, RankedCorpus> => gammaStage(depth);
