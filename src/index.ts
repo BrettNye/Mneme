@@ -56,8 +56,12 @@ export { createSummarizePass } from "./bio/processes/summarize.js";
 // Similarity + embedding public surface
 export { registerSimilarity, hybridMax, relevanceFloor, abstainBelowTop } from "./algebra/similarity.js";
 export type { SimilarityFn } from "./algebra/similarity.js";
-export { warmEmbeddings, cosineOver, registerEmbeddingAdapter, embeddingAdapter, EmbeddingCache } from "./algebra/embedding.js";
+export { warmEmbeddings, warmValues, cosineOver, registerEmbeddingAdapter, embeddingAdapter, EmbeddingCache } from "./algebra/embedding.js";
 export type { EmbeddingAdapter } from "./algebra/embedding.js";
+
+// Retrieval pipeline public surface
+export { canonicalReadStages, rankedTailStages } from "./retrieval/read-pipeline.js";
+export type { ReadPipelineOpts, RankedTailOpts } from "./retrieval/read-pipeline.js";
 
 // Replay re-execution engine — AST
 // Names that clash with the existing stage-builder exports from mneme.js are
