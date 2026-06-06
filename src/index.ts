@@ -63,6 +63,10 @@ export type { EmbeddingAdapter } from "./algebra/embedding.js";
 export { canonicalReadStages, rankedTailStages } from "./retrieval/read-pipeline.js";
 export type { ReadPipelineOpts, RankedTailOpts } from "./retrieval/read-pipeline.js";
 
+// Key-alias public surface
+export { aliasMapOf, keyFamilyOf, isKeyAliasShaped, KEY_ALIAS_KEY, KEY_SUBJECT_PREFIX } from "./retrieval/key-alias.js";
+export type { KeyAliasMap, AliasLoadResult } from "./retrieval/key-alias.js";
+
 // Replay re-execution engine — AST
 // Names that clash with the existing stage-builder exports from mneme.js are
 // aliased with an "ast" prefix (leaf→astLeaf, sigma→astSigma, etc.).
