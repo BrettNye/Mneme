@@ -11,9 +11,11 @@ import type { Value } from "../core/value.js";
 import { tauValid } from "../algebra/temporal.js";
 import { oplusDedupe } from "../algebra/combination.js";
 import { pairsOf } from "../algebra/contradiction.js";
+import type { KeyAliasMap } from "../algebra/contradiction.js";
 import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../algebra/resolution.js";
 import { abstainBelowTop, relevanceFloor } from "../algebra/similarity.js";
 import { rho } from "../mneme.js";
+import { isKeyAliasShaped } from "./key-alias.js";
 
 // ── canonicalReadStages ───────────────────────────────────────────────────────
 
@@ -23,6 +25,9 @@ export interface ReadPipelineOpts {
   /** Per-key cardinality map forwarded to contradiction detection.
    *  Keys mapped "multi" are excluded from cluster formation entirely. */
   keyCardinality?: Record<string, "single" | "multi">;
+  /** Key alias map forwarded to contradiction detection.
+   *  Variant keys are grouped with their canonical key during ⊥ detection. */
+  keyAliases?: KeyAliasMap;
   /** Confidence ELIGIBILITY floor for ⊥ detection.
    *  Claims with eff(claim) <= threshold cannot contest.
    *  Default 0 — all claims are eligible. */
@@ -35,13 +40,16 @@ export interface ReadPipelineOpts {
 
 /**
  * Canonical read-side core (canonical spec §4.8, reified):
- *   τ_valid(t) → ⊕_dedupe → ⊥(keyCardinality, floor)/resolveDeprecateOlder → drop deprecated + flags
+ *   τ_valid(t) → ⊕_dedupe → ⊥(keyCardinality, keyAliases, floor)/resolveDeprecateOlder → drop deprecated + flags + alias claims
  *
  * Returns a Stage<Corpus, Corpus>[] that callers prepend leaf/σ to.
  *
  * Defaults:
  *   - conflictThreshold: 0
  *   - dedupe fn: "jaccard", cutoff: 0.5, rule: "rule_weighted_avg"
+ *
+ * Alias-shaped claims (key="alias-of", subject starts with "key:") are always
+ * removed in the serving filter — they are infrastructure, not knowledge.
  */
 export function canonicalReadStages(opts: ReadPipelineOpts): Stage<Corpus, Corpus>[] {
   const t = opts.evaluationInstant;
@@ -61,13 +69,13 @@ export function canonicalReadStages(opts: ReadPipelineOpts): Stage<Corpus, Corpu
 
     // 3. ⊥ / resolveDeprecateOlder: detect contradictions, deprecate the older claim in each pair
     (c: Corpus) => resolveDeprecateOlder(
-      pairsOf(c, threshold, { keyCardinality: opts.keyCardinality }),
+      pairsOf(c, threshold, { keyCardinality: opts.keyCardinality, keyAliases: opts.keyAliases }),
     )(c),
 
-    // 4. Drop deprecated claims and contradiction flag artifacts
+    // 4. Drop deprecated claims, contradiction flag artifacts, and alias-shaped infrastructure claims
     (c: Corpus) => filterCorpus(
       c,
-      (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY,
+      (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY && !isKeyAliasShaped(cl),
     ),
   ];
 }
