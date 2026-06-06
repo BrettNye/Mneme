@@ -23,6 +23,19 @@ Three measured deficiencies share one missing capability — a semantic similari
 6. **Acceptance targets:** KU recall@3 ≥ 0.9; abstention ≥ 0.6 (≥3/5) with ZERO false abstentions on answerable categories; updateCorrect 1.0 hard no-regression; probe 3 flips green.
 7. **Dedupe keeps jaccard this slice.** Cosine never scores unrelated text at 0, so the dedupe cutoff space doesn't transfer; changing ranking and dedupe simultaneously would confound bench attribution. Dedupe-fn swap = separate measured experiment.
 
+## Audit amendments (2026-06-05, post-scan, user-approved)
+
+Three parallel scanners (repo-pattern/code-reality, bio + cross-layer embedding usage, DRY/SRP/SoC) produced these binding refinements, folded into the Design sections below:
+
+- **B1 (high, SoC): `cosineOver` is throw-only in v1.** The originally-proposed construction-time `fallback`/`onWarning` options violated the repo's per-query warning pattern (warnings thread through `EvalContext.onWarning` at query time — mneme.ts:78-84; a registration-time callback can't be overridden per query) and had no consumer this slice (warm-up guarantees cache hits). Graceful fallback + per-query warning routing (which also requires making `QueryWarning` a discriminated union) is deferred to a future slice with measured demand.
+- **B2 (critical): version concerns separated.** `SimilarityFn.version` is math-only (`"cosine@1"`; `"hybrid-max@1[jaccard@1,cosine@1]"`); embedding-model identity lives EXCLUSIVELY in the `embeddingVersions` metadata field and is checked by the new `embedding_version` replay arm. One concern per replay check — model drift never double-reports through the similarity-version check (which compares by exact `===`).
+- **B3: `MissingDependency.kind` explicitly gains the `"embedding_version"` member** (src/write/replay.ts:13-20 — the union the deferral comment reserved).
+- **B4 (SoC + blast radius): `answerArmA` stays synchronous.** Warm-up is the CALLER's responsibility (run.ts/probes warm from the records they ingested plus the question text — they already hold both); embedding-backed tests warm in setup; jaccard-config tests untouched (~18 sync tests unchanged). I/O (warming) and query logic stay separated.
+- **B5: `relevanceFloor` colocates in src/algebra/similarity.ts** (rho lives there and produces RankedCorpus); a `ranked.ts` split waits for a second RankedCorpus operator.
+- **B6: registry error semantics pinned.** Lookup error stays the existing plain `Error` with `/no similarity fn/` message (asserted by existing tests; distribution-registry precedent); `registerSimilarity` collision throws a descriptive plain `Error`. `MissingRule` rejected (it means *missing entry*, not collision); a shared `createRegistry<T>` factory rejected as premature until a third dynamic registry exists.
+- **B7 (verified): no embedding usage exists anywhere in the repo today** (exhaustive grep: zero matches) — this port is THE single embedding abstraction; see "Single embedding abstraction" section.
+- **Clean bills:** rho-builder hardcoding claim exact (mneme.ts:105-120); replay mirror-structure exact; `canonicalizeValue` parity verified; `EmbeddingCache`-as-class matches StagingBuffer/Promoter precedent; `src/algebra/` placement correct per the DreamFn port precedent (`src/adapters/` is persistence-only); warmEmbeddings eager validation = house pattern (oplusDedupe cutoff precedent).
+
 ## Design
 
 ### 1. Embedding port + cache + warm-up (src/algebra/embedding.ts — NEW)
@@ -53,16 +66,15 @@ export async function warmEmbeddings(
 
 /**
  * Returns a SimilarityFn scoring cosine over cached embeddings, mapped to [0,1] via (1+cos)/2.
- * version: `cosine@1+${adapter.id}@${adapter.version}`; isPure: true.
+ * version: "cosine@1" (math-only — audit B2); embeddingVersions: { [adapter.id]: adapter.version }.
  * Values canonicalized via the same canonicalizeValue path jaccard uses.
- * Cache miss: throws by default (message names the missing text hash + "run warmEmbeddings");
- * with opts.fallback = "<registered lexical fn>", scores via that fn and emits a QueryWarning
- * through opts.onWarning (callback supplied at construction — SimilarityFn signature untouched).
+ * Cache miss: ALWAYS throws (message names the missing text hash + "run warmEmbeddings").
+ * V1 is throw-only by design (audit B1): warm-up makes misses configuration errors, not
+ * runtime conditions; graceful fallback + per-query warning routing is a deferred slice.
  */
 export function cosineOver(
   adapter: EmbeddingAdapter,
   cache: EmbeddingCache,
-  opts?: { fallback?: string; onWarning?: (w: QueryWarning) => void },
 ): SimilarityFn;
 ```
 
@@ -71,12 +83,16 @@ V1 cache is in-memory per-process. Sqlite persistence (an embeddings table keyed
 ### 2. Registry + hybrid combinator (src/algebra/similarity.ts — MOD)
 
 ```ts
-/** Dynamic registration. Throws on collision with a DIFFERENT fn; idempotent re-register of the
- *  same object is allowed (test reruns). Built-ins (jaccard, exact) remain pre-registered. */
+/** Dynamic registration. Throws a descriptive plain Error on collision with a DIFFERENT fn;
+ *  idempotent re-register of the same object is a no-op (test reruns). Built-ins (jaccard,
+ *  exact) remain pre-registered; the lookup error message `/no similarity fn/` is unchanged
+ *  (existing tests assert it — audit B6). */
 export function registerSimilarity(name: string, fn: SimilarityFn): void;
 
 /** scoreOne = max(a.scoreOne, b.scoreOne); isPure = a.isPure && b.isPure;
- *  version: `hybrid-max@1[${a.version},${b.version}]`. */
+ *  version: `hybrid-max@1[${a.version},${b.version}]` — components are math-only versions
+ *  (e.g. "hybrid-max@1[jaccard@1,cosine@1]"), machine-generated, compared by exact equality
+ *  at replay; embeddingVersions: { ...a.embeddingVersions, ...b.embeddingVersions }. */
 export const hybridMax: (a: SimilarityFn, b: SimilarityFn) => SimilarityFn;
 ```
 
@@ -85,9 +101,9 @@ export const hybridMax: (a: SimilarityFn, b: SimilarityFn) => SimilarityFn;
 ### 3. Provenance + replay (src/algebra/similarity.ts or rho call path; src/write/replay.ts — MOD)
 
 - **Transport mechanism (pinned here, not deferred):** `SimilarityFn` gains an optional additive metadata field `embeddingVersions?: Record<string, string>` (EmbeddingModelId → version). `cosineOver` sets it to `{ [adapter.id]: adapter.version }`; `hybridMax` merges both operands'. A new generic surface builder `rho.by(name, query)` (the existing `rho.jaccard`/`rho.exact` builders are hardcoded — mneme.ts:106-120 — so any new fn name needs one) records `ctx.usedSimilarityVersions[name] = fn.version` AND merges `fn.embeddingVersions` into `ctx.usedEmbeddingModelVersions`. Recording happens whenever an embedding-backed score influenced evaluation; canonical §2.7 makes it mandatory.
-- Replay (src/write/replay.ts): un-defer the documented deferral (replay.ts:14-15) — the availability check gains `embedding_version`, mirroring the existing similarity-version check: each recorded `embeddingModelVersions` entry must resolve via an adapter registry lookup (`embeddingAdapter(id)` mirroring `similarityFn(name)`; `registerEmbeddingAdapter(adapter)` keyed by `adapter.id`) to a registered adapter whose `version` matches, else the replay status is the existing missing-dependencies stratum.
+- Replay (src/write/replay.ts): un-defer the documented deferral (replay.ts:14-15) — `MissingDependency.kind` gains the `"embedding_version"` union member (audit B3), and the availability check gains a mirrored arm: each recorded `embeddingModelVersions` entry must resolve via an adapter registry lookup (`embeddingAdapter(id)` mirroring `similarityFn(name)`; `registerEmbeddingAdapter(adapter)` keyed by `adapter.id`) to a registered adapter whose `version` matches, else the replay status is the existing missing-dependencies stratum. Because similarity versions are math-only (B2), model drift surfaces ONLY through this arm — never double-reported through the similarity check.
 
-### 4. Relevance floor (src/algebra/ranked.ts — NEW, or colocated if trivial)
+### 4. Relevance floor (src/algebra/similarity.ts — colocated, audit B5; split into ranked.ts only when a second RankedCorpus operator exists)
 
 ```ts
 /** Filters RankedCorpus.scored to entries with score >= minScore. Empty survivors ⇒ the caller's
@@ -104,28 +120,42 @@ No AST node in v1: the derive path never produces `RankedCorpus` (derive pipelin
 ### 6. Bench arm A (bench/longmemeval/answer.ts, run.ts, adversarial-probe.ts — MOD)
 
 ```
-query-time flow:
-  await warmEmbeddings(adapter, cache, [...post-τ_valid claim values, question])   ← outside evaluate
+caller-side (run.ts / probes — audit B4):
+  await warmEmbeddings(adapter, cache, [...ingested record values, question])   ← async, caller's step
+arm A (UNCHANGED sync signature):
   leaf → τ_valid → ⊕_dedupe(rule_weighted_avg, jaccard@0.5)        ← UNCHANGED (decision 7)
        → ⊥(keyCardinality, floor 0) → resolveDeprecateOlder → drop deprecated+flags
-       → rho(opts.rankFn, question) → relevanceFloor(opts.relevanceFloor) → top-k
+       → rho.by(opts.rankFn, question) → relevanceFloor(opts.relevanceFloor) → top-k
 ```
 
-`AnswerOpts` gains `rankFn?: string` (default `"hybrid"` when registered, else `"jaccard"`) and `relevanceFloor?: number` (default 0 = disabled, since the filter is `score >= minScore`; benchmark runs set the measured value). Arm A uses the new generic `rho.by(opts.rankFn, q.question)` and becomes async (it awaits warm-up) — callers (run.ts, probes, answer.test.ts) updated. Arm B untouched (it stays the plain-recall baseline on jaccard).
+`AnswerOpts` gains `rankFn?: string` (default `"hybrid"` when registered, else `"jaccard"`) and `relevanceFloor?: number` (default 0 = disabled, since the filter is `score >= minScore`; benchmark runs set the measured value). **`answerArmA` stays synchronous** (audit B4): warm-up is the caller's responsibility — run.ts and the probe harness warm from the records they ingested plus the question text (both already in hand) before calling arm A; a small bench helper (`warmForQuestion(adapter, cache, records, question)`) keeps that one-line. Tests using the jaccard config need no warming and stay sync; only embedding-backed test cases warm in setup. An unwarmed embedding-backed query throws (cosineOver's contract) — a loud configuration error, not silent degradation. Arm B untouched (plain-recall baseline on jaccard).
 
 **CI constraint (hard):** `eval:lme:fixture` keeps pure-jaccard configuration — zero network, zero model, zero new devDependency exercised in CI. Unit tests use a fake adapter (below).
 
-### 7. Canonical-spec amendments (small, ADD-framed)
+### 7. Single embedding abstraction (unification commitment — audit B7)
 
-- Appendix B: row for the `sim_cosine` reference implementation (cache-backed, warm-up contract, [0,1] mapping).
-- §4.6: note that similarity functions compose at the `SimilarityFn` level (combinators such as hybrid-max), with composite version strings recorded in provenance.
+Verified at audit: **zero embedding/vector usage exists anywhere in the repo today** — this port is the first and must remain the ONLY embedding abstraction. Named future consumers, all served by this adapter unchanged:
+
+| Consumer | Where named | How it adopts |
+|---|---|---|
+| MCP recall tool (`rho.jaccard` today, src/mcp/tools.ts:83) | dogfood slice | swaps to `rho.by("hybrid", ...)` + `relevanceFloor` — registration + warm-up at server startup |
+| Bio associative recall (ρ+γ, v1.x recall-shaping) | bio design spec | bio processes are async (DreamFn/SummarizeFn precedent) — `await warmEmbeddings` then the same sync cache |
+| Key-drift slice (probe 4; similarity-grouped consolidation/detection) | detection + this spec | injects the adapter; consolidation provenance already pre-allocates `embeddingModelVersions: {}` (consolidation-plan.ts:145) |
+| Summarize/compression clustering | bio deferred list | same pattern |
+
+Any future slice introducing a second embedding pathway is a design violation; extend this port instead.
+
+### 8. Canonical-spec amendments (small, ADD-framed)
+
+- Appendix B: row for the `sim_cosine` reference implementation (adapter + cache-backed, warm-up contract, [0,1] mapping).
+- §4.6: note that similarity functions compose at the `SimilarityFn` level (combinators such as hybrid-max) with machine-generated component version strings recorded in provenance, and that embedding-model identity is recorded separately in `embeddingModelVersions` (per §2.7).
 - Surgical inserts matching surrounding style (precedent: the detection-composition amendments).
 
 ## Error handling
 
-- Unregistered fn name → existing `/no similarity fn/` throw (path unchanged).
-- `registerSimilarity` collision with a different fn → throw; same-object re-register → no-op.
-- Cache miss without fallback → throw (named text hash + remedy). With fallback → lexical score + `QueryWarning` via the existing warning channel.
+- Unregistered fn name → existing `/no similarity fn/` throw (message unchanged — audit B6).
+- `registerSimilarity` collision with a different fn → descriptive plain `Error`; same-object re-register → no-op.
+- Cache miss → ALWAYS throws (named text hash + "run warmEmbeddings" remedy) — throw-only v1, audit B1.
 - Adapter returns wrong `dim` / non-finite values → throw at `warmEmbeddings` (fail before queries).
 - `relevanceFloor` minScore outside [0,1] → throw (mirrors dedupe-cutoff validation).
 - Replay with unavailable embedding version → existing missing-dependencies stratum (not an error).
@@ -150,16 +180,16 @@ The `relevanceFloor` value is calibrated against the hybrid score distribution o
 
 ## Testing (TDD)
 
-- **embedding.ts (unit, CI-safe, FakeEmbeddingAdapter with hand-fixed vectors):** cosine math incl. [0,1] mapping; cache hit/miss; miss-throw message; fallback + QueryWarning emission; warm-up batching, hit-skipping, dim/finite validation failures; canonicalizeValue parity with jaccard's tokenization input.
-- **similarity.ts:** registerSimilarity collision/idempotency; hybridMax ordering (lexical-win case, semantic-win case), version-string composition, isPure propagation.
-- **ranked.ts:** relevanceFloor boundary (`>=`), empty-survivor output, out-of-range throw, score-order preservation.
-- **replay.ts:** embedding version present/absent/mismatched → correct strata; expressions with no embedding usage unaffected.
-- **provenance:** a query through an embedding-backed rho records `usedEmbeddingModelVersions`; hybrid records both versions.
-- **bench (integration, real model, NOT CI):** probe 3 green; probes 1/2/4/5/6/7 unchanged; manual benchmark hits the Measurement table; arm A async migration leaves answer.test.ts green (fake adapter or jaccard config in unit tests).
+- **embedding.ts (unit, CI-safe, FakeEmbeddingAdapter with hand-fixed vectors):** cosine math incl. [0,1] mapping; cache hit; miss-throw message (always throws — no fallback path exists); warm-up batching, hit-skipping, dim/finite validation failures; canonicalizeValue parity with jaccard's tokenization input; embeddingVersions = `{ [adapter.id]: adapter.version }`.
+- **similarity.ts:** registerSimilarity collision/idempotency (lookup message `/no similarity fn/` unchanged); hybridMax ordering (lexical-win case, semantic-win case), math-only version-string composition, embeddingVersions merge, isPure propagation; relevanceFloor boundary (`>=`), empty-survivor output, out-of-range throw, score-order preservation.
+- **replay.ts:** `embedding_version` present/absent/mismatched → correct strata; expressions with no embedding usage unaffected; similarity check never reports model drift (B2 separation).
+- **provenance:** a query through `rho.by` over an embedding-backed fn records `usedSimilarityVersions[name]` (math-only) AND `usedEmbeddingModelVersions`; hybrid records merged embedding versions.
+- **bench (integration, real model, NOT CI):** probe 3 green; probes 1/2/4/5/6/7 unchanged; manual benchmark hits the Measurement table; answerArmA stays sync — existing answer.test.ts cases unchanged except new embedding-backed cases that warm in setup.
 
 ## Explicitly out of scope (deliberately deferred)
 
 - **Similarity-tolerant key matching** (probe 4) — own slice; changes `⊥` grouping semantics.
+- Graceful cache-miss fallback + per-query warning routing (and the `QueryWarning` discriminated-union extension it requires) — deferred until measured demand (audit B1).
 - Dedupe similarity-fn swap to cosine (cutoff space doesn't transfer; separate measured experiment).
 - Sqlite embedding persistence (perf).
 - RRF rank fusion; weighted-blend α (reserve dials if hybrid-max measurably fails).
