@@ -76,6 +76,17 @@ measured outcome (3 receipt questions remain ranking-blocked by sibling-claim
 ordering under hybrid — the next ranking lever, documented, not chased this
 slice).
 
+**Final calibration (committed):** `ABSTAIN_TOP = 0.808` (working window
+0.806–0.811; +0.004 margin to answerable-min, +0.003 to nearest abstaining
+top), `RELEVANCE_FLOOR = 0` (precision knob off — measured recall damage).
+Result: abstention 3/5 ✓, zero false abstentions both categories ✓, KU
+recall@3 0.85 / recall@10 1.0 / updateCorrect 1.0 ✓, temporalCorrect 1.0 ✓.
+**Measured trade (controller-verified):** hybrid ranking itself moves temporal
+recall@3 0.933→0.833 (one gold session drops to rank 4+ in one temporal
+question; recall@10 stays 1.0) while gaining KU recall@3 0.75→0.85 — net
+positive on the slice's target category, logged in the ranking-residue ledger
+alongside the 3 KU receipt questions.
+
 ## Design
 
 ### 1. Embedding port + cache + warm-up (src/algebra/embedding.ts — NEW)

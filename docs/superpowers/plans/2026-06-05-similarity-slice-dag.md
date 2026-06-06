@@ -12,7 +12,7 @@ flowchart TD
     task-exports["task-exports: public barrel exports<br/>files: src/index.ts"]:::done
     task-bench-adapter["task-bench-adapter: local model adapter<br/>files: bench/longmemeval/embeddings-local.ts +2 more"]:::done
     task-bench-arma["task-bench-arma: arm A ranking + floor<br/>files: bench/longmemeval/answer.ts +1 more"]:::done
-    task-bench-harness["task-bench-harness: harness wiring + calibration<br/>files: bench/longmemeval/run.ts +1 more"]:::running
+    task-bench-harness["task-bench-harness: harness wiring + calibration<br/>files: bench/longmemeval/run.ts +1 more"]:::done
     task-canonical-spec["task-canonical-spec: canonical spec amendments<br/>files: mneme-spec-v0.2-consolidated.md"]:::done
 
     task-similarity-core --> task-embedding-port
@@ -476,7 +476,7 @@ depends_on: [task-bench-arma, task-bench-adapter]
 files:
   - bench/longmemeval/run.ts
   - bench/longmemeval/manual/adversarial-probe.ts
-status: running
+status: done  # 3ff3960+0017368+0924362 — two-knob recalibration ABSTAIN_TOP=0.808/floor=0; spec lazy-import finding overruled (transformers import already dynamic in adapter; CI offline-proven); quality approved
 is_wiring_task: true
 ```
 
@@ -538,7 +538,7 @@ files:
   - src/algebra/similarity.ts
   - src/algebra/similarity.test.ts
   - src/index.ts
-status: pending
+status: done  # d246269 — abstainBelowTop stage+export; reviews approved (NaN doc-test 9559496)
 ```
 
 AMENDMENT (calibration finding, user-ratified two-knob design — see spec
@@ -563,7 +563,7 @@ depends_on: [task-abstain-stage, task-bench-arma]
 files:
   - bench/longmemeval/answer.ts
   - bench/longmemeval/answer.test.ts
-status: pending
+status: done  # 4c99816+9559496 — AnswerOpts knob + ordering contract; reviews approved
 ```
 
 AMENDMENT: `AnswerOpts.abstainBelowTop?: number` (default 0 = off); pipeline
