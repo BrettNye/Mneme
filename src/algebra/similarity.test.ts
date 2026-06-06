@@ -316,6 +316,16 @@ it("abstainBelowTop pass-through preserves full order and all entries", () => {
   expect(result.scored.map((s) => s.score)).toEqual([0.95, 0.82, 0.61]);
 });
 
+it("abstainBelowTop passes through a NaN-scored top entry (intentional: NaN < t is false)", () => {
+  // NaN-top is intentional pass-through, NOT abstention: `NaN < threshold` is false, so the
+  // strictly-below check never fires. Upstream scorers guard NaN before it reaches this stage
+  // (hybridMax has a finite-guard; cosineOver throws), so abstainBelowTop does not re-guard.
+  const ranked: RankedCorpus = { scored: [{ claim: { value: "x" } as any, score: NaN }] };
+  const result = abstainBelowTop(0.8)(ranked);
+  expect(result.scored).toHaveLength(1);
+  expect(Number.isNaN(result.scored[0].score)).toBe(true);
+});
+
 it("abstainBelowTop throws at construction for minTopScore below 0", () => {
   expect(() => abstainBelowTop(-0.1)).toThrow();
 });

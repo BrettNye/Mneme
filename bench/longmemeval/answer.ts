@@ -26,7 +26,9 @@ export interface AnswerOpts {
   /** Registered similarity fn for ranking; default "jaccard" — never probes the registry. */
   rankFn?: string;
   /** Abstention knob (all-or-nothing on weak TOP match): if top score is strictly below this,
-   *  the entire result is discarded (abstained). Default 0 = off. */
+   *  the entire result is discarded (abstained). Default 0 = off.
+   *  Applied BEFORE relevanceFloor — abstention is decided on the raw ranked corpus, never
+   *  the floor-filtered one. */
   abstainBelowTop?: number;
   /** Precision knob (per-entry): filters individual entries whose score is below this value.
    *  Default 0 = disabled (filter is >=). */
@@ -115,6 +117,8 @@ export function answerArmA(
     (c: Corpus) => resolveDeprecateOlder(pairsOf(c, threshold, { keyCardinality: opts.keyCardinality }))(c),
     (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY),
     rho.by(rankFn, q.question),
+    // Order is contractual: abstainBelowTop MUST run before relevanceFloor — abstention is
+    // decided on the raw ranked corpus, never the floor-filtered one.
     (r: RankedCorpus) => abstainBelowTop(opts.abstainBelowTop ?? 0)(r),
     (r: RankedCorpus) => relevanceFloor(opts.relevanceFloor ?? 0)(r)
   );
