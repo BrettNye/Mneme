@@ -1,4 +1,4 @@
-import { simJaccard, simExact, similarityFn, rho, registerSimilarity, hybridMax, relevanceFloor } from "./similarity.js";
+import { simJaccard, simExact, similarityFn, rho, registerSimilarity, hybridMax, relevanceFloor, abstainBelowTop } from "./similarity.js";
 import type { SimilarityFn } from "./similarity.js";
 import type { Stage, EvalContext } from "./expression.js";
 import type { RankedCorpus } from "./types.js";
@@ -268,4 +268,58 @@ it("relevanceFloor is usable as a Stage<RankedCorpus, RankedCorpus> (accepts ctx
   const fakeCtx = {} as EvalContext;
   const result = stage(ranked, fakeCtx);
   expect(result.scored).toHaveLength(1);
+});
+
+// ── abstainBelowTop ───────────────────────────────────────────────────────────
+
+it("abstainBelowTop returns empty scored when top score is strictly below threshold", () => {
+  const ranked: RankedCorpus = {
+    scored: [
+      { claim: { value: "a" } as any, score: 0.79 },
+      { claim: { value: "b" } as any, score: 0.5 },
+    ],
+  };
+  const result = abstainBelowTop(0.8)(ranked);
+  expect(result.scored).toHaveLength(0);
+  expect(result).toEqual({ scored: [] });
+});
+
+it("abstainBelowTop returns identity when top score equals threshold exactly (not strictly below)", () => {
+  const ranked: RankedCorpus = {
+    scored: [
+      { claim: { value: "a" } as any, score: 0.8 },
+      { claim: { value: "b" } as any, score: 0.5 },
+    ],
+  };
+  const result = abstainBelowTop(0.8)(ranked);
+  expect(result.scored).toHaveLength(2);
+  expect(result.scored[0].score).toBe(0.8);
+  expect(result.scored[1].score).toBe(0.5);
+});
+
+it("abstainBelowTop returns empty for already-empty input without throwing", () => {
+  const ranked: RankedCorpus = { scored: [] };
+  expect(() => abstainBelowTop(0.8)(ranked)).not.toThrow();
+  expect(abstainBelowTop(0.8)(ranked)).toEqual({ scored: [] });
+});
+
+it("abstainBelowTop pass-through preserves full order and all entries", () => {
+  const scored = [
+    { claim: { value: "first" } as any, score: 0.95 },
+    { claim: { value: "second" } as any, score: 0.82 },
+    { claim: { value: "third" } as any, score: 0.61 },
+  ];
+  const ranked: RankedCorpus = { scored };
+  const result = abstainBelowTop(0.9)(ranked);
+  expect(result.scored).toHaveLength(3);
+  expect(result.scored.map((s) => s.claim.value)).toEqual(["first", "second", "third"]);
+  expect(result.scored.map((s) => s.score)).toEqual([0.95, 0.82, 0.61]);
+});
+
+it("abstainBelowTop throws at construction for minTopScore below 0", () => {
+  expect(() => abstainBelowTop(-0.1)).toThrow();
+});
+
+it("abstainBelowTop throws at construction for minTopScore above 1", () => {
+  expect(() => abstainBelowTop(1.1)).toThrow();
 });

@@ -83,6 +83,23 @@ export const relevanceFloor = (minScore: number): ((r: RankedCorpus, ctx?: EvalC
   });
 };
 
+/** Abstention threshold: returns an EMPTY RankedCorpus when the TOP score is
+ *  STRICTLY below minTopScore ("don't answer when even the best match is weak");
+ *  identity otherwise. An already-empty input stays empty (no throw). Distinct
+ *  from relevanceFloor (per-entry precision filter) — the two knobs compose
+ *  independently. Throws if minTopScore outside [0,1]. */
+export const abstainBelowTop = (minTopScore: number): ((r: RankedCorpus) => RankedCorpus) => {
+  if (minTopScore < 0 || minTopScore > 1) {
+    throw new Error(`abstainBelowTop: minTopScore must be in [0,1], got ${minTopScore}`);
+  }
+  return (r: RankedCorpus): RankedCorpus => {
+    if (r.scored.length === 0) return { scored: [] };
+    const topScore = r.scored[0].score;
+    if (topScore < minTopScore) return { scored: [] };
+    return r;
+  };
+};
+
 export const rho =
   (name: string, query: Value) =>
   (c: Corpus): RankedCorpus => {

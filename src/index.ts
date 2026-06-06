@@ -54,7 +54,7 @@ export { SUMMARY_WORKFLOW } from "./bio/processes/summarize-types.js";
 export { createSummarizePass } from "./bio/processes/summarize.js";
 
 // Similarity + embedding public surface
-export { registerSimilarity, hybridMax, relevanceFloor } from "./algebra/similarity.js";
+export { registerSimilarity, hybridMax, relevanceFloor, abstainBelowTop } from "./algebra/similarity.js";
 export type { SimilarityFn } from "./algebra/similarity.js";
 export { warmEmbeddings, cosineOver, registerEmbeddingAdapter, embeddingAdapter, EmbeddingCache } from "./algebra/embedding.js";
 export type { EmbeddingAdapter } from "./algebra/embedding.js";
