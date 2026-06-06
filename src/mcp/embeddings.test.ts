@@ -103,6 +103,14 @@ describe("failure path", () => {
 
     const total = errorSpy.mock.calls.length + warnSpy.mock.calls.length;
     expect(total).toBe(1);
+
+    // Second call (same state, factory not re-run) — warning total must NOT increase
+    await initEmbeddings(async () => {
+      throw new Error("should not be called again");
+    });
+
+    const totalAfterSecondCall = errorSpy.mock.calls.length + warnSpy.mock.calls.length;
+    expect(totalAfterSecondCall).toBe(1);
   });
 
   it("failure cached — second factory is never called", async () => {
@@ -174,6 +182,66 @@ describe("registry collision", () => {
 
     expect(() => similarityFn("cosine")).not.toThrow();
     expect(() => similarityFn("hybrid")).not.toThrow();
+  });
+});
+
+// ── Concurrent init ───────────────────────────────────────────────────────────
+
+describe("concurrent init", () => {
+  it("two concurrent initEmbeddings calls — factory runs ONCE, both resolve to same state, no throw", async () => {
+    let factoryCallCount = 0;
+    const adapter = makeFakeAdapter("concurrent-test-adapter");
+
+    // Slow factory: resolves after a tick so both concurrent callers enter before it completes
+    const slowFactory = async (): Promise<EmbeddingAdapter> => {
+      factoryCallCount++;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      return adapter;
+    };
+
+    const [s1, s2] = await Promise.all([
+      initEmbeddings(slowFactory),
+      initEmbeddings(slowFactory),
+    ]);
+
+    expect(factoryCallCount).toBe(1);
+    expect(s1).toBe(s2);
+  });
+});
+
+// ── registerIfAbsent stale-closure ────────────────────────────────────────────
+
+describe("registerIfAbsent stale-closure (documented-intentional)", () => {
+  it("after reset+re-init with adapter2, similarityFn('cosine') still scores via adapter1's cache closure", async () => {
+    // adapter1 returns [1, 0] — cosine([1,0],[1,0]) should be high (1.0)
+    const adapter1: EmbeddingAdapter = {
+      id: `stale-closure-adapter1-${++_adapterSeq}`,
+      version: "v1",
+      dim: 2,
+      embed: async (texts) => texts.map(() => [1, 0]),
+    };
+
+    await initEmbeddings(async () => adapter1);
+
+    // Capture the cosine fn registered by adapter1's init
+    const cosineFnAfterInit1 = similarityFn("cosine");
+
+    _resetEmbeddingsForTest();
+
+    // adapter2 returns [0, 1] — different direction, but registerIfAbsent skips re-registration
+    const adapter2: EmbeddingAdapter = {
+      id: `stale-closure-adapter2-${++_adapterSeq}`,
+      version: "v1",
+      dim: 2,
+      embed: async (texts) => texts.map(() => [0, 1]),
+    };
+
+    await initEmbeddings(async () => adapter2);
+
+    // similarityFn('cosine') MUST return the same fn object — adapter1's closure
+    // (documented-intentional: registerIfAbsent retains first adapter's cache)
+    const cosineFnAfterInit2 = similarityFn("cosine");
+    expect(cosineFnAfterInit2).toBe(cosineFnAfterInit1);
   });
 });
 

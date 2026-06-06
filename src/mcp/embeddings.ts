@@ -12,6 +12,9 @@ export interface EmbeddingState {
 // ── Singleton state ──────────────────────────────────────────────────────────
 
 let _state: EmbeddingState | null = null;
+/** In-flight promise: set before awaiting the factory so concurrent callers
+ *  join the same promise rather than launching a second factory run. */
+let _promise: Promise<EmbeddingState> | null = null;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -20,6 +23,10 @@ let _state: EmbeddingState | null = null;
  * Strategy: "register only when absent" — if the name already resolves to ANY fn,
  * skip registration. This prevents /already registered/ collisions after
  * _resetEmbeddingsForTest because the global similarity registry is not cleared.
+ *
+ * STALE-CLOSURE CONSEQUENCE: the registered fn retains the first adapter's cache;
+ * scoring after reset+re-init uses the original closure — production never resets;
+ * test suites must not rely on re-init swapping scorers.
  */
 function registerIfAbsent(name: string, fn: SimilarityFn): void {
   try {
@@ -52,38 +59,45 @@ async function defaultFactory(): Promise<EmbeddingAdapter> {
  * Collision strategy: "register only when absent" — similarity fn slots are checked
  * before registration so a reset+re-init cycle never throws /already registered/.
  */
-export async function initEmbeddings(
+export function initEmbeddings(
   factory: () => Promise<EmbeddingAdapter> = defaultFactory,
 ): Promise<EmbeddingState> {
-  if (_state !== null) return _state;
+  if (_state !== null) return Promise.resolve(_state);
+  if (_promise !== null) return _promise;
 
-  try {
-    const adapter = await factory();
-    const cache = new EmbeddingCache();
-    const cosineFn = cosineOver(adapter, cache);
-    const hybridFn = hybridMax(simJaccard, cosineFn);
+  _promise = (async () => {
+    try {
+      const adapter = await factory();
+      const cache = new EmbeddingCache();
+      const cosineFn = cosineOver(adapter, cache);
+      const hybridFn = hybridMax(simJaccard, cosineFn);
 
-    registerEmbeddingAdapter(adapter);
-    registerIfAbsent("cosine", cosineFn);
-    registerIfAbsent("hybrid", hybridFn);
+      registerEmbeddingAdapter(adapter);
+      registerIfAbsent("cosine", cosineFn);
+      registerIfAbsent("hybrid", hybridFn);
 
-    _state = { rankFn: "hybrid", adapter, cache };
-  } catch (err) {
-    console.error(
-      `[mneme] embeddings unavailable — falling back to jaccard (restart to retry): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    _state = { rankFn: "jaccard" };
-  }
+      _state = { rankFn: "hybrid", adapter, cache };
+    } catch (err) {
+      console.error(
+        `[mneme] embeddings unavailable — falling back to jaccard (restart to retry): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      _state = { rankFn: "jaccard" };
+    }
 
-  return _state;
+    return _state!;
+  })();
+
+  return _promise;
 }
 
 // ── TEST-ONLY ─────────────────────────────────────────────────────────────────
 
-/** TEST-ONLY: clears the cached singleton state so the next initEmbeddings call
- *  runs the factory again. Does NOT clear the global similarity/adapter registries. */
+/** TEST-ONLY: clears the cached singleton state AND the in-flight promise so the
+ *  next initEmbeddings call runs the factory again. Does NOT clear the global
+ *  similarity/adapter registries. */
 export function _resetEmbeddingsForTest(): void {
   _state = null;
+  _promise = null;
 }
