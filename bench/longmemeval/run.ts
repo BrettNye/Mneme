@@ -178,6 +178,10 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
   const oracle = Boolean(values.oracle);
   const raw = Boolean(values.raw);
   const rankMode = String(values.rank ?? "jaccard");
+  if (rankMode !== "jaccard" && rankMode !== "hybrid") {
+    logError(`Unrecognized --rank value "${rankMode}"; accepted values: jaccard, hybrid`);
+    return 1;
+  }
   const useHybrid = rankMode === "hybrid";
 
   // --- hybrid ranking setup (only when --rank hybrid is passed) ---
@@ -320,10 +324,8 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
       }
 
       // Ingest
-      let ingestOk = false;
       try {
         const stats = ingestQuestion(session, q, records);
-        ingestOk = true;
         opts?.onIngest?.(qid, stats.committed);
         checks.push({ name: `ingest-conservation:${qid}`, pass: true });
       } catch (err) {
@@ -340,8 +342,6 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
         // keep-going semantics: continue to next question
         continue;
       }
-
-      if (!ingestOk) continue;
 
       // Answer both arms
       const corpusId = `lme-${qid}`;
