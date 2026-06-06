@@ -201,6 +201,18 @@ it("hybridMax degrades to the healthy scorer when one operand returns NaN", () =
   expect(hybridMax(nanFn, simJaccard).scoreOne("hello", "hello")).toBe(1);
 });
 
+it("hybridMax returns NaN when both operands return non-finite scores", () => {
+  const nan1: SimilarityFn = { isPure: true, version: "nan1@1", scoreOne: () => NaN };
+  const nan2: SimilarityFn = { isPure: true, version: "nan2@1", scoreOne: () => NaN };
+  expect(hybridMax(nan1, nan2).scoreOne("x", "y")).toBeNaN();
+});
+
+it("hybridMax treats Infinity as a broken scorer and degrades to the healthy one", () => {
+  const infFn: SimilarityFn = { isPure: true, version: "inf@1", scoreOne: () => Infinity };
+  // Infinity is non-finite → guarded out; jaccard("hello","hello") = 1
+  expect(hybridMax(infFn, simJaccard).scoreOne("hello", "hello")).toBe(1);
+});
+
 // ── relevanceFloor ────────────────────────────────────────────────────────────
 
 it("relevanceFloor keeps entries with score >= minScore (boundary inclusive)", () => {
