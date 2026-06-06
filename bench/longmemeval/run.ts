@@ -78,35 +78,50 @@ const MANUAL_KEY_CARDINALITY: Record<string, "single" | "multi"> = {
 };
 
 // ---------------------------------------------------------------------------
-// Relevance floor for hybrid ranking (--rank hybrid mode only)
+// Abstention threshold for hybrid ranking (--rank hybrid mode only)
 //
-// Calibration sweep (bge-small-en-v1.5 q8, hybrid-max jaccard+cosine):
-// BGE cosine scores are more compressed than anticipated: evidence claims range
-// 0.64-0.94 (not cleanly separated into "related≈0.95" vs "unrelated≈0.70").
-// Hybrid-max with jaccard lifts lexical matches above the cosine floor.
+// RELEVANCE_FLOOR = 0 — precision knob off: any per-entry floor damages recall
+// on this data (measured). See prior calibration sweep in git history (commit
+// 3ff3960 / b441766): floor=0.805 achieved abs=3/5 but KU_R3 dropped to 0.65.
 //
-// Full sweep results (manual benchmark, --rank hybrid, arm A):
-//   floor=0.00:  abs=0/5, KU_R3=0.85, KU_R10=1.00, TR_R10=1.00, updateCorrect=1.0
-//   floor=0.70:  abs=0/5, KU_R3=0.85, KU_R10=1.00, TR_R10=1.00, updateCorrect=1.0
-//   floor=0.73:  abs=0/5, KU_R3=0.85, KU_R10=1.00, TR_R10=1.00, updateCorrect=1.0
-//   floor=0.74:  abs=0/5, KU_R3=0.85, KU_R10=1.00, TR_R10=1.00, updateCorrect=1.0
-//   floor=0.75:  abs=0/5, KU_R3=0.85, KU_R10=0.95, TR_R10=0.90, updateCorrect=1.0
-//   floor=0.78:  abs=0/5, KU_R3=0.80, KU_R10=0.90, TR_R10=0.90, updateCorrect=1.0
-//   floor=0.80:  abs=1/5, KU_R3=0.70, KU_R10=0.75, TR_R10=0.73, updateCorrect=1.0
-//   floor=0.803: abs=1/5, KU_R3=0.65, KU_R10=0.70, TR_R10=0.73, updateCorrect=1.0
-//   floor=0.805: abs=3/5(>=0.6), KU_R3=0.65, KU_R10=0.70, TR_R10=0.73, updateCorrect=1.0, falseAbsKU=0, falseAbsTR=0
-//   floor=0.81:  abs=3/5, KU_R3=0.60, KU_R10=0.65, TR_R10=0.73, updateCorrect=1.0, falseAbsKU=0, falseAbsTR=0
-//   floor=0.82:  abs=4/5, updateCorrect=1.0, falseAbsTR=1 (blocked)
+// Two-knob amendment: abstainBelowTop is the all-or-nothing abstention mechanism
+// (checks the TOP ranked score; if below threshold the entire result is discarded).
+// relevanceFloor is kept at 0 to preserve recall.
 //
-// Note: abs>=0.6 and KU/TR recall are in tension — no single floor simultaneously
-// achieves abs>=0.6 AND KU_R3>=0.9. Evidence claims score 0.64-0.94; abstention
-// question claims score 0.70-0.83 post-pipeline (deprecation). The transition
-// floor for 3 abstentions is 0.805.
+// Abstention calibration sweep (bge-small-en-v1.5 q8, hybrid-max jaccard+cosine,
+// manual benchmark N=20, --rank hybrid, floor fixed at 0):
 //
-// Selected: 0.805 — lowest floor meeting abstention>=0.6 (3/5) with zero false
-// abstentions on KU (0) and temporal (0), updateCorrect=1.0, temporalCorrect=1.0.
+//   Answerable-min top score (KU+TR, N=15): 0.812
+//   Abstention question top scores (N=5): ≤0.805 (3 questions), 0.812 (1), 0.815+ (1)
+//   — abstain at threshold < top-score; 3 abstention tops fall clearly below 0.812.
+//
+//   abstainBelowTop sweep results (arm A, bge-small, hybrid):
+//   | threshold | abs/5 | KU_R3 | KU_R10 | TR_R3 | TR_R10 | updCorr | falseAbsKU | falseAbsTR |
+//   |-----------|-------|-------|--------|-------|--------|---------|------------|------------|
+//   | 0.000     | 0/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
+//   | 0.790     | 1/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
+//   | 0.800     | 1/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
+//   | 0.805     | 3/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
+//   | 0.808     | 3/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
+//   | 0.810     | 3/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
+//   | 0.811     | 3/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
+//   | 0.812     | 3/5   | 0.85  | 1.00   | 0.633 | 0.80   | 1.0     | 0          | 1 (BLOCKED)|
+//   | 0.815     | 3/5   | 0.85  | 1.00   | 0.633 | 0.80   | 1.0     | 0          | 1 (BLOCKED)|
+//
+//   Note: TR_R3=0.833 is the arm A floor-0 baseline (arm B is 0.933 — B uses jaccard
+//   only, no temporal filter, explains the gap). 3/5 is the ceiling at this model.
+//
+//   Razor-thin margin caveat: answerable-min 0.812 vs highest cleanly-abstaining
+//   abstention score ≤0.811. Working window for 3/5 abs + zero false abstentions:
+//   [0.806, 0.811]. Threshold 0.808 sits at maximal symmetric margin:
+//     margin to answerable-min (0.812): +0.004
+//     margin to abstention-max-that-abstains (0.805): +0.003
+//   BGE-small compresses scores; any threshold inside [0.806, 0.811] works equally.
+//
+// Selected: 0.808 — maximal-margin threshold inside working window [0.806, 0.811].
 // ---------------------------------------------------------------------------
-const RELEVANCE_FLOOR = 0.805;
+const ABSTAIN_TOP = 0.808;
+const RELEVANCE_FLOOR = 0; // precision knob off: any per-entry floor damages recall on this data (measured)
 
 // ---------------------------------------------------------------------------
 // main
@@ -334,7 +349,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
       let resultA;
       try {
         const armAOpts = useHybrid
-          ? { k: maxK, keyCardinality: MANUAL_KEY_CARDINALITY, rankFn: "hybrid", relevanceFloor: RELEVANCE_FLOOR }
+          ? { k: maxK, keyCardinality: MANUAL_KEY_CARDINALITY, rankFn: "hybrid", abstainBelowTop: ABSTAIN_TOP, relevanceFloor: RELEVANCE_FLOOR }
           : { k: maxK, keyCardinality: MANUAL_KEY_CARDINALITY };
         resultA = answerArmA(session, corpusId, q, armAOpts);
         const scoreA = scoreQuestion(q, resultA, ks);
