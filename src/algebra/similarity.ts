@@ -58,10 +58,18 @@ export function registerSimilarity(name: string, fn: SimilarityFn): void {
 export const hybridMax = (a: SimilarityFn, b: SimilarityFn): SimilarityFn => ({
   isPure: a.isPure && b.isPure,
   version: `hybrid-max@1[${a.version},${b.version}]`,
+  // b wins on key collision (last-writer)
   ...(a.embeddingVersions || b.embeddingVersions
     ? { embeddingVersions: { ...a.embeddingVersions, ...b.embeddingVersions } }
     : {}),
-  scoreOne: (v, q) => Math.max(a.scoreOne(v, q), b.scoreOne(v, q)),
+  scoreOne: (v, q) => {
+    const sa = a.scoreOne(v, q);
+    const sb = b.scoreOne(v, q);
+    return Number.isFinite(sa) && Number.isFinite(sb) ? Math.max(sa, sb)
+      : Number.isFinite(sa) ? sa
+      : Number.isFinite(sb) ? sb
+      : NaN; // both broken — nothing sane to return
+  },
 });
 
 /** Filters RankedCorpus.scored to score >= minScore (order preserved). Empty

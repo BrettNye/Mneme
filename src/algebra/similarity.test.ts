@@ -194,6 +194,13 @@ it("hybridMax merges embeddingVersions from both sides when both present", () =>
   expect(h.embeddingVersions).toEqual({ "model-a": "v1", "model-b": "v2" });
 });
 
+it("hybridMax degrades to the healthy scorer when one operand returns NaN", () => {
+  const nanFn: SimilarityFn = { isPure: true, version: "nan@1", scoreOne: () => NaN };
+  // nanFn NaN-poisons Math.max without the finite-guard; jaccard("hello","hello") = 1
+  expect(hybridMax(simJaccard, nanFn).scoreOne("hello", "hello")).toBe(1);
+  expect(hybridMax(nanFn, simJaccard).scoreOne("hello", "hello")).toBe(1);
+});
+
 // ── relevanceFloor ────────────────────────────────────────────────────────────
 
 it("relevanceFloor keeps entries with score >= minScore (boundary inclusive)", () => {
