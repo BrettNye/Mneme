@@ -129,6 +129,22 @@ export function aliasMapOf(
       continue;
     }
 
+    // Meta-alias: variant starts with key: prefix (subject was key:key:something)
+    if (variant.startsWith(KEY_SUBJECT_PREFIX)) {
+      warnings.push(
+        `meta-alias detected: variant "${variant}" starts with "${KEY_SUBJECT_PREFIX}" — dropped`,
+      );
+      continue;
+    }
+
+    // Meta-alias: canonical is the alias key name itself
+    if (canonical === KEY_ALIAS_KEY) {
+      warnings.push(
+        `meta-alias detected: canonical "${canonical}" for variant "${variant}" is the alias key name — dropped`,
+      );
+      continue;
+    }
+
     // Meta-alias: canonical starts with key: prefix
     if (canonical.startsWith(KEY_SUBJECT_PREFIX)) {
       warnings.push(

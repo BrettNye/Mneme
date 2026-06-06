@@ -291,6 +291,25 @@ describe("aliasMapOf — meta-aliases", () => {
     expect(map).not.toHaveProperty("editor");
     expect(warnings.some((w) => w.includes("meta"))).toBe(true);
   });
+
+  it("drops canonical that equals alias-of key name itself", () => {
+    // canonical = "alias-of" → meta-alias (mapping something TO the alias key name)
+    const c = aliasClaim("editor", KEY_ALIAS_KEY);
+    const { map, warnings } = aliasMapOf([c], { evaluationInstant: NOW });
+    expect(map).not.toHaveProperty("editor");
+    expect(warnings.some((w) => w.includes("meta"))).toBe(true);
+  });
+
+  it("drops variant that starts with key: prefix (subject was key:key:something)", () => {
+    // variant = "key:something" → meta-alias (subject was "key:key:something")
+    const c: Claim = {
+      ...aliasClaim("placeholder", "some-canonical"),
+      subject: `${KEY_SUBJECT_PREFIX}${KEY_SUBJECT_PREFIX}something` as any,
+    };
+    const { map, warnings } = aliasMapOf([c], { evaluationInstant: NOW });
+    expect(map).not.toHaveProperty(`${KEY_SUBJECT_PREFIX}something`);
+    expect(warnings.some((w) => w.includes("meta"))).toBe(true);
+  });
 });
 
 // ── aliasMapOf — malformed values ─────────────────────────────────────────────
