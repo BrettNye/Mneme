@@ -135,6 +135,8 @@ describe("canonicalReadStages", () => {
     );
 
     expect(out.claims.every((cl) => cl.key !== CONTRADICTION_FLAG_KEY)).toBe(true);
+    // Tie (same valid.from) → neither claim is deprecated; both originals survive
+    expect(out.claims.filter((cl) => cl.key === "color")).toHaveLength(2);
   });
 
   it("drops deprecated claims from the output", () => {

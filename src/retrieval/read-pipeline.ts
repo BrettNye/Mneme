@@ -29,7 +29,7 @@ export interface ReadPipelineOpts {
   conflictThreshold?: number;
   /** Dedupe similarity config.
    *  Defaults: fn="jaccard", cutoff=0.5, rule="rule_weighted_avg".
-   *  `rule` field is RESERVED for future use. */
+   *  `rule` defaults to rule_weighted_avg (the safe idempotent rule). */
   dedupe?: { fn: string; cutoff: number; rule?: string };
 }
 
@@ -48,13 +48,14 @@ export function canonicalReadStages(opts: ReadPipelineOpts): Stage<Corpus, Corpu
   const threshold = opts.conflictThreshold ?? 0;
   const dedupeFn = opts.dedupe?.fn ?? "jaccard";
   const dedupeCutoff = opts.dedupe?.cutoff ?? 0.5;
+  const dedupeRule = opts.dedupe?.rule ?? "rule_weighted_avg";
 
   return [
     // 1. τ_valid: exclude claims whose valid interval does not cover t
     (c: Corpus) => tauValid(t)(c),
 
     // 2. ⊕_dedupe: merge token-overlap restatements (default: jaccard@0.5, rule_weighted_avg)
-    (c: Corpus) => oplusDedupe("rule_weighted_avg", undefined, {
+    (c: Corpus) => oplusDedupe(dedupeRule, undefined, {
       similarity: { fn: dedupeFn, cutoff: dedupeCutoff },
     })(c),
 
@@ -93,7 +94,9 @@ export interface RankedTailOpts {
  * Ordering contract: abstention is decided on the RAW ranked corpus (immediately
  * after rho), BEFORE the per-entry floor. Both knobs default to 0 (off).
  */
-export function rankedTailStages(opts: RankedTailOpts): Stage<any, any>[] {
+export function rankedTailStages(
+  opts: RankedTailOpts,
+): [Stage<Corpus, RankedCorpus>, Stage<RankedCorpus, RankedCorpus>, Stage<RankedCorpus, RankedCorpus>] {
   const abstainThreshold = opts.abstainBelowTop ?? 0;
   const floorThreshold = opts.relevanceFloor ?? 0;
 
