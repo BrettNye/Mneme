@@ -102,21 +102,20 @@ export const delta = {
     (c, ctx) => deltaOp({ kind: "step", thresholdDays }, ctx.evaluationClock ?? Date.now())(c),
 };
 
+const _rhoBy = (name: string, query: Value): Stage<Corpus, RankedCorpus> =>
+  (c, ctx) => {
+    const fn = similarityFn(name); // throws /no similarity fn/ for unknown names
+    if (ctx.usedSimilarityVersions) ctx.usedSimilarityVersions[name] = fn.version;
+    if (fn.embeddingVersions && ctx.usedEmbeddingModelVersions) {
+      Object.assign(ctx.usedEmbeddingModelVersions, fn.embeddingVersions);
+    }
+    return rhoOp(name, query)(c);
+  };
+
 export const rho = {
-  jaccard: (query: Value): Stage<Corpus, RankedCorpus> =>
-    (c, ctx) => {
-      if (ctx.usedSimilarityVersions) {
-        ctx.usedSimilarityVersions["jaccard"] = similarityFn("jaccard").version;
-      }
-      return rhoOp("jaccard", query)(c);
-    },
-  exact: (query: Value): Stage<Corpus, RankedCorpus> =>
-    (c, ctx) => {
-      if (ctx.usedSimilarityVersions) {
-        ctx.usedSimilarityVersions["exact"] = similarityFn("exact").version;
-      }
-      return rhoOp("exact", query)(c);
-    },
+  jaccard: (query: Value): Stage<Corpus, RankedCorpus> => _rhoBy("jaccard", query),
+  exact:   (query: Value): Stage<Corpus, RankedCorpus> => _rhoBy("exact", query),
+  by: _rhoBy,
 };
 
 export const gamma = (depth: number): Stage<RankedCorpus, RankedCorpus> => gammaStage(depth);

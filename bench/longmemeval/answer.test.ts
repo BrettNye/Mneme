@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { answerArmA, answerArmB, questionInstant, evaluationInstant } from "./answer.js";
 import { seedSupersedingPair, openTmpSession } from "./test-support.js";
 import type { Claim } from "../../src/core/claim.js";
 import { CONTRADICTION_FLAG_KEY } from "../../src/algebra/resolution.js";
+import { registerSimilarity } from "../../src/algebra/similarity.js";
 
 // Helper to extract the string value from a claim
 function valueOf(cl: Claim): unknown {
@@ -580,5 +581,269 @@ it("acronym paraphrase (NYC vs New York City) NOT merged — older deprecated by
   // resolveDeprecateOlder picks later valid.from → "New York City" survives
   expect(a.claims.map((c) => c.value)).toContain("New York City");
   expect(a.claims.map((c) => c.value)).not.toContain("NYC");
+  close();
+});
+
+// ---------------------------------------------------------------------------
+// rankFn + relevanceFloor: arm A abstains when no claim clears the floor
+// ---------------------------------------------------------------------------
+
+// Shared fake fn objects — registered once per describe block via module-level const
+// so same-object re-registration (no-op) works when tests run in the same module.
+const fakeLowFn = { isPure: true as const, version: "fake-low@1", scoreOne: () => 0.1 };
+const fakeRankOrderFn = {
+  isPure: true as const,
+  version: "fake-rank-order@1",
+  scoreOne: (v: unknown) => (String(v) === "target value" ? 0.9 : 0.1),
+};
+// Scores all claims 0.7 — used for abstainBelowTop tests
+const fakeMidFn = { isPure: true as const, version: "fake-mid@1", scoreOne: () => 0.7 };
+// Scores "strong claim" 0.9, everything else 0.4 — used for combined-knob tests
+const fakeMixedFn = {
+  isPure: true as const,
+  version: "fake-mixed@1",
+  scoreOne: (v: unknown) => (String(v) === "strong claim" ? 0.9 : 0.4),
+};
+
+describe("rankFn + relevanceFloor", () => {
+  // Register fakes before the describe block runs; same-object re-register is a no-op.
+  beforeEach(() => {
+    registerSimilarity("fake-low", fakeLowFn);
+    registerSimilarity("fake-rank-order", fakeRankOrderFn);
+    registerSimilarity("fake-mid", fakeMidFn);
+    registerSimilarity("fake-mixed", fakeMixedFn);
+  });
+
+  // Use unique corpus IDs per test to avoid cross-test contamination.
+  it("arm A abstains when no claim clears the relevance floor", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-floor-abstain-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    session.write(corpusId, {
+      subject: "user",
+      key: "city",
+      value: "Somecity",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-floor-1", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "floor-abstain-001",
+      question_type: "knowledge-update",
+      question: "Where does the user live?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    const a = answerArmA(session, corpusId, q, { k: 5, rankFn: "fake-low", relevanceFloor: 0.5 });
+    expect(a.abstained).toBe(true);
+    expect(a.claims).toHaveLength(0);
+    close();
+  });
+
+  it("relevanceFloor 0 never abstains on a non-empty ranked corpus", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-floor-zero-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    session.write(corpusId, {
+      subject: "user",
+      key: "city",
+      value: "Anycity",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-floor-zero-1", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "floor-zero-001",
+      question_type: "knowledge-update",
+      question: "Where does the user live?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // relevanceFloor 0 means filter is >= 0, which all scores pass
+    const a = answerArmA(session, corpusId, q, { k: 5, rankFn: "fake-low", relevanceFloor: 0 });
+    expect(a.abstained).toBe(false);
+    expect(a.claims.length).toBeGreaterThan(0);
+    close();
+  });
+
+  it("rankFn with a registered fake semantic fn changes ranking order (deterministic)", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-rank-order-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    // "the user preference" shares tokens with both values below;
+    // jaccard would rank "preferred answer" highest (shares "prefer*" and "answer" tokens with question).
+    // fake-rank-order gives "target value" 0.9 and "preferred answer" 0.1 — inverts the jaccard order.
+    session.write(corpusId, {
+      subject: "user",
+      key: "pref",
+      value: "preferred answer",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-rank-1", "turn:0"],
+      confidence: 0.9,
+    });
+    session.write(corpusId, {
+      subject: "user",
+      key: "pref",
+      value: "target value",
+      valid: { from: new Date("2023-02-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-rank-2", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "rank-order-001",
+      question_type: "knowledge-update",
+      question: "What is the user's preferred answer?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // With jaccard, "preferred answer" would rank first (matches more tokens of the question).
+    // With fake-rank-order, "target value" scores 0.9 and "preferred answer" scores 0.1.
+    // So fake-rank-order must invert the default jaccard order => "target value" ranks first.
+    const a = answerArmA(session, corpusId, q, { k: 2, rankFn: "fake-rank-order", keyCardinality: { pref: "multi" } });
+    expect(a.claims[0].value).toBe("target value");
+    close();
+  });
+
+  // -------------------------------------------------------------------------
+  // abstainBelowTop knob tests
+  // -------------------------------------------------------------------------
+
+  it("abstainBelowTop 0.8 with all claims scoring 0.7: abstained true, zero claims", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-abstain-top-low-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    session.write(corpusId, {
+      subject: "user",
+      key: "city",
+      value: "Midcity",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-mid-1", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "abstain-top-low-001",
+      question_type: "knowledge-update",
+      question: "Where does the user live?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // All claims score 0.7 via fake-mid; threshold is 0.8 → top (0.7) < 0.8 → abstain
+    const a = answerArmA(session, corpusId, q, { k: 5, rankFn: "fake-mid", abstainBelowTop: 0.8 });
+    expect(a.abstained).toBe(true);
+    expect(a.claims).toHaveLength(0);
+    close();
+  });
+
+  it("abstainBelowTop 0.6 with all claims scoring 0.7: full results returned (not filtered)", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-abstain-top-pass-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    session.write(corpusId, {
+      subject: "user",
+      key: "city",
+      value: "Midcity",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-mid-2", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "abstain-top-pass-001",
+      question_type: "knowledge-update",
+      question: "Where does the user live?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // All claims score 0.7; threshold is 0.6 → top (0.7) >= 0.6 → identity (no abstention)
+    // Distinguishes abstainBelowTop (all-or-nothing) from relevanceFloor (per-entry)
+    const a = answerArmA(session, corpusId, q, { k: 5, rankFn: "fake-mid", abstainBelowTop: 0.6 });
+    expect(a.abstained).toBe(false);
+    expect(a.claims.length).toBeGreaterThan(0);
+    close();
+  });
+
+  it("both knobs: top 0.9 passes abstainBelowTop 0.8, relevanceFloor 0.5 filters weak entries", () => {
+    const { session, close } = openTmpSession();
+    const corpusId = "lme-both-knobs-test";
+    session.createCorpus({ id: corpusId, contradictionPolicy: { kind: "always_accept" } });
+
+    // "strong claim" scores 0.9; "weak claim" scores 0.4 via fake-mixed
+    session.write(corpusId, {
+      subject: "user",
+      key: "preference",
+      value: "strong claim",
+      valid: { from: new Date("2023-01-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-strong-1", "turn:0"],
+      confidence: 0.9,
+    });
+    session.write(corpusId, {
+      subject: "user",
+      key: "other_pref",
+      value: "weak claim",
+      valid: { from: new Date("2023-02-01T10:00:00Z").getTime(), to: Infinity },
+      tags: ["session:sess-weak-1", "turn:0"],
+      confidence: 0.9,
+    });
+
+    const q = {
+      question_id: "both-knobs-001",
+      question_type: "knowledge-update",
+      question: "What is the user's preference?",
+      question_date: "2023/12/01 (Fri) 10:00",
+      answer: undefined,
+      sessions: [],
+      answer_session_ids: [],
+    };
+
+    // abstainBelowTop: 0.8 → top (0.9) >= 0.8 → not abstained
+    // relevanceFloor: 0.5 → filters "weak claim" (0.4 < 0.5) but keeps "strong claim" (0.9 >= 0.5)
+    const a = answerArmA(session, corpusId, q, {
+      k: 5,
+      rankFn: "fake-mixed",
+      abstainBelowTop: 0.8,
+      relevanceFloor: 0.5,
+    });
+    expect(a.abstained).toBe(false);
+    expect(a.claims.map((c) => c.value)).toContain("strong claim");
+    expect(a.claims.map((c) => c.value)).not.toContain("weak claim");
+    close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Default rankFn: unspecified => "jaccard", stays synchronous, no registry probe
+// ---------------------------------------------------------------------------
+
+it("arm A with no rankFn specified is synchronous and produces same result as explicit jaccard", () => {
+  const { session, close, corpusId, q } = seedSupersedingPair();
+  const a1 = answerArmA(session, corpusId, q, { k: 5 });
+  const a2 = answerArmA(session, corpusId, q, { k: 5, rankFn: "jaccard" });
+  expect(a1.claims.map((c) => c.value)).toEqual(a2.claims.map((c) => c.value));
+  // Must return a plain object (not a Promise)
+  expect(typeof (a1 as unknown as Promise<unknown>).then).toBe("undefined");
   close();
 });

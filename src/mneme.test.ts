@@ -13,6 +13,8 @@ import { asCorpusId } from "./core/ids.js";
 import type { QueryWarning } from "./algebra/value-routing.js";
 import { UnsupportedValuePredicateError } from "./algebra/value-routing.js";
 import type { Value } from "./core/value.js";
+import { registerSimilarity } from "./algebra/similarity.js";
+import type { EvalContext } from "./algebra/expression.js";
 
 const schema: ClaimSchema = {
   version: "1",
@@ -1413,5 +1415,133 @@ describe("corpus isolation", () => {
     ));
     const entry = [...directCount.groups.values()][0];
     expect((entry.value as any).n).toBe(1);
+  });
+});
+
+// ── rho.by — generic similarity stage builder ────────────────────────────────
+
+describe("rho.by", () => {
+  const mkClaim = (value: string) => ({
+    profile: "profile-1" as any,
+    workspace: corpusDef.id as any,
+    subject: "rho-by-subject",
+    key: "fact",
+    scope: {},
+    value,
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: 0, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: `${corpusDef.id}@1`,
+  });
+
+  it("rho.by('jaccard', q) ranks identically to rho.jaccard(q)", () => {
+    const adapter = createSqliteAdapter();
+    const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mkClaim("hello world test"), { writer: "w" });
+    m.commit("workspace:canopy", mkClaim("foo bar baz"), { writer: "w" });
+
+    const byResult = m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.by("jaccard", "hello world"))
+    );
+    const jaccardResult = m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.jaccard("hello world"))
+    );
+
+    expect(byResult.scored.length).toBe(jaccardResult.scored.length);
+    expect(byResult.scored.map((s: any) => s.score)).toEqual(
+      jaccardResult.scored.map((s: any) => s.score)
+    );
+  });
+
+  it("rho.by records usedSimilarityVersions[name] = fn.version (jaccard@1 via ctx capture)", () => {
+    const adapter = createSqliteAdapter();
+    const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mkClaim("hello world"), { writer: "w" });
+
+    let capturedVersions: Record<string, string> | undefined;
+    // Append a custom stage after rho.by to capture ctx accumulators
+    const captureCtx = (input: any, ctx: EvalContext) => {
+      capturedVersions = { ...ctx.usedSimilarityVersions };
+      return input;
+    };
+
+    m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.by("jaccard", "hello"), captureCtx)
+    );
+
+    expect(capturedVersions).toBeDefined();
+    expect(capturedVersions!["jaccard"]).toBe("jaccard@1");
+  });
+
+  it("rho.by over a fn with embeddingVersions merges them into usedEmbeddingModelVersions", () => {
+    registerSimilarity("fake-semantic", {
+      isPure: true,
+      version: "cosine@1",
+      embeddingVersions: { "fake-model": "v1" },
+      scoreOne: () => 0.5,
+    });
+
+    const adapter = createSqliteAdapter();
+    const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mkClaim("some value"), { writer: "w" });
+
+    let capturedSimilarityVersions: Record<string, string> | undefined;
+    let capturedEmbeddingVersions: Record<string, string> | undefined;
+    const captureCtx = (input: any, ctx: EvalContext) => {
+      capturedSimilarityVersions = { ...ctx.usedSimilarityVersions };
+      capturedEmbeddingVersions = { ...ctx.usedEmbeddingModelVersions };
+      return input;
+    };
+
+    m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.by("fake-semantic", "query text"), captureCtx)
+    );
+
+    expect(capturedSimilarityVersions!["fake-semantic"]).toBe("cosine@1");
+    expect(capturedEmbeddingVersions!["fake-model"]).toBe("v1");
+  });
+
+  it("rho.by over a fn WITHOUT embeddingVersions leaves usedEmbeddingModelVersions untouched", () => {
+    const adapter = createSqliteAdapter();
+    const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mkClaim("some value"), { writer: "w" });
+
+    let capturedEmbeddingVersions: Record<string, string> | undefined;
+    const captureCtx = (input: any, ctx: EvalContext) => {
+      capturedEmbeddingVersions = { ...ctx.usedEmbeddingModelVersions };
+      return input;
+    };
+
+    m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.by("jaccard", "hello"), captureCtx)
+    );
+
+    // jaccard has no embeddingVersions — accumulator stays empty
+    expect(capturedEmbeddingVersions).toEqual({});
+  });
+
+  it("rho.by with an unknown fn name throws /no similarity fn/ at evaluate time", () => {
+    const adapter = createSqliteAdapter();
+    const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+
+    expect(() =>
+      m.query<any>(
+        "workspace:canopy",
+        pipe(leaf("workspace:canopy"), rho.by("nonexistent-fn", "query"))
+      )
+    ).toThrow(/no similarity fn/);
   });
 });

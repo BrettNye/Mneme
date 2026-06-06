@@ -3,6 +3,7 @@ import type { ClaimId } from "../core/ids.js";
 import type { StorageAdapter } from "../adapters/adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { similarityFn } from "../algebra/similarity.js";
+import { embeddingAdapter } from "../algebra/embedding.js";
 import { compile, UnsupportedExprOp } from "../algebra/compile.js";
 import { parseExpr } from "../algebra/serialize.js";
 import { MissingRule } from "../algebra/registries.js";
@@ -11,11 +12,7 @@ import type { Corpus } from "../algebra/types.js";
 import type { Value } from "../core/value.js";
 
 export interface MissingDependency {
-  // "embedding_version" is intentionally absent: embedding-version checking is deferred until
-  // embedding models and an embedding registry exist (arrives with the deferred `exact`
-  // re-execution engine in a later slice). Only the variants this function actually produces
-  // are declared here.
-  kind: "input" | "similarity_version" | "rule";
+  kind: "input" | "similarity_version" | "embedding_version" | "rule";
   id: string;
 }
 
@@ -133,6 +130,22 @@ export function replayStatus(
     if (!available) {
       missing.push({ kind: "similarity_version", id: `${name}@${ver}` });
     }
+  }
+  if (missing.length) {
+    return { status: "unavailable_models", missingDependencies: missing };
+  }
+
+  // Check embedding model versions are available and match.
+  // NOTE: the `?? {}` is deliberate defense for stored claims written before the field existed,
+  // even though the current DerivationProvenance type requires it — keep it with this comment.
+  for (const [id, ver] of Object.entries(d.embeddingModelVersions ?? {})) {
+    let available = false;
+    try {
+      available = embeddingAdapter(id).version === ver;
+    } catch {
+      available = false;
+    }
+    if (!available) missing.push({ kind: "embedding_version", id: `${id}@${ver}` });
   }
   if (missing.length) {
     return { status: "unavailable_models", missingDependencies: missing };

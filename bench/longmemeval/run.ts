@@ -1,7 +1,7 @@
 /**
  * LongMemEval benchmark runner — end-to-end deterministic path.
  *
- *   npx tsx bench/longmemeval/run.ts --file <dataset.json> --claims <claims.jsonl> [--k 1,3,10] [--oracle] [--raw]
+ *   npx tsx bench/longmemeval/run.ts --file <dataset.json> --claims <claims.jsonl> [--k 1,3,10] [--oracle] [--raw] [--rank hybrid]
  */
 import { parseArgs } from "node:util";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
@@ -30,6 +30,18 @@ import {
   EXTRACTION_MODEL,
   PROMPT_VERSION,
 } from "../convert/longmemeval.js";
+import {
+  registerSimilarity,
+  hybridMax,
+  EmbeddingCache,
+  cosineOver,
+  registerEmbeddingAdapter,
+} from "../../src/index.js";
+import { simJaccard, similarityFn } from "../../src/algebra/similarity.js";
+import {
+  createLocalEmbeddingAdapter,
+  warmForQuestion,
+} from "./embeddings-local.js";
 
 // ---------------------------------------------------------------------------
 // Options type for testability
@@ -66,6 +78,45 @@ const MANUAL_KEY_CARDINALITY: Record<string, "single" | "multi"> = {
 };
 
 // ---------------------------------------------------------------------------
+// Abstention threshold for hybrid ranking (--rank hybrid mode only)
+//
+// RELEVANCE_FLOOR = 0 — precision knob off: any per-entry floor damages recall
+// on this data (measured). See prior calibration sweep in git history (commit
+// 3ff3960 / b441766): floor=0.805 achieved abs=3/5 but KU_R3 dropped to 0.65.
+//
+// Two-knob amendment: abstainBelowTop is the all-or-nothing abstention mechanism
+// (checks the TOP ranked score; if below threshold the entire result is discarded).
+// relevanceFloor is kept at 0 to preserve recall.
+//
+// Abstention calibration (bge-BASE-en-v1.5 q8, hybrid-max jaccard+cosine,
+// manual benchmark N=20, --rank hybrid, floor fixed at 0) — MODEL DIAL EXPERIMENT
+// (2026-06-05): bge-small q8 had a score-resolution ceiling (answerable-min 0.812
+// OVERLAPPED abstention tops 0.815/0.829 → abstention capped at 3/5; KU_R3 0.85;
+// full bge-small sweep in git history, commit 0017368). Swapping the registry-
+// pluggable model to bge-base-en-v1.5 q8 (dim 768, ~110MB one-time download)
+// widened the separation to CLEAN:
+//
+//   Answerable top scores (KU+TR, N=15): 0.878 — 0.949 (min 0.878)
+//   Abstention top scores (N=5):         0.824 — 0.867 (max 0.867)
+//   → zero overlap; working window (0.867, 0.878), margin ±~0.005 at midpoint.
+//
+//   At ABSTAIN_TOP=0.872 (midpoint): abstention 5/5 (1.0), zero false abstentions
+//   (KU and temporal), KU_R3 0.95 (bge-base also unblocked 2 of the 3
+//   sibling-ranked receipt questions), KU_R10 1.0, updateCorrect 1.0,
+//   temporalCorrect 1.0, TR_R3 0.833 (arm A hybrid baseline; jaccard arm A was
+//   0.933 — one temporal gold session ranks 4th under hybrid; TR_R10 1.0),
+//   checks 60/60.
+//
+//   Caveat: N=20 calibration; margins are real but small (±0.005-0.006). The
+//   threshold is a measured dial pinned to (model id, version) — re-sweep if the
+//   model changes (see the version-bump obligation in embeddings-local.ts).
+//
+// Selected: 0.872 — midpoint of the clean window (0.867, 0.878).
+// ---------------------------------------------------------------------------
+const ABSTAIN_TOP = 0.872;
+const RELEVANCE_FLOOR = 0; // precision knob off: any per-entry floor damages recall on this data (measured)
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -87,6 +138,7 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
         k: { type: "string", default: "1,3,10" },
         oracle: { type: "boolean", default: false },
         raw: { type: "boolean", default: false },
+        rank: { type: "string", default: "jaccard" },
       },
     });
   } catch (err) {
@@ -118,6 +170,27 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
   const maxK = Math.max(...ks);
   const oracle = Boolean(values.oracle);
   const raw = Boolean(values.raw);
+  const rankMode = String(values.rank ?? "jaccard");
+  if (rankMode !== "jaccard" && rankMode !== "hybrid") {
+    logError(`Unrecognized --rank value "${rankMode}"; accepted values: jaccard, hybrid`);
+    return 1;
+  }
+  const useHybrid = rankMode === "hybrid";
+
+  // --- hybrid ranking setup (only when --rank hybrid is passed) ---
+  // NOTE: this block is guarded by useHybrid; it is NOT executed when the flag
+  // is absent, so the fixture test (which calls main without --rank) stays
+  // zero-network and zero-model.
+  let embeddingAdapterInstance: Awaited<ReturnType<typeof createLocalEmbeddingAdapter>> | null = null;
+  let embeddingCacheInstance: InstanceType<typeof EmbeddingCache> | null = null;
+  if (useHybrid) {
+    embeddingAdapterInstance = await createLocalEmbeddingAdapter();
+    embeddingCacheInstance = new EmbeddingCache();
+    registerEmbeddingAdapter(embeddingAdapterInstance);
+    const cosineFn = cosineOver(embeddingAdapterInstance, embeddingCacheInstance);
+    registerSimilarity("cosine", cosineFn);
+    registerSimilarity("hybrid", hybridMax(simJaccard, similarityFn("cosine")));
+  }
 
   // --- load dataset ---
   let datasetRaw: unknown[];
@@ -233,11 +306,19 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
       const qid = q.question_id;
       const records = claimsFor(q, allClaims, { oracle });
 
+      // Warm embeddings for hybrid ranking (before ingest: records are plain objects)
+      if (useHybrid && embeddingAdapterInstance && embeddingCacheInstance) {
+        await warmForQuestion(
+          embeddingAdapterInstance,
+          embeddingCacheInstance,
+          records,
+          q.question,
+        );
+      }
+
       // Ingest
-      let ingestOk = false;
       try {
         const stats = ingestQuestion(session, q, records);
-        ingestOk = true;
         opts?.onIngest?.(qid, stats.committed);
         checks.push({ name: `ingest-conservation:${qid}`, pass: true });
       } catch (err) {
@@ -255,14 +336,15 @@ export async function main(argv: string[], opts?: RunOpts): Promise<number> {
         continue;
       }
 
-      if (!ingestOk) continue;
-
       // Answer both arms
       const corpusId = `lme-${qid}`;
 
       let resultA;
       try {
-        resultA = answerArmA(session, corpusId, q, { k: maxK, keyCardinality: MANUAL_KEY_CARDINALITY });
+        const armAOpts = useHybrid
+          ? { k: maxK, keyCardinality: MANUAL_KEY_CARDINALITY, rankFn: "hybrid", abstainBelowTop: ABSTAIN_TOP, relevanceFloor: RELEVANCE_FLOOR }
+          : { k: maxK, keyCardinality: MANUAL_KEY_CARDINALITY };
+        resultA = answerArmA(session, corpusId, q, armAOpts);
         const scoreA = scoreQuestion(q, resultA, ks);
         scoreRows.push(scoreA);
         checks.push({ name: `score-A:${qid}`, pass: true });

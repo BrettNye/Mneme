@@ -1,10 +1,19 @@
-﻿// Adversarial manual probe: cases designed to make arm A (algebra) LOSE or behave
+// Adversarial manual probe: cases designed to make arm A (algebra) LOSE or behave
 // questionably. Prints what each arm returns per case + a verdict line.
-// Run: npx tsx bench/datasets/longmemeval/adversarial-probe.ts
+// Run: npx tsx bench/longmemeval/manual/adversarial-probe.ts
 import { openTmpSession } from "../test-support.js";
 import { answerArmA, answerArmB } from "../answer.js";
 import type { LmeQuestionT } from "../types.js";
 import type { Session } from "../../../src/surface/index.js";
+import {
+  EmbeddingCache,
+  cosineOver,
+  registerEmbeddingAdapter,
+  registerSimilarity,
+  hybridMax,
+} from "../../../src/index.js";
+import { simJaccard, similarityFn } from "../../../src/algebra/similarity.js";
+import { createLocalEmbeddingAdapter, warmForQuestion } from "../embeddings-local.js";
 
 const DAY = 86_400_000;
 const T0 = Date.parse("2023-01-01T10:00:00Z");
@@ -40,7 +49,7 @@ const PROBES: Probe[] = [
   },
   {
     name: "3. paraphrase 'contradiction' — same fact, different wording",
-    expectation: "expected-fail under jaccard (acronym, token sets disjoint); embedding slice acceptance case — older paraphrase deprecated, fact survives",
+    expectation: "FIXED: hybrid ranking — cosine sees NYC ≡ New York City; embedding slice acceptance case closed",
     question: "What city does the user live in, New York?",
     claims: [
       { subject: "user", key: "city", value: "NYC", daysAfterT0: 0 },
@@ -118,20 +127,46 @@ function seed(session: Session, corpusId: string, probe: Probe, idx: number): vo
 const fmt = (r: { claims: Array<{ value: unknown }>; abstained: boolean }) =>
   r.abstained ? "(abstained)" : r.claims.map((c) => JSON.stringify(c.value)).join(" | ") || "(empty)";
 
-for (const [idx, probe] of PROBES.entries()) {
-  const { session, close } = openTmpSession();
-  try {
-    const corpusId = `adv-${idx}`;
-    seed(session, corpusId, probe, idx);
-    const q = mkQuestion(probe, idx);
-    const a = answerArmA(session, corpusId, q, { k: 5, keyCardinality: probe.keyCardinality });
-    const b = answerArmB(session, corpusId, q, { k: 5 });
-    console.log(`\n=== ${probe.name}`);
-    console.log(`    expectation: ${probe.expectation}`);
-    console.log(`    arm A: ${fmt(a)}`);
-    console.log(`    arm B: ${fmt(b)}`);
-  } finally {
-    close();
+async function runProbes() {
+  // Create adapter+cache once at top; register cosine+hybrid for all probes.
+  const adapter = await createLocalEmbeddingAdapter();
+  const cache = new EmbeddingCache();
+  registerEmbeddingAdapter(adapter);
+  const cosineFn = cosineOver(adapter, cache);
+  registerSimilarity("cosine", cosineFn);
+  registerSimilarity("hybrid", hybridMax(simJaccard, similarityFn("cosine")));
+
+  for (const [idx, probe] of PROBES.entries()) {
+    const { session, close } = openTmpSession();
+    try {
+      const corpusId = `adv-${idx}`;
+      seed(session, corpusId, probe, idx);
+      const q = mkQuestion(probe, idx);
+
+      // Warm embeddings: records = the probe's claims as {value}, plus the question.
+      const claimValues = probe.claims.map((c) => ({ value: c.value }));
+      await warmForQuestion(adapter, cache, claimValues, q.question);
+
+      // probes test ranking semantics, not abstention — relevanceFloor: 0
+      const a = answerArmA(session, corpusId, q, {
+        k: 5,
+        keyCardinality: probe.keyCardinality,
+        rankFn: "hybrid",
+        relevanceFloor: 0,
+      });
+      const b = answerArmB(session, corpusId, q, { k: 5 });
+      console.log(`\n=== ${probe.name}`);
+      console.log(`    expectation: ${probe.expectation}`);
+      console.log(`    arm A: ${fmt(a)}`);
+      console.log(`    arm B: ${fmt(b)}`);
+    } finally {
+      close();
+    }
   }
+  console.log();
 }
-console.log();
+
+runProbes().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
