@@ -1423,7 +1423,7 @@ describe("corpus isolation", () => {
 describe("rho.by", () => {
   const mkClaim = (value: string) => ({
     profile: "profile-1" as any,
-    workspace: "workspace:canopy" as any,
+    workspace: corpusDef.id as any,
     subject: "rho-by-subject",
     key: "fact",
     scope: {},
@@ -1434,7 +1434,7 @@ describe("rho.by", () => {
     provenance: {},
     evidence: [],
     tags: [],
-    schema: "workspace:canopy@1",
+    schema: `${corpusDef.id}@1`,
   });
 
   it("rho.by('jaccard', q) ranks identically to rho.jaccard(q)", () => {
