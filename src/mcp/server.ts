@@ -104,7 +104,8 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
       },
     },
     async (a) => {
-      const embeddings = await initEmbeddings();
+      // Minimal compile bridge: wrap bare EmbeddingState into RecallDeps.
+      // The server task will integrate this properly.
       const r = await recall(session, {
         about: a.about,
         subject: a.subject,
@@ -112,7 +113,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         maxTokens: a.maxTokens,
         limit: a.limit,
         corpus: a.corpus ?? defaultCorpus,
-      }, embeddings);
+      }, { embeddings: await initEmbeddings() });
       const matchLines = r.matches
         .map((m) => `- ${m.subject} ${m.key} = ${JSON.stringify(m.value)} (p=${m.confidence.toFixed(2)}, score=${m.score.toFixed(2)})`)
         .join("\n");

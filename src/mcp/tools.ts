@@ -10,7 +10,7 @@
  * embeddings are active.
  */
 import type { Predicate, RankedCorpus } from "../index.js";
-import { pipe, leaf, sigma, rho, kappa } from "../surface/index.js";
+import { pipe, leaf, sigma, rho } from "../surface/index.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Session } from "../surface/index.js";
 import { pointEstimate } from "../surface/index.js";
@@ -124,11 +124,10 @@ export interface RecallResult {
 export async function recall(
   session: Session,
   args: RecallArgs,
-  deps: RecallDeps | EmbeddingState,
+  deps: RecallDeps,
 ): Promise<RecallResult> {
-  // Normalise: accept either RecallDeps (with .embeddings) or a bare EmbeddingState.
-  const embeddings: EmbeddingState = "rankFn" in deps ? deps : (deps as RecallDeps).embeddings;
-  const keyCardinality = "keyCardinality" in deps ? (deps as RecallDeps).keyCardinality : undefined;
+  const embeddings: EmbeddingState = deps.embeddings;
+  const keyCardinality = deps.keyCardinality;
 
   const maxTokens = args.maxTokens ?? 2000;
   const limit = args.limit ?? 5;
@@ -146,10 +145,14 @@ export async function recall(
     return emptyResult;
   }
 
-  // If hybrid embeddings active: warm all claim values + the query before the single query.
+  // If hybrid embeddings active: warm claim values (scoped to the same subject/key predicates
+  // the σ stages use) + the query before the single query execution.
   if (embeddings.rankFn !== "jaccard" && embeddings.adapter && embeddings.cache) {
-    // Read claim values for warm-up via mneme.read (leaf-only, no filters).
-    const rawClaims = session.mneme.read(args.corpus, { corpusId: args.corpus });
+    const rawClaims = session.mneme.read(args.corpus, {
+      corpusId: args.corpus,
+      subject: args.subject,
+      key: args.key,
+    });
     const claimValues = rawClaims.map((c) => c.value);
     await warmValues(embeddings.adapter, embeddings.cache, claimValues, [args.about]);
   }
@@ -189,6 +192,8 @@ export async function recall(
   const afterFloor = relevanceFloor(floorThreshold)(afterAbstain);
   const knobbed = afterFloor;
 
+  // matches = raw ranked candidates (sliced to limit); κ content applies its own
+  // dedupContent internally — intentional divergence between matches list and composed text.
   const matches: RecallMatch[] = knobbed.scored.slice(0, limit).map((s) => ({
     subject: s.claim.subject,
     key: s.claim.key,

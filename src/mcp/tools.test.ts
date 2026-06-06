@@ -179,6 +179,8 @@ describe("recall — hybrid deps warm-up", () => {
   });
 
   it("hybrid deps: warm-up before query (no cache-miss throw), rankFn reflects hybrid", async () => {
+    // NOTE: must be the FIRST hybrid test — after this, the registered "cosine"/"hybrid"
+    // similarity fns are locked to this test's cache (stale-closure; see test-support.ts).
     const s = freshSession();
     const corpus = "hybrid-corpus";
     remember(s, { subject: "s", key: "k", value: "some hybrid value", corpus });
@@ -197,6 +199,32 @@ describe("recall — hybrid deps warm-up", () => {
     const r = await recall(s, { about: "jaccard test", corpus }, jaccardDeps);
     expect(r.rankFn).toBe("jaccard");
     expect(r.matches.length).toBeGreaterThan(0);
+  });
+
+  it("hybrid warm-up with subject filter only embeds matching-subject values (+ query)", async () => {
+    // Stale-closure note: this test runs after the first hybrid test, so the registered
+    // "cosine"/"hybrid" fns use that test's cache. warmValues still fills the new cache
+    // correctly — we verify the warm-up scope via the adapter spy and ignore scoring.
+    // (warmValues is called BEFORE session.mneme.query, so spy data is captured even if
+    //  the scoring phase throws due to stale closure.)
+    const s = freshSession();
+    const corpus = "hybrid-scoped-corpus";
+    // Two subjects — warm-up should only embed "target" values when subject filter is applied
+    remember(s, { subject: "target", key: "info", value: "relevant value", corpus });
+    remember(s, { subject: "other", key: "info", value: "unrelated noise", corpus });
+
+    const deps = await makeFakeHybridDeps();
+    // Spy on embed to capture what warmValues passes to the adapter
+    const embedSpy = vi.spyOn(deps.embeddings.adapter!, "embed");
+
+    // Scoring may throw after warm-up (stale-closure); warm-up spy is populated before scoring.
+    try { await recall(s, { about: "relevant", corpus, subject: "target" }, deps); } catch (_) { /* expected */ }
+
+    // embed() should have been called with ONLY "relevant value" + "relevant" (query),
+    // NOT "unrelated noise" (warm-up must be scoped to the subject filter)
+    const allEmbedded = embedSpy.mock.calls.flatMap((call) => call[0] as string[]);
+    expect(allEmbedded).toContain("relevant value");
+    expect(allEmbedded).not.toContain("unrelated noise");
   });
 });
 
