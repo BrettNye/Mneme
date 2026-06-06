@@ -21,7 +21,8 @@ export type ExprNode =
   | { op: "combine"; rule: string; params?: Value; similarity?: SimilarityConfig; src: ExprNode }
   | { op: "synthesize"; subject: string; key: string; rule: string; params?: Value; src: ExprNode }
   | { op: "resolve"; policy: string; threshold?: number; rule?: string;
-      keyCardinality?: Record<string, "single" | "multi">; src: ExprNode }
+      keyCardinality?: Record<string, "single" | "multi">;
+      keyAliases?: Record<string, string>; src: ExprNode }
   | { op: "aggregate"; fn: string; reweight?: string; where?: Predicate; groupBy?: string; src: ExprNode };
 
 export const leaf = (corpusId: string): ExprNode =>
@@ -93,11 +94,13 @@ export const resolve = (
   rule?: string,
   threshold?: number,
   keyCardinality?: Record<string, "single" | "multi">,
+  keyAliases?: Record<string, string>,
 ): ExprNode => {
   const node: Extract<ExprNode, { op: "resolve" }> = { op: "resolve", policy, src };
   if (threshold !== undefined) node.threshold = threshold;
   if (rule !== undefined) node.rule = rule;
   if (keyCardinality !== undefined) node.keyCardinality = keyCardinality;
+  if (keyAliases !== undefined) node.keyAliases = keyAliases;
   return node;
 };
 

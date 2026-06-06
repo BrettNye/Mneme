@@ -175,6 +175,29 @@ it("resolve omits keyCardinality key when not supplied", () => {
   expect("keyCardinality" in n).toBe(false);
 });
 
+it("resolve records keyAliases when supplied", () => {
+  const n = resolve("p", leaf("c"), undefined, 0, undefined, { preferred_editor: "editor" });
+  expect(n).toEqual({
+    op: "resolve", policy: "p", threshold: 0, keyAliases: { preferred_editor: "editor" },
+    src: { op: "leaf", corpusId: "c" },
+  });
+});
+
+it("resolve omits keyAliases key when not supplied", () => {
+  const n = resolve("p", leaf("c"), undefined, 0.3);
+  expect("keyAliases" in n).toBe(false);
+});
+
+it("resolve records both keyCardinality and keyAliases when both supplied", () => {
+  const n = resolve("p", leaf("c"), undefined, 0, { hobby: "multi" }, { fav_color: "color" });
+  expect(n).toEqual({
+    op: "resolve", policy: "p", threshold: 0,
+    keyCardinality: { hobby: "multi" },
+    keyAliases: { fav_color: "color" },
+    src: { op: "leaf", corpusId: "c" },
+  });
+});
+
 it("aggregate constructor builds aggregation shape with optional fields", () => {
   const minimal = aggregate("count", leaf("c"));
   expect(minimal).toEqual({

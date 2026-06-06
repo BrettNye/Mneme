@@ -176,3 +176,19 @@ it("round-trips resolve.keyCardinality and combine.similarity", () => {
   const parsed = parseExpr(serializeExpr(expr));
   expect(serializeExpr(parsed)).toBe(serializeExpr(expr));
 });
+
+it("round-trips keyAliases on a resolve node", () => {
+  const node = resolve("resolveKeepBoth", leaf("c"), undefined, 0.5, undefined, { preferred_editor: "editor" });
+  expect(parseExpr(serializeExpr(node))).toEqual(node);
+});
+
+it("round-trips resolve node with both keyCardinality and keyAliases", () => {
+  const node = resolve("resolveDeprecateOlder", leaf("c"), undefined, 0, { hobby: "multi" }, { fav_color: "color" });
+  expect(parseExpr(serializeExpr(node))).toEqual(node);
+});
+
+it("resolve node without keyAliases serializes unchanged (no new field injected)", () => {
+  const node = resolve("resolveKeepBoth", leaf("c"), undefined, 0.5);
+  const serialized = serializeExpr(node);
+  expect(serialized).not.toContain("keyAliases");
+});
