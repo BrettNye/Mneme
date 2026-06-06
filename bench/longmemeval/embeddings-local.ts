@@ -1,0 +1,46 @@
+import type { EmbeddingAdapter, EmbeddingCache } from "../../src/algebra/embedding.js";
+import { warmEmbeddings } from "../../src/algebra/embedding.js";
+import { canonicalizeValue } from "../../src/core/value.js";
+
+/**
+ * Lazy-loads the local feature-extraction pipeline (quantized bge-small-en-v1.5).
+ * Package: @huggingface/transformers ^4.2.0
+ * Model:   Xenova/bge-small-en-v1.5 (quantized q8 ONNX export)
+ * Dim:     384
+ */
+export async function createLocalEmbeddingAdapter(): Promise<EmbeddingAdapter> {
+  const { pipeline } = await import("@huggingface/transformers");
+  const extractor = await pipeline("feature-extraction", "Xenova/bge-small-en-v1.5", {
+    dtype: "q8",
+  });
+
+  return {
+    id: "bge-small-en-v1.5",
+    version: "q8@1",
+    dim: 384,
+
+    async embed(texts: string[]): Promise<number[][]> {
+      const output = await extractor(texts, { pooling: "mean", normalize: true });
+      // output is a Tensor; tolist() returns number[][] for a 2-D tensor
+      return (output as { tolist(): number[][] }).tolist();
+    },
+  };
+}
+
+/**
+ * Caller-side warm-up (audit B4): canonicalizes record values
+ * (string pass-through, non-string → canonicalizeValue — matches cosineOver's rule)
+ * plus the question, then delegates to warmEmbeddings.
+ */
+export async function warmForQuestion(
+  adapter: EmbeddingAdapter,
+  cache: EmbeddingCache,
+  records: { value: unknown }[],
+  question: string,
+): Promise<void> {
+  const texts: string[] = records.map((r) =>
+    typeof r.value === "string" ? r.value : canonicalizeValue(r.value as import("../../src/core/value.js").Value),
+  );
+  texts.push(question);
+  await warmEmbeddings(adapter, cache, texts);
+}

@@ -38,6 +38,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^20.0.0",
     "tsx": "^4.19.0",
@@ -45,11 +46,15 @@
     "vitest": "^2.0.0"
   },
   "peerDependencies": {
-    "@aws-sdk/client-s3": "*",
-    "@aws-sdk/client-kms": "*"
+    "@aws-sdk/client-kms": "*",
+    "@aws-sdk/client-s3": "*"
   },
   "peerDependenciesMeta": {
-    "@aws-sdk/client-s3": { "optional": true },
-    "@aws-sdk/client-kms": { "optional": true }
+    "@aws-sdk/client-s3": {
+      "optional": true
+    },
+    "@aws-sdk/client-kms": {
+      "optional": true
+    }
   }
 }
