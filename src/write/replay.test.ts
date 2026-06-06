@@ -6,6 +6,7 @@ import type { StorageAdapter, ExecutionPlan } from "../adapters/adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { MissingRule } from "../algebra/registries.js";
 import * as expression from "../algebra/expression.js";
+import { registerEmbeddingAdapter, embeddingAdapter } from "../algebra/embedding.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -419,4 +420,112 @@ it("uses evaluationClock from provenance (not wall-clock) for re-execution", () 
   } finally {
     spy.mockRestore();
   }
+});
+
+// ─── New: embedding_version checks ───────────────────────────────────────────
+
+it("reports unavailable_models with kind:embedding_version when the adapter is absent", () => {
+  const adapter = { getClaim: (_id: string) => ({ id: _id } as any) } as any;
+  // "fake-model" is not registered — embeddingAdapter("fake-model") will throw
+  const derived = {
+    provenance: {
+      derivedFrom: {
+        evaluationClock: 1,
+        inputClaims: [],
+        similarityVersions: {},
+        embeddingModelVersions: { "fake-model": "v1" },
+      },
+    },
+  } as any;
+  const result = replayStatus(derived, adapter);
+  expect(result.status).toBe("unavailable_models");
+  expect(result.missingDependencies).toHaveLength(1);
+  expect(result.missingDependencies[0].kind).toBe("embedding_version");
+  expect(result.missingDependencies[0].id).toBe("fake-model@v1");
+});
+
+it("reports unavailable_models with kind:embedding_version when adapter version drifted", () => {
+  const adapter = { getClaim: (_id: string) => ({ id: _id } as any) } as any;
+  // Register an adapter with version "v2" but the claim recorded "v1"
+  registerEmbeddingAdapter({ id: "replay-version-drift", version: "v2", dim: 2, embed: async (t) => t.map(() => [0, 1]) });
+  const derived = {
+    provenance: {
+      derivedFrom: {
+        evaluationClock: 1,
+        inputClaims: [],
+        similarityVersions: {},
+        embeddingModelVersions: { "replay-version-drift": "v1" },
+      },
+    },
+  } as any;
+  const result = replayStatus(derived, adapter);
+  expect(result.status).toBe("unavailable_models");
+  expect(result.missingDependencies).toHaveLength(1);
+  expect(result.missingDependencies[0].kind).toBe("embedding_version");
+  expect(result.missingDependencies[0].id).toBe("replay-version-drift@v1");
+});
+
+it("no missing dependency when registered adapter version matches recorded version", () => {
+  // Register a fake adapter with matching version
+  registerEmbeddingAdapter({ id: "replay-fake", version: "v1", dim: 2, embed: async (t) => t.map(() => [0, 1]) });
+  const adapter = makeAdapter();
+  const catalog = makeCatalog(["c"]);
+
+  const inputClaim = makeClaim("input-emb-match-1", "val");
+  (inputClaim as any)._corpusId = "c";
+  adapter.insertBatch([inputClaim]);
+
+  const qe = serializeExpr(leaf("c"));
+  const recordedClaim = makeClaim("recorded-emb-match-1", inputClaim.value, {
+    confidence: inputClaim.confidence,
+    provenance: {
+      derivedFrom: {
+        queryExpression: qe,
+        evaluationClock: 7,
+        inputClaims: [inputClaim.id],
+        similarityVersions: {},
+        embeddingModelVersions: { "replay-fake": "v1" },
+        corpusState: 1,
+      },
+    },
+  } as any);
+  adapter.insertBatch([recordedClaim]);
+
+  const result = replayStatus(recordedClaim, adapter, catalog);
+  // Matching version: should NOT produce unavailable_models for embedding_version
+  // Should proceed to re-execution and return exact or mismatch (not unavailable_models with embedding_version)
+  expect(result.missingDependencies.some((d) => d.kind === "embedding_version")).toBe(false);
+});
+
+it("empty embeddingModelVersions behaves as before (no embedding_version missing dep)", () => {
+  const adapter = { getClaim: (_id: string) => ({ id: _id } as any) } as any;
+  const derived = {
+    provenance: {
+      derivedFrom: {
+        evaluationClock: 1,
+        inputClaims: [],
+        similarityVersions: {},
+        embeddingModelVersions: {},
+      },
+    },
+  } as any;
+  // Should fail for re-execution (no queryExpression) but NOT produce embedding_version deps
+  const result = replayStatus(derived, adapter);
+  expect(result.missingDependencies.some((d) => d.kind === "embedding_version")).toBe(false);
+});
+
+it("absent embeddingModelVersions (legacy claim) behaves as before with no embedding_version deps", () => {
+  const adapter = { getClaim: (_id: string) => ({ id: _id } as any) } as any;
+  const derived = {
+    provenance: {
+      derivedFrom: {
+        evaluationClock: 1,
+        inputClaims: [],
+        similarityVersions: {},
+        // embeddingModelVersions deliberately absent
+      },
+    },
+  } as any;
+  const result = replayStatus(derived, adapter);
+  expect(result.missingDependencies.some((d) => d.kind === "embedding_version")).toBe(false);
 });
