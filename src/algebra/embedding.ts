@@ -75,18 +75,15 @@ export async function warmEmbeddings(
 
 // ── warmValues ───────────────────────────────────────────────────────────────
 
-/** Canonicalizes values (string pass-through; non-string → canonicalizeValue —
- *  the EXACT rule cosineOver uses), appends extra strings, delegates to warmEmbeddings. */
+/** Canonicalizes values via toText (the EXACT rule cosineOver uses),
+ *  appends extra strings, delegates to warmEmbeddings. */
 export async function warmValues(
   adapter: EmbeddingAdapter,
   cache: EmbeddingCache,
   values: unknown[],
   extra: string[] = [],
 ): Promise<void> {
-  const texts = [
-    ...values.map((v) => (typeof v === "string" ? v : canonicalizeValue(v as Value))),
-    ...extra,
-  ];
+  const texts = [...values.map((v) => toText(v as Value)), ...extra];
   await warmEmbeddings(adapter, cache, texts);
 }
 
