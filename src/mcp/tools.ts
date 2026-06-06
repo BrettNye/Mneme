@@ -47,7 +47,10 @@ export interface RememberArgs {
   /**
    * Optional ISO-8601 date-time string for the start of the validity interval.
    * e.g. "2026-01-01T00:00:00Z". Invalid ISO → throws a descriptive Error.
-   * When omitted: valid from epoch 0 (always valid).
+   * When omitted: valid from Date.now() — facts are valid from when stated, so a
+   * later no-validFrom write on the same subject/key supersedes an earlier one
+   * (last-write-wins under resolveDeprecateOlder) instead of tying at from=0.
+   * Backdating stays explicit: pass validFrom to place the interval in the past.
    */
   validFrom?: string;
 }
@@ -78,9 +81,11 @@ export function remember(session: Session, args: RememberArgs): RememberResult {
     confidence: args.confidence,
     tags: args.tags,
     scope: args.scope,
-    valid: validFrom !== undefined
-      ? { from: validFrom, to: Infinity }
-      : undefined,
+    // Default valid.from to "now": conversational facts are valid from when
+    // stated. Leaving this undefined would fall through to the surface default
+    // { from: 0 }, making two no-validFrom writes on the same subject/key TIE
+    // under resolveDeprecateOlder instead of last-write-wins.
+    valid: { from: validFrom ?? Date.now(), to: Infinity },
   });
   return { id: out.id, status: out.status, corpus: args.corpus };
 }

@@ -90,6 +90,25 @@ describe("recall — canonical pipeline", () => {
     expect(r.matches.map((m) => m.value)).toEqual(["helix"]);
   });
 
+  it("no-validFrom writes default valid.from to now → last-write-wins, no tie flag", async () => {
+    const s = freshSession();
+    const corpus = "test-now-supersede";
+    const base = { subject: "user:brett", corpus };
+    // Stub Date.now to two distinct instants so the second write strictly
+    // post-dates the first (no reliance on wall-clock millisecond resolution).
+    const t1 = Date.parse("2026-06-01T00:00:00Z");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t1);
+    remember(s, { ...base, key: "editor", value: "vim" });
+    nowSpy.mockReturnValue(t1 + 60_000);
+    remember(s, { ...base, key: "editor", value: "helix" });
+    nowSpy.mockRestore(); // recall evaluates τ_valid at the real "now"
+
+    const r = await recall(s, { about: "editor", corpus }, jaccardDeps);
+    // Last write wins via supersession: ONLY the second value, and no
+    // contradiction-flag artifact left in matches.
+    expect(r.matches.map((m) => m.value)).toEqual(["helix"]);
+  });
+
   it("multi-key (keyCardinality=multi) returns both values", async () => {
     const s = freshSession();
     const corpus = "test-multi";
