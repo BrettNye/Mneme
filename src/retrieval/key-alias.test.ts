@@ -252,6 +252,13 @@ describe("aliasMapOf — cycles", () => {
     expect(Object.keys(map)).toHaveLength(0);
     expect(warnings.some((w) => w.includes("cycle"))).toBe(true);
   });
+
+  it("drops tail variants whose chain leads into a cycle", () => {
+    const claims = [aliasClaim("a", "b"), aliasClaim("b", "c"), aliasClaim("c", "b")];
+    const { map, warnings } = aliasMapOf(claims, { evaluationInstant: NOW });
+    expect(map).toEqual({});
+    expect(warnings.some((w) => w.includes("cycle"))).toBe(true);
+  });
 });
 
 // ── aliasMapOf — ties ─────────────────────────────────────────────────────────

@@ -172,18 +172,13 @@ export function aliasMapOf(
     while (rawMap[current] !== undefined) {
       const next = rawMap[current];
       if (visitedSet.has(next)) {
-        // Cycle detected: mark all members of this cycle
+        // Cycle detected: mark all members of this cycle.
+        // visited.slice(cycleStart) already contains next (it's the entry point).
         const cycleStart = visited.indexOf(next);
         const cycle = visited.slice(cycleStart);
-        // The canonical that triggered the cycle is also part of it if it's in rawMap
-        if (rawMap[next] !== undefined) {
-          cycle.push(next);
-        }
         for (const m of cycle) {
           cycleMembers.add(m);
         }
-        // Also mark 'next' since it's the cycle entry point
-        cycleMembers.add(next);
         break;
       }
       visited.push(next);
@@ -209,8 +204,9 @@ export function aliasMapOf(
       current = rawMap[current];
     }
 
-    // If chain ended in a cycle member's target, skip
-    if (cycleMembers.has(current)) continue;
+    // Chain terminates legitimately only when rawMap[current] === undefined (true terminal).
+    // Any other exit means the next hop is a cycle member — drop this tail variant.
+    if (rawMap[current] !== undefined || cycleMembers.has(current)) continue;
 
     resolvedMap[variant] = current;
   }
