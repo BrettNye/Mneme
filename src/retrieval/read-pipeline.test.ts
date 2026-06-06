@@ -12,6 +12,7 @@ import { pairsOf } from "../algebra/contradiction.js";
 import { oplusDedupe } from "../algebra/combination.js";
 import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../algebra/resolution.js";
 import { rho as rhoOp } from "../algebra/similarity.js";
+import { KEY_ALIAS_KEY, KEY_SUBJECT_PREFIX, isKeyAliasShaped } from "./key-alias.js";
 import type { EvalContext } from "../algebra/expression.js";
 
 // ── Time constants ────────────────────────────────────────────────────────────
@@ -214,6 +215,97 @@ describe("canonicalReadStages", () => {
   });
 });
 
+// ── canonicalReadStages — keyAliases ─────────────────────────────────────────
+
+/** Factory for a well-formed alias-of claim: key:variant → canonical */
+const mkAlias = (variant: string, canonical: string, fromTs: number = T10) =>
+  mk(
+    `alias-${variant}->${canonical}`,
+    `${KEY_SUBJECT_PREFIX}${variant}`,
+    KEY_ALIAS_KEY,
+    canonical,
+    fromTs,
+  );
+
+describe("canonicalReadStages — keyAliases", () => {
+  it("serving filter drops alias-shaped claims regardless of keyAliases opt", () => {
+    // Alias claims should NEVER appear in pipeline output, even without a keyAliases map
+    const regularClaim = mk("reg", "me", "editor", "vscode", T10);
+    const aliasClaim = mkAlias("preferred_editor", "editor");
+    const corpus = corpusOf([regularClaim, aliasClaim]);
+
+    const out = applyStages<Corpus>(
+      canonicalReadStages({ evaluationInstant: T30 }),
+      corpus,
+    );
+
+    // Alias claim must be dropped even without keyAliases opt
+    expect(out.claims.every((cl) => cl.key !== KEY_ALIAS_KEY)).toBe(true);
+    // Regular claim survives
+    expect(out.claims.map((cl) => cl.key)).toContain("editor");
+  });
+
+  it("serving filter drops alias-shaped claims when keyAliases is provided", () => {
+    const regularClaim = mk("reg", "me", "editor", "vscode", T10);
+    const aliasClaim = mkAlias("preferred_editor", "editor");
+    const corpus = corpusOf([regularClaim, aliasClaim]);
+
+    const out = applyStages<Corpus>(
+      canonicalReadStages({
+        evaluationInstant: T30,
+        keyAliases: { preferred_editor: "editor" },
+      }),
+      corpus,
+    );
+
+    // Alias claim must be dropped
+    expect(out.claims.every((cl) => cl.key !== KEY_ALIAS_KEY)).toBe(true);
+    // Regular claim survives
+    expect(out.claims.map((cl) => cl.key)).toContain("editor");
+  });
+
+  it("with keyAliases, aliased stale claim is deprecated and only newer survives", () => {
+    // older claim under canonical key, newer under variant key — keyAliases groups them
+    const oldEditorClaim = mk("editor-old", "me", "editor", "atom", T10);
+    const newPreferredEditorClaim = mk("preferred-editor-new", "me", "preferred_editor", "vscode", T20);
+    const aliasClaim = mkAlias("preferred_editor", "editor");
+    const corpus = corpusOf([oldEditorClaim, newPreferredEditorClaim, aliasClaim]);
+
+    const out = applyStages<Corpus>(
+      canonicalReadStages({
+        evaluationInstant: T30,
+        keyAliases: { preferred_editor: "editor" },
+      }),
+      corpus,
+    );
+
+    // alias claim filtered out
+    expect(out.claims.every((cl) => cl.key !== KEY_ALIAS_KEY)).toBe(true);
+    // newer claim under variant key wins; older claim under canonical key deprecated + dropped
+    expect(out.claims.map((cl) => cl.key)).toEqual(["preferred_editor"]);
+    expect(out.claims[0].value).toBe("vscode");
+  });
+
+  it("without keyAliases, output is identical to existing pipeline behavior", () => {
+    const phoneOld = mk("phone-old-alias", "me", "phone", "Galaxy", T10);
+    const phoneNew = mk("phone-new-alias", "me", "phone", "Pixel", T20);
+    const corpus = corpusOf([phoneOld, phoneNew]);
+
+    const withoutAliases = applyStages<Corpus>(
+      canonicalReadStages({ evaluationInstant: T30 }),
+      corpus,
+    );
+    const withEmptyAliases = applyStages<Corpus>(
+      canonicalReadStages({ evaluationInstant: T30, keyAliases: {} }),
+      corpus,
+    );
+
+    // Both should produce same result: only newer phone claim survives
+    expect(withoutAliases.claims.map((c) => c.id)).toEqual(withEmptyAliases.claims.map((c) => c.id));
+    expect(withoutAliases.claims.map((c) => c.value)).toEqual(["Pixel"]);
+  });
+});
+
 // ── rankedTailStages ──────────────────────────────────────────────────────────
 
 describe("rankedTailStages", () => {
@@ -333,7 +425,7 @@ describe("stage equivalence: composed vs hand-rolled", () => {
     // ⊥ / resolveDeprecateOlder
     const afterResolve = resolveDeprecateOlder(pairsOf(afterDedupe, threshold, { keyCardinality }))(afterDedupe);
     // drop deprecated + CONTRADICTION_FLAG_KEY
-    const afterFilter = filterCorpus(afterResolve, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY);
+    const afterFilter = filterCorpus(afterResolve, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY && !isKeyAliasShaped(cl));
     // rho rank
     const handRolledResult: RankedCorpus = rhoOp(rankFn, query)(afterFilter);
 

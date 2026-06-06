@@ -9,6 +9,7 @@ import { inputHashesOf } from "../core/provenance.js";
 import type { StorageAdapter } from "../adapters/adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import type { Scope } from "../core/scope.js";
+import { KEY_ALIAS_KEY, aliasMapOf } from "../retrieval/key-alias.js";
 
 /**
  * Walks the linear src-chain to the leaf node and returns the leaf's corpusId.
@@ -73,11 +74,52 @@ export function stampResolveDefaults(expr: ExprNode, catalog: Catalog): ExprNode
       // else: omit entirely (field-absent, not undefined-valued)
     }
 
+    // keyAliases: carry through if explicitly set (including explicit {}).
+    // NEVER stamp from corpus schema (C3 forbids schema placement — aliases are claims).
+    if (expr.keyAliases !== undefined) {
+      newNode.keyAliases = expr.keyAliases;
+    }
+
     return newNode;
   }
 
   // For all other ops: rebuild with the stamped src
   return { ...expr, src: stampedSrc } as ExprNode;
+}
+
+/**
+ * Walks the linear src-chain of a stamped expression and, for each resolve node
+ * whose `keyAliases` field is absent (not explicitly set), injects the given alias map.
+ * An explicit `keyAliases` (including `{}`) always wins and is never overwritten.
+ * If the map is empty, no field is injected (field-absent semantics preserved).
+ *
+ * Returns a new expression node (pure — does not mutate the input).
+ */
+function injectAliasMap(
+  expr: ExprNode,
+  aliasMap: Record<string, string>,
+): ExprNode {
+  if (expr.op === "leaf") {
+    return expr;
+  }
+
+  const srcNode = (expr as { src: ExprNode }).src;
+  const injectedSrc = injectAliasMap(srcNode, aliasMap);
+
+  if (expr.op === "resolve") {
+    if (expr.keyAliases !== undefined) {
+      // Explicit keyAliases wins — preserve it, just rebuild with injected src
+      return { ...expr, src: injectedSrc } as ExprNode;
+    }
+    if (Object.keys(aliasMap).length === 0) {
+      // Empty map → field-absent (no injection)
+      return { ...expr, src: injectedSrc } as ExprNode;
+    }
+    // Inject the snapshotted alias map
+    return { ...expr, src: injectedSrc, keyAliases: aliasMap } as ExprNode;
+  }
+
+  return { ...expr, src: injectedSrc } as ExprNode;
 }
 
 export interface DeriveOptions {
@@ -109,8 +151,19 @@ export function deriveClaimFrom(
     usedEmbeddingModelVersions: {},
   };
 
+  // (a) Stamp corpus defaults onto resolve nodes (threshold, keyCardinality)
   const stamped = stampResolveDefaults(expr, catalog);
-  const result = evaluate<Corpus>(compile(stamped), ctx);
+
+  // (b) Load the alias map active at evaluationClock and inject it into resolve nodes
+  //     that lack an explicit keyAliases. ORDER: stamp FIRST, then inject aliases into
+  //     the stamped tree so we walk the same src-chain stampResolveDefaults used.
+  //     adapter.query is index-backed for KEY_ALIAS_KEY (spec A7 / key-alias.ts).
+  const corpusId = findLeafCorpusId(expr);
+  const aliasClaims = adapter.query({ corpusId, key: KEY_ALIAS_KEY });
+  const { map: aliasMap } = aliasMapOf(aliasClaims, { evaluationInstant: clock });
+  const stampedWithAliases = injectAliasMap(stamped, aliasMap);
+
+  const result = evaluate<Corpus>(compile(stampedWithAliases), ctx);
 
   if (result.claims.length === 0) {
     throw new Error("deriveClaimFrom: pipeline produced no claims; cannot derive a representative");
@@ -140,7 +193,7 @@ export function deriveClaimFrom(
     schema: rep.schema ?? "",
     provenance: {
       derivedFrom: {
-        queryExpression: serializeExpr(stamped),
+        queryExpression: serializeExpr(stampedWithAliases),
         corpusState: adapter.maxRecordedSeq(),
         combinationRule: opts.combination,
         inputClaims,

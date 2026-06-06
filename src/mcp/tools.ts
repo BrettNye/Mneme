@@ -15,14 +15,69 @@ import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Session } from "../surface/index.js";
 import { pointEstimate } from "../surface/index.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
-import { abstainBelowTop, relevanceFloor } from "../algebra/similarity.js";
+import { abstainBelowTop, relevanceFloor, similarityFn } from "../algebra/similarity.js";
 import { warmValues } from "../algebra/embedding.js";
 import type { EmbeddingState } from "./embeddings.js";
+import { KEY_ALIAS_KEY, aliasMapOf, keyFamilyOf } from "../retrieval/key-alias.js";
+import type { KeyAliasMap } from "../retrieval/key-alias.js";
+import type { Corpus as AlgebraCorpus } from "../algebra/types.js";
+import type { EvalContext } from "../algebra/expression.js";
 
 export interface RecallDeps {
   embeddings: EmbeddingState;
   keyCardinality?: Record<string, "single" | "multi">;
   // NOTE: arrives PRE-LOADED from the server; tools never import config.ts or MCP internals.
+}
+
+// ── Shared private helper: alias-load + variant-cardinality warnings ──────────
+
+interface AliasLoadContext {
+  aliasMap: KeyAliasMap;
+  selfAliases: string[];
+  warnings: string[];
+}
+
+/**
+ * Loads alias claims from the corpus and builds the alias map + variant-cardinality warnings.
+ * On failure: degrades gracefully — returns empty alias map with a warning.
+ * Shared by both recall() and keyCensus() to avoid duplication.
+ */
+function loadAliasContext(
+  session: Session,
+  corpus: string,
+  now: number,
+  keyCardinality?: Record<string, "single" | "multi">,
+): AliasLoadContext {
+  const warnings: string[] = [];
+  let aliasMap: KeyAliasMap = {};
+  let selfAliases: string[] = [];
+
+  try {
+    const aliasClaims = session.mneme.read(corpus, {
+      corpusId: corpus,
+      key: KEY_ALIAS_KEY,
+    });
+    const { map, selfAliases: sa, warnings: loaderWarnings } = aliasMapOf(aliasClaims, { evaluationInstant: now });
+    aliasMap = map;
+    selfAliases = sa;
+    warnings.push(...loaderWarnings);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    warnings.push(`alias load failed — proceeding without alias expansion: ${msg}`);
+  }
+
+  // Variant-cardinality warnings
+  if (keyCardinality) {
+    for (const variant of Object.keys(aliasMap)) {
+      if (keyCardinality[variant] !== undefined) {
+        warnings.push(
+          `variant key "${variant}" (alias of "${aliasMap[variant]}") has a cardinality declaration (${keyCardinality[variant]}) — alias may shadow the override`,
+        );
+      }
+    }
+  }
+
+  return { aliasMap, selfAliases, warnings };
 }
 
 /** Create the corpus if it doesn't already exist (idempotent). */
@@ -124,6 +179,10 @@ export interface RecallResult {
   abstained: boolean;
   /** The similarity fn name used for ranking (from deps.embeddings.rankFn). */
   rankFn: string;
+  /** Non-fatal warnings surfaced during alias loading or cardinality checking.
+   *  Present only when there is at least one warning; undefined otherwise.
+   *  The server layer is responsible for surfacing these to the caller. */
+  warnings?: string[];
 }
 
 export async function recall(
@@ -150,33 +209,76 @@ export async function recall(
     return emptyResult;
   }
 
-  // If hybrid embeddings active: warm claim values (scoped to the same subject/key predicates
-  // the σ stages use) + the query before the single query execution.
+  // ── Alias map loading ────────────────────────────────────────────────────────
+  // Fetch alias claims (index-backed: adapter pushdown via key predicate).
+  // On failure: degrade gracefully — recall proceeds alias-less with a warning.
+  const now = Date.now();
+  // selfAliases is keyCensus-only; recall only needs aliasMap + warnings.
+  const { aliasMap, warnings: aliasWarnings } = loadAliasContext(session, args.corpus, now, keyCardinality);
+  const allWarnings: string[] = [...aliasWarnings];
+
+  // ── Key family expansion ─────────────────────────────────────────────────────
+  // Expand the requested key to the full family (canonical + all variants).
+  // For a single unmapped key, keyFamilyOf returns [key] — no behavioral change.
+  const family: string[] | undefined = args.key ? keyFamilyOf(args.key, aliasMap) : undefined;
+
+  // ── Warm-up (hybrid only) ────────────────────────────────────────────────────
+  // Warm claim values scoped to the same subject/key predicates as the σ stages,
+  // using the FAMILY-expanded key set so variant-key claims are cosine-scored, not
+  // jaccard-fallback (which would happen if they were not in the warm-up cache).
   if (embeddings.rankFn !== "jaccard" && embeddings.adapter && embeddings.cache) {
-    const rawClaims = session.mneme.read(args.corpus, {
-      corpusId: args.corpus,
-      subject: args.subject,
-      key: args.key,
-    });
+    // ExecutionPlan only has key?: string (singular), so for a multi-key family we
+    // issue one read per family member and deduplicate by claim id, mirroring the
+    // σ keyIn semantics. Single-key and no-key paths issue a single read as before.
+    const seenIds = new Set<string>();
+    const rawClaims: import("../core/claim.js").Claim[] = [];
+    if (family && family.length > 1) {
+      for (const k of family) {
+        for (const c of session.mneme.read(args.corpus, {
+          corpusId: args.corpus,
+          subject: args.subject,
+          key: k,
+        })) {
+          if (!seenIds.has(c.id)) {
+            seenIds.add(c.id);
+            rawClaims.push(c);
+          }
+        }
+      }
+    } else {
+      // Single key or no key: one read (key may be undefined → no key filter).
+      rawClaims.push(
+        ...session.mneme.read(args.corpus, {
+          corpusId: args.corpus,
+          subject: args.subject,
+          key: args.key,
+        }),
+      );
+    }
     const claimValues = rawClaims.map((c) => c.value);
     await warmValues(embeddings.adapter, embeddings.cache, claimValues, [args.about]);
   }
 
-  // Build filter stages (σ).
+  // ── σ filter stages ──────────────────────────────────────────────────────────
+  // Build filter predicates. When the key has a multi-key alias family, use keyIn
+  // so all family members (canonical + variants) are included in a single pass.
   const filters: Predicate[] = [];
   if (args.subject) filters.push({ op: "subjectEq", value: args.subject });
-  if (args.key) filters.push({ op: "keyEq", value: args.key });
+  if (family && family.length > 1) {
+    filters.push({ op: "keyIn", values: family });
+  } else if (args.key) {
+    filters.push({ op: "keyEq", value: args.key });
+  }
   const sigmas = filters.map((p) => sigma(p));
 
   // SINGLE query execution:
-  // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥ + drop) → ρ.by(rankFn, query)
-  const now = Date.now();
+  // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥(keyAliases) + drop) → ρ.by(rankFn, query)
   const ranked = session.mneme.query<RankedCorpus>(
     args.corpus,
     pipe(
       leaf(args.corpus),
       ...sigmas,
-      ...canonicalReadStages({ evaluationInstant: now, keyCardinality }),
+      ...canonicalReadStages({ evaluationInstant: now, keyCardinality, keyAliases: aliasMap }),
       rho.by(embeddings.rankFn, args.about),
     ),
     { evaluationClock: now },
@@ -218,6 +320,7 @@ export async function recall(
     topScore,
     abstained,
     rankFn: embeddings.rankFn,
+    warnings: allWarnings.length > 0 ? allWarnings : undefined,
   };
 }
 
@@ -226,4 +329,176 @@ export interface ListResult {
 }
 export function listCorpora(session: Session): ListResult {
   return { corpora: session.listCorpora() };
+}
+
+// ── keyCensus ─────────────────────────────────────────────────────────────────
+
+export interface CensusArgs {
+  corpus?: string;
+  limit?: number;
+  // corpus defaults at server layer
+}
+
+export interface CensusResult {
+  corpus: string;
+  keys: { key: string; claims: number }[];
+  candidates: { a: string; b: string; score: number }[]; // sorted desc, truncated to limit
+  aliases: Record<string, string>;
+  unratified: string[];
+  warnings: string[];
+  rankFn: string;
+  content: string; // composed text incl. remember-shape ratification affordance
+}
+
+/**
+ * Read-only census over the corpus. Returns:
+ *  - Distinct keys + per-key claim counts (non-deprecated, valid at evaluationInstant;
+ *    alias-shaped claims and flag artifacts excluded).
+ *  - All key pairs scored by the registered rank fn, sorted desc, truncated to limit.
+ *  - Resolved alias map, un-ratified self-aliases, and warnings.
+ *  - Composed content with ready-to-paste remember ratification shape.
+ *
+ * Census never writes and never logs to the recall-log.
+ */
+export async function keyCensus(
+  session: Session,
+  args: CensusArgs & { corpus: string },
+  deps: RecallDeps,
+): Promise<CensusResult> {
+  const corpus = args.corpus;
+  const limit = args.limit ?? 20;
+  const embeddings: EmbeddingState = deps.embeddings;
+
+  const emptyResult: CensusResult = {
+    corpus,
+    keys: [],
+    candidates: [],
+    aliases: {},
+    unratified: [],
+    warnings: [],
+    rankFn: embeddings.rankFn,
+    content: "",
+  };
+
+  // Read-only: unknown corpus → empty report, no corpus created
+  if (!session.listCorpora().some((c) => c.id === corpus)) {
+    return emptyResult;
+  }
+
+  const now = Date.now();
+
+  // ── Alias loading (shared helper) ────────────────────────────────────────────
+  const { aliasMap, selfAliases, warnings } = loadAliasContext(session, corpus, now, deps.keyCardinality);
+
+  // ── Census population: read all raw claims, run canonical pipeline ────────────
+  // Read all raw claims from corpus (no key/subject filter — full scan)
+  const rawClaims = session.mneme.read(corpus, { corpusId: corpus });
+
+  // Apply canonical pipeline to determine live (non-deprecated) claims at evaluationInstant.
+  // canonicalReadStages: τ_valid → ⊕_dedupe → ⊥/resolveDeprecateOlder → drop deprecated+flags+aliases
+  // This naturally satisfies the census population filter:
+  //   - non-deprecated (resolveDeprecateOlder + drop)
+  //   - valid at evaluationInstant (tauValid)
+  //   - excluding isKeyAliasShaped and CONTRADICTION_FLAG_KEY (drop stage)
+  const stages = canonicalReadStages({ evaluationInstant: now, keyCardinality: deps.keyCardinality, keyAliases: aliasMap });
+
+  // Apply pipeline stages manually over the raw corpus (no query needed, we already have rawClaims)
+  // Build a minimal Corpus structure consistent with how algebra stages expect it
+  let liveCorpus: AlgebraCorpus = { claims: rawClaims };
+  for (const stage of stages) {
+    liveCorpus = stage(liveCorpus, {} as EvalContext) as AlgebraCorpus;
+  }
+
+  // Count distinct keys
+  const keyCounts = new Map<string, number>();
+  for (const claim of liveCorpus.claims) {
+    keyCounts.set(claim.key, (keyCounts.get(claim.key) ?? 0) + 1);
+  }
+
+  const keys = [...keyCounts.entries()].map(([key, claims]) => ({ key, claims }));
+
+  // ── Key pair scoring ─────────────────────────────────────────────────────────
+  const keyStrings = [...keyCounts.keys()];
+
+  // Warm key strings when hybrid; degrade gracefully on failure (mirrors loadAliasContext pattern).
+  let effectiveRankFn = embeddings.rankFn;
+  let scorerFn = similarityFn(embeddings.rankFn);
+  if (embeddings.rankFn !== "jaccard" && embeddings.adapter && embeddings.cache) {
+    try {
+      await warmValues(embeddings.adapter, embeddings.cache, keyStrings as unknown[], []);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`key-pair warm-up failed — scoring with jaccard fallback: ${msg}`);
+      scorerFn = similarityFn("jaccard");
+      effectiveRankFn = "jaccard";
+    }
+  }
+
+  // Score all O(K²) pairs
+  const allPairs: { a: string; b: string; score: number }[] = [];
+  for (let i = 0; i < keyStrings.length; i++) {
+    for (let j = i + 1; j < keyStrings.length; j++) {
+      const a = keyStrings[i];
+      const b = keyStrings[j];
+      const score = scorerFn.scoreOne(a, b);
+      allPairs.push({ a, b, score });
+    }
+  }
+
+  // Sort descending by score; tiebreaker by key names for full determinism.
+  allPairs.sort((x, y) => y.score - x.score || x.a.localeCompare(y.a) || x.b.localeCompare(y.b));
+
+  // Truncate to limit
+  const candidates = allPairs.slice(0, limit);
+
+  // ── Composed content ──────────────────────────────────────────────────────────
+  const lines: string[] = [
+    `## Key Census: corpus "${corpus}"`,
+    "",
+    `**Keys (${keys.length}):**`,
+  ];
+
+  for (const { key, claims } of keys) {
+    lines.push(`- \`${key}\`: ${claims} claim${claims !== 1 ? "s" : ""}`);
+  }
+
+  if (candidates.length > 0) {
+    lines.push("", `**Top key-pair candidates (${candidates.length}):**`);
+    for (const { a, b, score } of candidates) {
+      lines.push(`- \`${a}\` ↔ \`${b}\`: ${score.toFixed(3)}`);
+    }
+  }
+
+  if (Object.keys(aliasMap).length > 0) {
+    lines.push("", "**Resolved aliases:**");
+    for (const [variant, canonical] of Object.entries(aliasMap)) {
+      lines.push(`- \`${variant}\` → \`${canonical}\``);
+    }
+  }
+
+  if (selfAliases.length > 0) {
+    lines.push("", `**Un-ratified self-aliases (${selfAliases.length}):** ${selfAliases.map((s) => `\`${s}\``).join(", ")}`);
+  }
+
+  // Ratification shape: paste-ready remember calls for top candidates
+  if (candidates.length > 0) {
+    lines.push("", "**Ratification shape** (paste into `remember` to confirm an alias):");
+    const topCandidates = candidates.slice(0, 3);
+    for (const { a, b } of topCandidates) {
+      lines.push(`\`remember({ subject: "key:${a}", key: "alias-of", value: "${b}", corpus: "${corpus}" })\``);
+    }
+  }
+
+  const content = lines.join("\n");
+
+  return {
+    corpus,
+    keys,
+    candidates,
+    aliases: aliasMap,
+    unratified: selfAliases,
+    warnings,
+    rankFn: effectiveRankFn,
+    content,
+  };
 }

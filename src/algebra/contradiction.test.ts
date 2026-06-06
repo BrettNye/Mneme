@@ -1,6 +1,16 @@
 import { clustersOf, derivedPairs, pairsOf } from "./contradiction.js";
 import { corpusOf } from "./types.js";
 
+// Helper for keyAliases tests: creates a claim with a deterministic valueHash from value string
+const makeClaim = ({ subject, key, value }: { subject: string; key: string; value: string }) => ({
+  id: `${subject}-${key}-${value}`,
+  subject,
+  key,
+  scopeHash: "_",
+  valueHash: `vh-${value}`,
+  confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+} as any);
+
 // Helper to create a minimal claim for testing
 const c = (id: string, valueHash: string, alpha: number, beta: number) => ({
   id, subject: "s", key: "s.k", scopeHash: "_", valueHash,
@@ -229,4 +239,41 @@ it("opts omitted: existing contradiction behavior is unchanged", () => {
   // Regression: no opts => behaves as before
   const clusters = clustersOf(corpusOf([c("a", "vh-yes", 9, 1), c("b", "vh-no", 8, 1)]), 0.5);
   expect(clusters).toHaveLength(1);
+});
+
+// --- KeyAliases: spec A3 ---
+
+it("aliased keys contest: one pair across editor/preferred_editor", () => {
+  const a = makeClaim({ subject: "user", key: "editor", value: "vim" });
+  const b = makeClaim({ subject: "user", key: "preferred_editor", value: "emacs" });
+  expect(pairsOf(corpusOf([a, b]), 0, { keyAliases: { preferred_editor: "editor" } })).toHaveLength(1);
+  expect(pairsOf(corpusOf([a, b]), 0, {})).toHaveLength(0); // absent map = today's behavior
+});
+
+it("cluster.triple.key carries the canonical key when aliases are used", () => {
+  const a = makeClaim({ subject: "user", key: "editor", value: "vim" });
+  const b = makeClaim({ subject: "user", key: "preferred_editor", value: "emacs" });
+  const clusters = clustersOf(corpusOf([a, b]), 0, { keyAliases: { preferred_editor: "editor" } });
+  expect(clusters).toHaveLength(1);
+  expect(clusters[0].triple.key).toBe("editor"); // canonical, not "preferred_editor"
+});
+
+it("cardinality multi on canonical key exempts variant-key claims from clustering", () => {
+  const a = makeClaim({ subject: "user", key: "editor", value: "vim" });
+  const b = makeClaim({ subject: "user", key: "preferred_editor", value: "emacs" });
+  const clusters = clustersOf(corpusOf([a, b]), 0, {
+    keyAliases: { preferred_editor: "editor" },
+    keyCardinality: { editor: "multi" }, // canonical is multi => no cluster
+  });
+  expect(clusters).toHaveLength(0);
+});
+
+it("keyAliases undefined is identical to keyAliases absent", () => {
+  const a = makeClaim({ subject: "user", key: "editor", value: "vim" });
+  const b = makeClaim({ subject: "user", key: "preferred_editor", value: "emacs" });
+  // Without alias map, different stored keys do NOT group together
+  const withUndefined = pairsOf(corpusOf([a, b]), 0, { keyAliases: undefined });
+  const withOmitted = pairsOf(corpusOf([a, b]), 0, {});
+  expect(withUndefined).toHaveLength(0);
+  expect(withOmitted).toHaveLength(0);
 });

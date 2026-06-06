@@ -6,10 +6,16 @@ import { bindingFor } from "../distribution/registry.js";
 import { RULE } from "../distribution/rules.js";
 import { cardinalityOf } from "../catalog/schema.js";
 
+export type KeyAliasMap = Record<string, string>; // variant → canonical; flat, pre-resolved
+
 export interface DetectionOptions {
   /** Keys mapped "multi" are excluded from cluster formation entirely. */
   keyCardinality?: Record<string, "single" | "multi">;
+  /** Variant keys mapped to their canonical key; grouping and cardinality use canonical(k). */
+  keyAliases?: KeyAliasMap;
 }
+
+const canonicalKeyOf = (key: string, aliases?: KeyAliasMap): string => aliases?.[key] ?? key;
 
 export type ConflictReason = "value-difference"; // §4.8 binary criterion; only reason this detector emits
 export interface Resolution { kind: string; resultClaimIds: string[] }
@@ -40,13 +46,13 @@ export function clustersOf(corpus: Corpus, threshold: number, opts?: DetectionOp
   const aboveThreshold = corpus.claims.filter(
     claim =>
       eff(claim) > threshold &&
-      cardinalityOf(claim.key, opts?.keyCardinality) === "single",
+      cardinalityOf(canonicalKeyOf(claim.key, opts?.keyAliases), opts?.keyCardinality) === "single",
   );
 
-  // 2. group by (subject, key, scopeHash) => within each triple sub-group by valueHash
+  // 2. group by (subject, canonical(key), scopeHash) => within each triple sub-group by valueHash
   const tripleMap = new Map<string, Map<string, Claim[]>>();
   for (const [tripleKey, claims] of partitionBy(aboveThreshold, (claim) =>
-    claimTripleKey(claim.subject, claim.key, claim.scopeHash)
+    claimTripleKey(claim.subject, canonicalKeyOf(claim.key, opts?.keyAliases), claim.scopeHash)
   )) {
     tripleMap.set(tripleKey, partitionBy(claims, (claim) => claim.valueHash));
   }

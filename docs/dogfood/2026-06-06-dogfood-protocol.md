@@ -9,7 +9,7 @@
 ## 1. Window and scope
 
 - **Duration:** 2 weeks from the day the mcp/dogfood-upgrade-exec branch merges to main.
-- **Corpora:** one per repo — corpus name = `CLAUDE_PROJECT_DIR` basename (e.g. `Mneme`, `agora`). Each project accumulates its own claim history in a separate SQLite db under `.mneme/store.db` in that repo's working tree.
+- **Corpora:** single `knowledge` corpus at `~/.mneme/knowledge.db`, with `subject` as the namespace (`project:<repo-basename>` for project facts, `user` for cross-project preferences). *Amended 2026-06-06: this doc originally said one corpus per repo, but that contradicted the ratified 2026-05-31 decision (corpus = tenant boundary, not per-repo/per-topic) and the live MCP config. Single-corpus governs the window.*
 - **Write discipline:** explicit-write only. Do NOT auto-dump conversation transcripts. Store durable decisions, preferences, and facts — things that would still matter in a future session. See the memory-instruction block below.
 
 ---

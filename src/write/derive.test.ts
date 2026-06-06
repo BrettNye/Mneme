@@ -5,6 +5,7 @@ import { evaluate } from "../algebra/expression.js";
 import { compile } from "../algebra/compile.js";
 import type { ExprNode } from "../algebra/ast.js";
 import type { Claim } from "../core/claim.js";
+import { KEY_ALIAS_KEY, KEY_SUBJECT_PREFIX } from "../retrieval/key-alias.js";
 import type { Corpus } from "../algebra/types.js";
 
 // Minimal claim factory
@@ -24,6 +25,27 @@ function makeClaim(id: string, value: string, confidence = 0.9): Claim {
     corpusId: "test-corpus",
     recorded: 1000,
     recordedSeq: 1,
+  } as unknown as Claim;
+}
+
+/** Creates a minimal alias-of claim for testing: subject = "key:<variant>", key = "alias-of", value = canonical */
+function makeAliasClaim(id: string, variant: string, canonical: string, recordedSeq = 1): Claim {
+  return {
+    id,
+    subject: `${KEY_SUBJECT_PREFIX}${variant}`,
+    key: KEY_ALIAS_KEY,
+    value: canonical,
+    confidence: { distribution: "beta", parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    evidence: [],
+    tags: [],
+    source: "workflow",
+    status: "active",
+    scope: {},
+    valueHash: `vh-alias-${variant}`,
+    corpusId: "test-corpus",
+    recorded: 1000,
+    recordedSeq,
+    valid: { from: 0, to: Number.MAX_SAFE_INTEGER },
   } as unknown as Claim;
 }
 
@@ -323,5 +345,121 @@ describe("deriveClaimFrom stamping integration", () => {
     const expr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
     expect(expr.threshold).toBe(0.75);
     expect("keyCardinality" in expr).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task: task-derive-snapshot
+// New tests for keyAliases carry-through in stampResolveDefaults and
+// alias-map snapshotting in deriveClaimFrom.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("stampResolveDefaults — keyAliases carry-through", () => {
+  it("carries explicit keyAliases through the rebuild (does NOT drop the field)", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5 });
+    const aliases = { preferred_editor: "editor" };
+    // Pass aliases as 6th param of resolve() builder
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"), undefined, undefined, undefined, aliases);
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    expect((stamped as any).keyAliases).toEqual(aliases);
+  });
+
+  it("carries an explicit empty keyAliases ({}) through the rebuild unchanged", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5 });
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"), undefined, undefined, undefined, {});
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    // must be present AND equal to {}
+    expect("keyAliases" in stamped).toBe(true);
+    expect((stamped as any).keyAliases).toEqual({});
+  });
+
+  it("does NOT set keyAliases when the node has none (field absent, not {})", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5 });
+    const expr = resolve("resolveDeprecateOlder", leaf("test-corpus"));
+    const stamped = stampResolveDefaults(expr, richCatalog);
+    expect("keyAliases" in stamped).toBe(false);
+  });
+});
+
+describe("deriveClaimFrom — alias-map snapshot", () => {
+  it("snapshots the active alias map into the resolve node's keyAliases when aliases exist", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5 });
+    const inputClaim = makeClaim("in-1", "hello");
+    const aliasClaim = makeAliasClaim("alias-1", "preferred_editor", "editor");
+    const adapter = makeAdapter([inputClaim, aliasClaim], 42);
+    const cand = deriveClaimFrom(
+      adapter,
+      richCatalog,
+      resolve("resolveDeprecateOlder", leaf("test-corpus")),
+      { subject: "t", key: "t.k", scope: {}, evaluationClock: 1000 },
+    );
+    const expr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
+    expect(expr.keyAliases).toEqual({ preferred_editor: "editor" });
+  });
+
+  it("does NOT add keyAliases field when the alias map is empty (serialized expression unchanged)", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5 });
+    const inputClaim = makeClaim("in-1", "hello");
+    // No alias claims in adapter
+    const adapter = makeAdapter([inputClaim], 42);
+    const exprNode = resolve("resolveDeprecateOlder", leaf("test-corpus"));
+    const cand = deriveClaimFrom(
+      adapter,
+      richCatalog,
+      exprNode,
+      { subject: "t", key: "t.k", scope: {}, evaluationClock: 1000 },
+    );
+    const storedExpr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
+    expect("keyAliases" in storedExpr).toBe(false);
+  });
+
+  it("does NOT overwrite an explicit keyAliases already on the resolve node", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5 });
+    const inputClaim = makeClaim("in-1", "hello");
+    const aliasClaim = makeAliasClaim("alias-1", "preferred_editor", "editor");
+    const adapter = makeAdapter([inputClaim, aliasClaim], 42);
+    const explicitAliases = { my_key: "canonical_key" };
+    const exprNode = resolve(
+      "resolveDeprecateOlder",
+      leaf("test-corpus"),
+      undefined,
+      undefined,
+      undefined,
+      explicitAliases,
+    );
+    const cand = deriveClaimFrom(
+      adapter,
+      richCatalog,
+      exprNode,
+      { subject: "t", key: "t.k", scope: {}, evaluationClock: 1000 },
+    );
+    const storedExpr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
+    // explicit wins; corpus alias (preferred_editor→editor) must NOT appear
+    expect(storedExpr.keyAliases).toEqual(explicitAliases);
+    expect(storedExpr.keyAliases).not.toHaveProperty("preferred_editor");
+  });
+
+  it("does NOT overwrite an explicit empty keyAliases ({}) on the resolve node", () => {
+    const richCatalog = makeRichCatalog({ confidenceThreshold: 0.5 });
+    const inputClaim = makeClaim("in-1", "hello");
+    const aliasClaim = makeAliasClaim("alias-1", "preferred_editor", "editor");
+    const adapter = makeAdapter([inputClaim, aliasClaim], 42);
+    const exprNode = resolve(
+      "resolveDeprecateOlder",
+      leaf("test-corpus"),
+      undefined,
+      undefined,
+      undefined,
+      {},
+    );
+    const cand = deriveClaimFrom(
+      adapter,
+      richCatalog,
+      exprNode,
+      { subject: "t", key: "t.k", scope: {}, evaluationClock: 1000 },
+    );
+    const storedExpr = JSON.parse(cand.provenance!.derivedFrom!.queryExpression);
+    expect("keyAliases" in storedExpr).toBe(true);
+    expect(storedExpr.keyAliases).toEqual({});
   });
 });

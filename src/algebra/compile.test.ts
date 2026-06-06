@@ -705,6 +705,87 @@ it("compiles combine with similarity to a dedupe pipeline equal to hand-built op
   expect(withoutSimilarity.claims).toHaveLength(1);
 });
 
+// ---------- resolve: keyAliases threads into detectionOpts (compile-equivalence) ----------
+
+it("compiled resolve with keyAliases groups alias keys under canonical, leaving aliased claims undeprecated as a group", () => {
+  // Two claims: one uses key="preferred_editor", one uses key="editor" (its canonical).
+  // With keyAliases: { preferred_editor: "editor" }, both map to canonical "editor" and form
+  // a single triple-group (same subject+canonical_key+scopeHash). Since they have the SAME
+  // valueHash they won't be contradictions, so both survive undeprecated.
+  // This tests that keyAliases is threaded into pairsOf/clustersOf detectionOpts.
+  const aliased = makeBetaClaim("id-alias", "alice", "preferred_editor", "sh", "vim", 9, 1);
+  const canonical = makeBetaClaim("id-canonical", "alice", "editor", "sh", "vim", 9, 1);
+
+  const ctx = makeCtx([aliased, canonical]);
+  const keyAliases = { preferred_editor: "editor" };
+
+  // Without aliases: preferred_editor and editor are treated as different keys → no contradiction detected
+  const withoutAliases = evaluate<Corpus>(
+    compile(resolve("resolveDeprecateMinority", leaf("c"), undefined, 0.0)),
+    ctx,
+  );
+  // Both survive because they have DIFFERENT keys from detector's perspective
+  expect(withoutAliases.claims).toHaveLength(2);
+  expect(withoutAliases.claims.every((c: any) => c.status !== "deprecated")).toBe(true);
+
+  // With keyAliases: both map to canonical "editor" and same valueHash "vim" → same group → same value → no conflict
+  const withAliases = evaluate<Corpus>(
+    compile(resolve("resolveDeprecateMinority", leaf("c"), undefined, 0.0, undefined, keyAliases)),
+    ctx,
+  );
+  // Same triple, same value → no contradiction → both survive
+  expect(withAliases.claims).toHaveLength(2);
+  expect(withAliases.claims.every((c: any) => c.status !== "deprecated")).toBe(true);
+});
+
+it("compiled resolve with keyAliases matches hand-built pairsOf(corpus, threshold, { keyAliases })", () => {
+  // Two claims with DIFFERENT keys but an alias makes them the same canonical key, different values → contradiction
+  const aliased = makeBetaClaim("id-alias", "alice", "preferred_editor", "sh", "vim", 9, 1);
+  const direct  = makeBetaClaim("id-direct", "alice", "editor", "sh", "emacs", 1, 9);
+
+  const ctx = makeCtx([aliased, direct]);
+  const threshold = 0.0;
+  const keyAliases = { preferred_editor: "editor" };
+
+  const compiled = evaluate<Corpus>(
+    compile(resolve("resolveKeepBoth", leaf("c"), undefined, threshold, undefined, keyAliases)),
+    ctx,
+  );
+
+  const corpus = corpusOf([aliased, direct]);
+  const { fn, input } = resolutionRegistry("resolveKeepBoth");
+  expect(input).toBe("pairs");
+  const groups = pairsOf(corpus, threshold, { keyAliases });
+  const handBuilt = (fn as any)(groups)(corpus);
+
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  expect(compiled.claims.map((c: any) => c.id).sort()).toStrictEqual(
+    handBuilt.claims.map((c: any) => c.id).sort(),
+  );
+});
+
+it("resolve node without keyAliases compiles to detectionOpts identical to today (no regression)", () => {
+  // Regression: resolve without keyAliases must behave identically to before this change.
+  const { hi, lo } = makeConflictingPair();
+  const ctx = makeCtx([hi, lo]);
+  const threshold = 0.0;
+
+  const compiled = evaluate<Corpus>(
+    compile(resolve("resolveKeepBoth", leaf("c"), undefined, threshold)),
+    ctx,
+  );
+
+  const corpus = corpusOf([hi, lo]);
+  const { fn } = resolutionRegistry("resolveKeepBoth");
+  const groups = pairsOf(corpus, threshold);
+  const handBuilt = (fn as any)(groups)(corpus);
+
+  expect(compiled.claims).toHaveLength(handBuilt.claims.length);
+  expect(compiled.claims.map((c: any) => c.id).sort()).toStrictEqual(
+    handBuilt.claims.map((c: any) => c.id).sort(),
+  );
+});
+
 it("combine node without similarity compiles to today's exact behavior (no DedupeOptions)", () => {
   // Regression: combine without similarity must match oplusDedupe(rule, params, undefined)
   const c1 = makeBetaClaim("id-1", "subj", "key", "sh", "vh-A", 9, 1);

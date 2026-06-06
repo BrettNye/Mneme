@@ -8,7 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { basename } from "node:path";
 import { openSession } from "../surface/index.js";
-import { remember, recall, listCorpora } from "./tools.js";
+import { remember, recall, listCorpora, keyCensus } from "./tools.js";
 import { initEmbeddings } from "./embeddings.js";
 import { loadMnemeConfig } from "./config.js";
 import { appendRecallLog } from "./recall-log.js";
@@ -132,6 +132,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         topScore: z.number().optional().describe("pre-knob top similarity score; present when the corpus has at least one scored claim"),
         abstained: z.boolean().describe("true when abstainBelowTop was applied and the top score was below the threshold"),
         rankFn: z.string().describe("the similarity function name used for ranking (e.g. 'jaccard' or 'hybrid')"),
+        warnings: z.array(z.string()).optional().describe("non-fatal warnings from alias loading or cardinality checking"),
       },
     },
     async (a) => {
@@ -162,6 +163,13 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         rankFn: r.rankFn,
       });
 
+      // Surface warnings to stderr (house convention: tools stay pure; server does I/O).
+      if (r.warnings && r.warnings.length > 0) {
+        for (const w of r.warnings) {
+          console.error(`[mneme/recall] ${w}`);
+        }
+      }
+
       const matchLines = r.matches
         .map((m) => `- ${m.subject} ${m.key} = ${JSON.stringify(m.value)} (p=${m.confidence.toFixed(2)}, score=${m.score.toFixed(2)})`)
         .join("\n");
@@ -175,6 +183,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           topScore: r.topScore,
           abstained: r.abstained,
           rankFn: r.rankFn,
+          warnings: r.warnings,
         },
       };
     },
@@ -195,6 +204,62 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
       const r = listCorpora(session);
       const text = r.corpora.map((c) => `${c.id} (${c.displayName})`).join("\n") || "(no corpora yet)";
       return { content: [{ type: "text" as const, text }], structuredContent: { corpora: r.corpora } };
+    },
+  );
+
+  server.registerTool(
+    "key_census",
+    {
+      title: "Key census",
+      description:
+        "Census the distinct keys in a corpus, score all key-pairs for similarity, and surface alias candidates. Use to audit key proliferation and ratify key aliases.",
+      inputSchema: {
+        corpus: z.string().optional().describe(`corpus to census; defaults to '${defaultCorpus}'`),
+        limit: z.number().int().positive().optional().describe("max key-pair candidates to return (default 20)"),
+      },
+      // Pure read: no state change, repeatable.
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: {
+        corpus: z.string(),
+        keys: z.array(z.object({ key: z.string(), claims: z.number() })).describe("distinct live keys with per-key claim counts"),
+        candidates: z.array(z.object({ a: z.string(), b: z.string(), score: z.number() })).describe("top key-pair similarity candidates sorted descending, truncated to limit"),
+        aliases: z.record(z.string()).describe("resolved alias map: variant → canonical"),
+        unratified: z.array(z.string()).describe("self-alias keys (un-ratified — variant maps to itself)"),
+        warnings: z.array(z.string()).describe("non-fatal warnings from alias loading or key-pair scoring"),
+        rankFn: z.string().describe("similarity function used for key-pair scoring"),
+        content: z.string().describe("composed human-readable census report with ratification affordance"),
+      },
+    },
+    async (a) => {
+      const resolvedCorpus = a.corpus ?? defaultCorpus;
+
+      // Embeddings lazy: first census pays the init cost; boot stays instant.
+      const embeddings = await initEmbeddings();
+      const r = await keyCensus(session, {
+        corpus: resolvedCorpus,
+        limit: a.limit,
+      }, { embeddings, keyCardinality: config.keyCardinality });
+
+      // Surface warnings to stderr (house convention: tools stay pure; server does I/O).
+      if (r.warnings.length > 0) {
+        for (const w of r.warnings) {
+          console.error(`[mneme/key_census] ${w}`);
+        }
+      }
+
+      return {
+        content: [{ type: "text" as const, text: r.content || "(empty corpus — no keys found)" }],
+        structuredContent: {
+          corpus: r.corpus,
+          keys: r.keys,
+          candidates: r.candidates,
+          aliases: r.aliases,
+          unratified: r.unratified,
+          warnings: r.warnings,
+          rankFn: r.rankFn,
+          content: r.content,
+        },
+      };
     },
   );
 

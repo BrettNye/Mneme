@@ -8,7 +8,7 @@
  * This primes the singleton with the jaccard fallback so the server handler's bare
  * initEmbeddings() returns the cached jaccard state without attempting real model load.
  */
-import { beforeAll, describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect, vi } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +26,19 @@ type StructuredRecall = {
     topScore?: number;
     abstained: boolean;
     rankFn: string;
+    warnings?: string[];
+  };
+};
+type StructuredCensus = {
+  structuredContent?: {
+    corpus: string;
+    keys: { key: string; claims: number }[];
+    candidates: { a: string; b: string; score: number }[];
+    aliases: Record<string, string>;
+    unratified: string[];
+    warnings: string[];
+    rankFn: string;
+    content: string;
   };
 };
 
@@ -60,7 +73,11 @@ describe("mneme MCP server (protocol)", () => {
   it("advertises remember / recall / list_corpora over MCP", async () => {
     const { client } = await connected();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["list_corpora", "recall", "remember"]);
+    const names = tools.map((t) => t.name).sort();
+    // key_census is also registered; the original three must be present.
+    expect(names).toContain("remember");
+    expect(names).toContain("recall");
+    expect(names).toContain("list_corpora");
     await client.close();
   });
 
@@ -285,5 +302,225 @@ describe("mneme MCP server (new wiring)", () => {
     expect(rem.content[0].text).toMatch(/committed/);
 
     await client.close();
+  });
+});
+
+// ── key_census wiring tests ────────────────────────────────────────────────────
+
+describe("mneme MCP server (key_census wiring)", () => {
+  /**
+   * (6) key_census tool is advertised in the tool list.
+   *     After the wiring task, the server must advertise key_census alongside the
+   *     existing remember/recall/list_corpora tools.
+   */
+  it("advertises key_census alongside existing tools", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toContain("key_census");
+    expect(names).toEqual(["key_census", "list_corpora", "recall", "remember"]);
+    await client.close();
+  });
+
+  /**
+   * (7) key_census with no corpus argument defaults to the server's defaultCorpus.
+   *     Calling key_census without specifying corpus must census the server-default
+   *     corpus, NOT the hardcoded "knowledge" corpus.
+   */
+  it("key_census defaults to the server defaultCorpus when corpus is omitted", async () => {
+    const { client } = await connected("my-default-corpus");
+
+    // Remember into the default corpus (no corpus arg → goes to "my-default-corpus").
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "entity:a", key: "status", value: "active" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "entity:b", key: "decision", value: "go" },
+    });
+
+    // Census with no corpus → should use "my-default-corpus".
+    const result = (await client.callTool({
+      name: "key_census",
+      arguments: {},
+    })) as StructuredCensus;
+
+    expect(result.structuredContent?.corpus).toBe("my-default-corpus");
+    // Both keys should appear.
+    const keyNames = result.structuredContent?.keys.map((k) => k.key) ?? [];
+    expect(keyNames).toContain("status");
+    expect(keyNames).toContain("decision");
+
+    await client.close();
+  });
+
+  /**
+   * (8) key_census returns structuredContent with all expected fields.
+   *     Verify corpus, keys, candidates, aliases, unratified, warnings, rankFn, content
+   *     are all present in structuredContent.
+   */
+  it("key_census structuredContent has all required fields", async () => {
+    const { client } = await connected("census-test");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "s", key: "alpha", value: "val1", corpus: "census-test" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "s", key: "beta", value: "val2", corpus: "census-test" },
+    });
+
+    const result = (await client.callTool({
+      name: "key_census",
+      arguments: { corpus: "census-test" },
+    })) as StructuredCensus;
+
+    const sc = result.structuredContent;
+    expect(sc).toBeDefined();
+    expect(sc?.corpus).toBe("census-test");
+    expect(Array.isArray(sc?.keys)).toBe(true);
+    expect(Array.isArray(sc?.candidates)).toBe(true);
+    expect(typeof sc?.aliases).toBe("object");
+    expect(Array.isArray(sc?.unratified)).toBe(true);
+    expect(Array.isArray(sc?.warnings)).toBe(true);
+    expect(typeof sc?.rankFn).toBe("string");
+    expect(typeof sc?.content).toBe("string");
+
+    await client.close();
+  });
+
+  /**
+   * (9) key_census text content is human-readable and mentions key names.
+   *     The text blob in content[] should reference discovered keys.
+   */
+  it("key_census content text mentions discovered keys", async () => {
+    const { client } = await connected("census-text-test");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "e", key: "my-unique-key-x1", value: "v", corpus: "census-text-test" },
+    });
+
+    const result = (await client.callTool({
+      name: "key_census",
+      arguments: { corpus: "census-text-test" },
+    })) as TextContent;
+
+    expect(result.content[0].text).toContain("my-unique-key-x1");
+
+    await client.close();
+  });
+
+  /**
+   * (10) key_census is read-only: calling it on an unknown corpus returns empty,
+   *      does not create the corpus.
+   */
+  it("key_census on unknown corpus returns empty result without creating the corpus", async () => {
+    const { client } = await connected("existing-corpus");
+
+    const result = (await client.callTool({
+      name: "key_census",
+      arguments: { corpus: "nonexistent-corpus-xyz" },
+    })) as StructuredCensus;
+
+    expect(result.structuredContent?.corpus).toBe("nonexistent-corpus-xyz");
+    expect(result.structuredContent?.keys).toEqual([]);
+    expect(result.structuredContent?.candidates).toEqual([]);
+
+    // Confirm the corpus was not created by checking list_corpora.
+    const corpora = (await client.callTool({ name: "list_corpora", arguments: {} })) as {
+      structuredContent?: { corpora: { id: string }[] };
+    };
+    const ids = corpora.structuredContent?.corpora.map((c) => c.id) ?? [];
+    expect(ids).not.toContain("nonexistent-corpus-xyz");
+
+    await client.close();
+  });
+
+  /**
+   * (11) recall outputSchema and structuredContent carry warnings field.
+   *      After the recall wiring delta, warnings must be present in the outputSchema
+   *      and structuredContent must pass it through when present.
+   */
+  it("recall outputSchema includes warnings field", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const recallTool = tools.find((t) => t.name === "recall");
+    expect(recallTool?.outputSchema).toBeDefined();
+    // The outputSchema should include a 'warnings' field (optional array of strings).
+    const schema = recallTool!.outputSchema as Record<string, unknown>;
+    const props = (schema as { properties?: Record<string, unknown> }).properties ?? {};
+    expect("warnings" in props).toBe(true);
+    await client.close();
+  });
+
+  /**
+   * (12) Warnings land on stderr when census returns warnings.
+   *      Spy on process.stderr.write / console.error to confirm a census invocation
+   *      that produces a warning (malformed alias claim) surfaces it to stderr.
+   *      The structuredContent warnings array must also contain the warning.
+   */
+  it("warnings from census are surfaced to stderr and in structuredContent.warnings", async () => {
+    const stderrLines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((...args: Parameters<typeof process.stderr.write>) => {
+      const [chunk] = args;
+      if (typeof chunk === "string") stderrLines.push(chunk);
+      else if (Buffer.isBuffer(chunk)) stderrLines.push(chunk.toString());
+      return true;
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      stderrLines.push(args.map(String).join(" "));
+    });
+
+    try {
+      const { client } = await connected("warn-test");
+
+      // Seed a content claim so the census has real content.
+      await client.callTool({
+        name: "remember",
+        arguments: { subject: "e", key: "alpha", value: "go", corpus: "warn-test" },
+      });
+
+      // Seed an alias cycle (alpha → beta, beta → alpha) — aliasMapOf will
+      // detect the cycle and emit a warning into structuredContent.warnings,
+      // which the server then routes to stderr via console.error.
+      await client.callTool({
+        name: "remember",
+        arguments: {
+          subject: "key:alpha",
+          key: "alias-of",
+          value: "beta",
+          corpus: "warn-test",
+        },
+      });
+      await client.callTool({
+        name: "remember",
+        arguments: {
+          subject: "key:beta",
+          key: "alias-of",
+          value: "alpha",
+          corpus: "warn-test",
+        },
+      });
+
+      stderrLines.length = 0; // clear setup noise
+
+      const result = (await client.callTool({
+        name: "key_census",
+        arguments: { corpus: "warn-test" },
+      })) as StructuredCensus;
+
+      // structuredContent.warnings must contain the cycle warning from aliasMapOf.
+      expect(result.structuredContent?.warnings.length).toBeGreaterThan(0);
+      // The cycle warning must have been routed to stderr with the census prefix.
+      expect(stderrLines.some((l) => l.includes("[mneme/key_census]"))).toBe(true);
+
+      await client.close();
+    } finally {
+      spy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 });

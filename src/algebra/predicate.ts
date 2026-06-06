@@ -9,6 +9,7 @@ export type Predicate =
   | { op: "subjectEq"; value: string }
   | { op: "subjectIn"; values: string[] }
   | { op: "keyEq"; value: string }
+  | { op: "keyIn"; values: string[] }
   | { op: "scopeEq"; field: string; value: string }
   | { op: "statusEq"; value: string }
   | { op: "statusIn"; values: string[] }
@@ -47,6 +48,8 @@ export function matches(claim: Claim, p: Predicate): boolean {
       return p.values.includes(claim.subject);
     case "keyEq":
       return claim.key === p.value;
+    case "keyIn":
+      return p.values.includes(claim.key);
     case "scopeEq":
       return claim.scope[p.field] === p.value;
     case "statusEq":

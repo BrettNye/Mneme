@@ -103,13 +103,16 @@ export function compile(node: ExprNode): Stage<any, any>[] {
         node.similarity ? { similarity: node.similarity } : undefined))];
 
     case "resolve": {
-      const { policy, threshold, rule: resolveRule, keyCardinality } = node;
+      const { policy, threshold, rule: resolveRule, keyCardinality, keyAliases } = node;
       if (threshold === undefined) {
         throw new Error(
           "resolve node has no threshold — stamp corpus defaults via the derive path or pass one explicitly",
         );
       }
-      const detectionOpts = keyCardinality ? { keyCardinality } : undefined;
+      const detectionOpts =
+        keyCardinality !== undefined || keyAliases !== undefined
+          ? { keyCardinality, keyAliases }
+          : undefined;
       return [...compile(node.src), (c: Corpus) => {
         const { fn, input } = resolutionRegistry(policy); // throws MissingRule on unknown at evaluate time
         const apply = fn as (g: unknown, rule?: string) => (c: Corpus) => Corpus;
