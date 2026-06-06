@@ -12,7 +12,7 @@ import { pairsOf } from "../algebra/contradiction.js";
 import { oplusDedupe } from "../algebra/combination.js";
 import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../algebra/resolution.js";
 import { rho as rhoOp } from "../algebra/similarity.js";
-import { KEY_ALIAS_KEY, KEY_SUBJECT_PREFIX } from "./key-alias.js";
+import { KEY_ALIAS_KEY, KEY_SUBJECT_PREFIX, isKeyAliasShaped } from "./key-alias.js";
 import type { EvalContext } from "../algebra/expression.js";
 
 // ── Time constants ────────────────────────────────────────────────────────────
@@ -425,7 +425,7 @@ describe("stage equivalence: composed vs hand-rolled", () => {
     // ⊥ / resolveDeprecateOlder
     const afterResolve = resolveDeprecateOlder(pairsOf(afterDedupe, threshold, { keyCardinality }))(afterDedupe);
     // drop deprecated + CONTRADICTION_FLAG_KEY
-    const afterFilter = filterCorpus(afterResolve, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY);
+    const afterFilter = filterCorpus(afterResolve, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY && !isKeyAliasShaped(cl));
     // rho rank
     const handRolledResult: RankedCorpus = rhoOp(rankFn, query)(afterFilter);
 
