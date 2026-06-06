@@ -13,7 +13,7 @@ export async function createLocalEmbeddingAdapter(): Promise<EmbeddingAdapter> {
   const { pipeline } = await import("@huggingface/transformers");
   let extractor;
   try {
-    extractor = await pipeline("feature-extraction", "Xenova/bge-small-en-v1.5", {
+    extractor = await pipeline("feature-extraction", "Xenova/bge-base-en-v1.5", {
       dtype: "q8",
     });
   } catch (err) {
@@ -23,7 +23,7 @@ export async function createLocalEmbeddingAdapter(): Promise<EmbeddingAdapter> {
   }
 
   return {
-    id: "bge-small-en-v1.5",
+    id: "bge-base-en-v1.5",
     // IMPORTANT — manual version-bump obligation:
     // The EmbeddingCache is per-process, so there is no cross-version collision risk
     // there. BUT this version string IS recorded in replay provenance
@@ -32,7 +32,7 @@ export async function createLocalEmbeddingAdapter(): Promise<EmbeddingAdapter> {
     // produced weights/vectors can change), this MUST be bumped (q8@2, q8@3, …) —
     // otherwise replay availability checks will falsely pass across weight changes.
     version: "q8@1",
-    dim: 384,
+    dim: 768,
 
     async embed(texts: string[]): Promise<number[][]> {
       const output = await extractor(texts, { pooling: "mean", normalize: true });

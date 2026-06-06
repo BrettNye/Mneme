@@ -88,39 +88,32 @@ const MANUAL_KEY_CARDINALITY: Record<string, "single" | "multi"> = {
 // (checks the TOP ranked score; if below threshold the entire result is discarded).
 // relevanceFloor is kept at 0 to preserve recall.
 //
-// Abstention calibration sweep (bge-small-en-v1.5 q8, hybrid-max jaccard+cosine,
-// manual benchmark N=20, --rank hybrid, floor fixed at 0):
+// Abstention calibration (bge-BASE-en-v1.5 q8, hybrid-max jaccard+cosine,
+// manual benchmark N=20, --rank hybrid, floor fixed at 0) — MODEL DIAL EXPERIMENT
+// (2026-06-05): bge-small q8 had a score-resolution ceiling (answerable-min 0.812
+// OVERLAPPED abstention tops 0.815/0.829 → abstention capped at 3/5; KU_R3 0.85;
+// full bge-small sweep in git history, commit 0017368). Swapping the registry-
+// pluggable model to bge-base-en-v1.5 q8 (dim 768, ~110MB one-time download)
+// widened the separation to CLEAN:
 //
-//   Answerable-min top score (KU+TR, N=15): 0.812
-//   Abstention question top scores (N=5): ≤0.805 (3 questions), 0.812 (1), 0.815+ (1)
-//   — abstain at threshold < top-score; 3 abstention tops fall clearly below 0.812.
+//   Answerable top scores (KU+TR, N=15): 0.878 — 0.949 (min 0.878)
+//   Abstention top scores (N=5):         0.824 — 0.867 (max 0.867)
+//   → zero overlap; working window (0.867, 0.878), margin ±~0.005 at midpoint.
 //
-//   abstainBelowTop sweep results (arm A, bge-small, hybrid):
-//   | threshold | abs/5 | KU_R3 | KU_R10 | TR_R3 | TR_R10 | updCorr | falseAbsKU | falseAbsTR |
-//   |-----------|-------|-------|--------|-------|--------|---------|------------|------------|
-//   | 0.000     | 0/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
-//   | 0.790     | 1/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
-//   | 0.800     | 1/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
-//   | 0.805     | 3/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
-//   | 0.808     | 3/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
-//   | 0.810     | 3/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
-//   | 0.811     | 3/5   | 0.85  | 1.00   | 0.833 | 1.00   | 1.0     | 0          | 0          |
-//   | 0.812     | 3/5   | 0.85  | 1.00   | 0.633 | 0.80   | 1.0     | 0          | 1 (BLOCKED)|
-//   | 0.815     | 3/5   | 0.85  | 1.00   | 0.633 | 0.80   | 1.0     | 0          | 1 (BLOCKED)|
+//   At ABSTAIN_TOP=0.872 (midpoint): abstention 5/5 (1.0), zero false abstentions
+//   (KU and temporal), KU_R3 0.95 (bge-base also unblocked 2 of the 3
+//   sibling-ranked receipt questions), KU_R10 1.0, updateCorrect 1.0,
+//   temporalCorrect 1.0, TR_R3 0.833 (arm A hybrid baseline; jaccard arm A was
+//   0.933 — one temporal gold session ranks 4th under hybrid; TR_R10 1.0),
+//   checks 60/60.
 //
-//   Note: TR_R3=0.833 is the arm A floor-0 baseline (arm B is 0.933 — B uses jaccard
-//   only, no temporal filter, explains the gap). 3/5 is the ceiling at this model.
+//   Caveat: N=20 calibration; margins are real but small (±0.005-0.006). The
+//   threshold is a measured dial pinned to (model id, version) — re-sweep if the
+//   model changes (see the version-bump obligation in embeddings-local.ts).
 //
-//   Razor-thin margin caveat: answerable-min 0.812 vs highest cleanly-abstaining
-//   abstention score ≤0.811. Working window for 3/5 abs + zero false abstentions:
-//   [0.806, 0.811]. Threshold 0.808 sits at maximal symmetric margin:
-//     margin to answerable-min (0.812): +0.004
-//     margin to abstention-max-that-abstains (0.805): +0.003
-//   BGE-small compresses scores; any threshold inside [0.806, 0.811] works equally.
-//
-// Selected: 0.808 — maximal-margin threshold inside working window [0.806, 0.811].
+// Selected: 0.872 — midpoint of the clean window (0.867, 0.878).
 // ---------------------------------------------------------------------------
-const ABSTAIN_TOP = 0.808;
+const ABSTAIN_TOP = 0.872;
 const RELEVANCE_FLOOR = 0; // precision knob off: any per-entry floor damages recall on this data (measured)
 
 // ---------------------------------------------------------------------------

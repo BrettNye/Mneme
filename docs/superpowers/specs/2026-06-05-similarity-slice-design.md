@@ -76,16 +76,23 @@ measured outcome (3 receipt questions remain ranking-blocked by sibling-claim
 ordering under hybrid — the next ranking lever, documented, not chased this
 slice).
 
-**Final calibration (committed):** `ABSTAIN_TOP = 0.808` (working window
-0.806–0.811; +0.004 margin to answerable-min, +0.003 to nearest abstaining
-top), `RELEVANCE_FLOOR = 0` (precision knob off — measured recall damage).
-Result: abstention 3/5 ✓, zero false abstentions both categories ✓, KU
-recall@3 0.85 / recall@10 1.0 / updateCorrect 1.0 ✓, temporalCorrect 1.0 ✓.
-**Measured trade (controller-verified):** hybrid ranking itself moves temporal
-recall@3 0.933→0.833 (one gold session drops to rank 4+ in one temporal
-question; recall@10 stays 1.0) while gaining KU recall@3 0.75→0.85 — net
-positive on the slice's target category, logged in the ranking-residue ledger
-alongside the 3 KU receipt questions.
+**Final calibration — MODEL DIAL EXPERIMENT (user-directed, adopted):** the
+bge-small ceilings (abstention 3/5, KU recall@3 0.85) were the MODEL's score
+resolution, not the mechanism's. Swapping the registry-pluggable reference
+model to **bge-base-en-v1.5 q8** (dim 768, ~110MB, still local/free) produced
+CLEAN top-score separation — answerable 0.878–0.949 vs abstention 0.824–0.867,
+zero overlap. Committed: `ABSTAIN_TOP = 0.872` (midpoint of the clean window
+(0.867, 0.878)), `RELEVANCE_FLOOR = 0`. Result: **abstention 5/5 (1.0)** with
+zero false abstentions ✓✓, **KU recall@3 0.95** (bge-base also unblocked 2 of
+the 3 sibling-ranked receipt questions — ORIGINAL ≥0.9 TARGET NOW MET) ✓,
+recall@10 1.0 / updateCorrect 1.0 / temporalCorrect 1.0 ✓, checks 60/60, all
+7 probes correct. Margins remain small (±0.005, N=20) — measured dial pinned
+to (model id, version); re-sweep on model change.
+**Measured trade (controller-verified, persists under bge-base):** hybrid
+ranking moves temporal recall@3 0.933→0.833 (one gold session ranks 4th in one
+temporal question; recall@10 stays 1.0) while KU recall@3 gains 0.75→0.95 —
+net strongly positive; the one temporal question + 1 remaining KU receipt are
+the ranking-residue ledger.
 
 ## Design
 
