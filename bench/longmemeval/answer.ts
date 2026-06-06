@@ -3,6 +3,7 @@ import { pairsOf } from "../../src/algebra/contradiction.js";
 import { oplusDedupe } from "../../src/algebra/combination.js";
 import { filterCorpus, type Corpus, type RankedCorpus } from "../../src/algebra/types.js";
 import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../../src/algebra/resolution.js";
+import { relevanceFloor } from "../../src/algebra/similarity.js";
 import type { Session } from "../../src/surface/index.js";
 import type { Claim } from "../../src/core/claim.js";
 import type { LmeQuestionT, AnswerResult } from "./types.js";
@@ -22,6 +23,10 @@ export interface AnswerOpts {
   keyCardinality?: Record<string, "single" | "multi">;
   /** Jaccard cutoff for the dedupe stage — a measured dial. Default 0.5. */
   dedupeCutoff?: number;
+  /** Registered similarity fn for ranking; default "jaccard" — never probes the registry. */
+  rankFn?: string;
+  /** Relevance floor for structural abstention; default 0 = disabled (filter is >=). */
+  relevanceFloor?: number;
 }
 
 /**
@@ -94,6 +99,10 @@ export function answerArmA(
   const threshold = opts.conflictThreshold ?? 0;
   const cutoff = opts.dedupeCutoff ?? 0.5;
 
+  // Default rankFn is pinned to "jaccard" — arm A never probes the registry.
+  // Callers that want hybrid must register it AND pass rankFn: "hybrid" explicitly.
+  const rankFn = opts.rankFn ?? "jaccard";
+
   const stages = pipe(
     leaf(corpusId),
     tau.valid(t),
@@ -101,7 +110,8 @@ export function answerArmA(
       { similarity: { fn: "jaccard", cutoff } })(c),
     (c: Corpus) => resolveDeprecateOlder(pairsOf(c, threshold, { keyCardinality: opts.keyCardinality }))(c),
     (c: Corpus) => filterCorpus(c, (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY),
-    rho.jaccard(q.question)
+    rho.by(rankFn, q.question),
+    (r: RankedCorpus) => relevanceFloor(opts.relevanceFloor ?? 0)(r)
   );
 
   const ranked = session.mneme.query<RankedCorpus>(corpusId, stages, {
