@@ -11,10 +11,10 @@
 2. **Shape: structured field + warning line.** Machine-consumable `coverage` field always present; ONE combined human-readable warning when entities are missing (rides the existing warnings channel → stderr surfacing free).
 3. **Placement: retrieval layer** (`src/retrieval/coverage.ts`) — pure recipe functions, MCP consumes; the bench study that validated the signal imports the same code (kills the bench/product drift risk). `key-alias.ts` placement precedent.
 
-## Design decisions (defaults, stated)
+## Design decisions (defaults, stated; basis pinned by audit A1/A2)
 
-- **Extraction = the validated heuristic v1** behind a named seam: mid-sentence capitalized tokens + number-bearing tokens (e.g. "991"), question-word stoplist, dedup. This is exactly what the 62.5%-precision evidence validated. The seam (`entityTokensOf`) is the documented swap point for a real NER later — consumers never change.
-- **Compute basis = the SERVED set** (post-pipeline survivors the recall actually consulted — the basis the study validated). Warning wording is therefore "no claim served by this recall mentions 'X'" — true by construction. NOT "zero corpus support", which could be false (a deprecated or τ-excluded claim may mention X).
+- **Extraction = the validated heuristic v1, VERBATIM** behind a named seam: capitalized tokens + number-bearing tokens (e.g. "991"), question-word **stoplist only — no position-awareness** (the validated bench heuristic relies purely on the stoplist to drop leading question words; adding position logic would change the validated behavior). The seam (`entityTokensOf`) is the documented swap point for a real NER later — consumers never change.
+- **Compute basis = `ranked.scored`, the post-pipeline PRE-KNOB survivor set** — exactly the basis the bench study validated (`abstention-signals.ts` uses the raw ranked corpus with no abstain/floor stages). Abstain/floor knobs affect only what is *returned*, not what was *available*. Warning wording is therefore "no claim **available to** this recall mentions 'X'" — true by construction under abstention and floor alike. NOT "served" (ambiguous when abstained empties matches) and NOT "zero corpus support" (false if a deprecated/τ-excluded claim mentions X).
 
 ## Design
 
@@ -27,11 +27,12 @@ import type { Claim } from "../core/claim.js";
 export const ENTITY_STOPWORDS: ReadonlySet<string>;
 
 /**
- * Entity-ish tokens of a question text: mid-sentence capitalized words and
- * number-bearing tokens ("991", "4th"), minus ENTITY_STOPWORDS, deduplicated,
- * input order preserved. HEURISTIC v1 — the named swap seam for a future NER;
- * validated on LongMemEval-oracle (62.5% flag precision). English-capitalization
- * dependent; lowercase entities and paraphrases are known misses (documented).
+ * Entity-ish tokens of a question text: capitalized words and number-bearing
+ * tokens ("991", "4th"), minus ENTITY_STOPWORDS (stoplist-only — no position
+ * logic), deduplicated, input order preserved. HEURISTIC v1, kept VERBATIM to
+ * the bench-validated implementation (62.5% flag precision on LME-oracle);
+ * the named swap seam for a future NER. English-capitalization dependent;
+ * lowercase entities and paraphrases are known misses (documented).
  */
 export function entityTokensOf(text: string): string[];
 
@@ -51,15 +52,18 @@ export function coverageOf(entities: readonly string[], claims: readonly Claim[]
 
 - Barrel-exported from `src/index.ts` (with the other retrieval recipes).
 - DRY note: `bench/longmemeval/manual/abstention-signals.ts` migrates its inline
-  extraction/coverage to import these (one implementation; the bench study stays
-  the standing verification instrument for the signal, mirroring how bench arm A
-  verifies `canonicalReadStages`).
+  extraction/containment to import `entityTokensOf` + `coverageOf`, then derives
+  its SCALAR signal locally (`(entities.length - missing.length) / entities.length`,
+  preserving the bench's empty-list ⇒ 1 convention) — `coverageOf` returns the
+  structured report, not the fraction. One implementation of the validated logic;
+  the bench stays the standing verification instrument, mirroring how bench arm A
+  verifies `canonicalReadStages`.
 
 ### 2. Recall integration (`src/mcp/tools.ts`)
 
-- `RecallResult` gains `coverage: CoverageReport` — ALWAYS present (empty-entities questions get empty arrays; abstained/empty results still report — all-missing is precisely when the calling agent most needs the fact).
-- Computed over the **served survivors** (the post-pipeline claims recall ranked — the same array `matches` is drawn from, NOT just the top-k slice).
-- When `missing` is non-empty, push ONE combined warning: `question entities with no supporting claim served: 'Sacramento', 'Porsche'` — existing warnings channel; server's existing stderr loop surfaces it unchanged.
+- `RecallResult` gains `coverage: CoverageReport` — ALWAYS present (empty-entities questions get empty arrays; abstained/empty results still report — all-missing is precisely when the calling agent most needs the fact). Additive-safety VERIFIED, not assumed: existing tests assert field-level (`toMatchObject`/property access), never exact result shape (the N6 precedent re-checked for this surface).
+- Computed over **`ranked.scored`** — the post-pipeline, PRE-knob survivor set (tools.ts's raw ranked corpus, before abstainBelowTop/relevanceFloor). This is the array the bench validated against; knobs affect returns, not availability.
+- When `missing` is non-empty, push ONE combined warning into the existing `allWarnings` accumulator BEFORE the return (independent of the `abstained ? [] : matches` emptying — an abstained recall with missing entities still warns, by design): `question entities with no claim available to this recall: 'Sacramento', 'Porsche'`. Server's existing stderr loop surfaces it unchanged.
 - `recall` stays pure (no I/O); the helper composes with the existing flow — coverage computation is one call after the pipeline run.
 
 ### 3. Provenance handles (`src/mcp/tools.ts`)
@@ -84,14 +88,14 @@ export function coverageOf(entities: readonly string[], claims: readonly Claim[]
 ### 6. Testing
 
 - **Unit (`src/retrieval/coverage.test.ts`):** extraction — capitalized mid-sentence, sentence-initial question words excluded, number-bearing tokens ("991"), stopwords, dedup, order stability, empty input; coverage — containment across subject/key/value, case-insensitivity, empty entities, empty claims (all missing).
-- **Recall integration (`src/mcp/tools.test.ts`):** missing entity ⇒ structured field + the single combined warning; fully covered ⇒ field present, no coverage warning; abstained-style empty result ⇒ all-missing; `matches[].id`/`tags` present and equal to the written claim's.
+- **Recall integration (`src/mcp/tools.test.ts`):** missing entity ⇒ structured field + the single combined warning **with the auditable wording asserted as a substring ("no claim available to this recall")**; fully covered ⇒ field present, no coverage warning; abstained-style empty result ⇒ all-missing + warning still fires; **basis-pinning test: a claim mentioning entity X that the relevanceFloor drops still counts as available (supported: true)**; `matches[].id`/`tags` present and equal to the written claim's (`id` copied as plain `string` — the branded `ClaimId` must not leak into the MCP schema).
 - **Server integration (`src/mcp/server.integration.test.ts`):** `coverage` + `id`/`tags` round-trip through `structuredContent` over the MCP client.
 - **Bench migration check:** `abstention-signals.ts` compiles against the shared module and its qualitative output is unchanged (spot value).
 - **Regression:** full suite green; both additions are additive (existing tests assert field-level — no expectation edits, the established N6 precedent).
 
 ### 7. Acceptance criteria
 
-1. Recall on a corpus lacking a question entity returns `coverage.missing` containing it AND one combined warning naming it, with wording that is true by construction ("served", not "corpus").
+1. Recall on a corpus lacking a question entity returns `coverage.missing` containing it AND one combined warning naming it, with wording that is true by construction ("available to this recall" — pre-knob basis; not "served", not "corpus").
 2. Recall on a fully-covered question returns `coverage` with all `supported: true` and NO coverage warning.
 3. Every match carries `id` and `tags` matching the underlying claim; visible over the MCP boundary in `structuredContent`.
 4. `entityTokensOf`/`coverageOf` are pure, barrel-exported, and consumed by both the MCP recall and the bench abstention study (single implementation).
