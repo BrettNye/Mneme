@@ -297,3 +297,7 @@ Blind stratified human grading (50 pairs, founder-graded): judge agreement 100% 
 Citable configuration = ratified restricted to human-validated bands (score >= 0.94, ~89% agreement): KU updateCorrect 0.403 -> 0.472 (+6.9pp, 1.42x naive) at -1.4pp recall@3, 225 aliases, maxComponent 4. The full-band 0.528 stands only with the floor-band caveat. The 0.92-0.94 band (+5.6pp) behaved like blind merging - lift without judgment precision; recovering it is a bounded judging problem (richer context / stricter prompt / 3-vote panel).
 
 Artifacts: spot-check.ts (blind sheet + scorer), filled sheet, key-ratify-judgments-min094.jsonl.
+
+### Capstone re-certification on the validated-band config (2026-06-07)
+
+Production-loop re-run with key-ratify-judgments-min094.jsonl: KU updateCorrect 0.472, recall@1/3/10 = 0.493/0.903/0.965 - exact match with the harness validated-band row; hardening clean (0 conservation failures, 0 serving divergences). The CITABLE number now carries the same production certification as the full-band config.
