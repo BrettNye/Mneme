@@ -44,6 +44,7 @@ import { EmbeddingCache, cosineOver, hybridMax } from "../../../src/index.js";
 import { warmEmbeddings } from "../../../src/algebra/embedding.js";
 import { createLocalEmbeddingAdapter, warmForQuestion } from "../embeddings-local.js";
 import { autoRatify } from "./key-alias-auto.js";
+import { entityTokensOf, coverageOf } from "../../../src/retrieval/coverage.js";
 
 const TARGET_CATEGORIES = new Set(["knowledge-update", "temporal-reasoning", "abstention"]);
 const r3 = (v: number): number => Math.round(v * 1000) / 1000;
@@ -128,15 +129,11 @@ async function main(argv: string[]): Promise<number> {
       const top2 = scored.length > 1 ? scored[1].score : -1;
       const top5 = scored.slice(0, 5).map((s) => s.score);
       const survivorKeys = [...new Set(scored.map((s) => s.claim.key))];
-      // entityCoverage: fraction of the question's entity-ish tokens (capitalized
-      // mid-sentence words + number-bearing tokens like "991") present anywhere
-      // in surviving claim text. The qualitative pattern: abstention questions
-      // are missing-entity questions (Sacramento/Porsche/Tom absent) while the
-      // TOPIC is well covered — invisible to similarity, visible to coverage.
-      const QUESTION_WORDS = new Set(["When", "Which", "Who", "What", "How", "Where", "Why", "Did", "Do", "Does", "Is", "Are", "Was", "Were", "The", "I"]);
-      const entityTokens = [...new Set((q.question.match(/\b(?:[A-Z][a-zA-Z]+|\d+[a-zA-Z]*)\b/g) ?? []).filter((w) => !QUESTION_WORDS.has(w)))];
-      const corpusText = scored.map((s) => `${s.claim.subject} ${s.claim.key} ${String(s.claim.value)}`).join(" ").toLowerCase();
-      const covered = entityTokens.filter((tok) => corpusText.includes(tok.toLowerCase())).length;
+      // entityCoverage via the SHARED retrieval module (single implementation;
+      // this study remains the standing verification instrument for the signal —
+      // rationale: abstention questions are missing-entity questions on covered topics).
+      const entityTokens = entityTokensOf(q.question);
+      const { missing } = coverageOf(entityTokens, scored.map((s) => s.claim));
       const signals: Record<string, number> = {
         top1,
         margin12: scored.length > 1 ? top1 - top2 : 1,
@@ -148,7 +145,9 @@ async function main(argv: string[]): Promise<number> {
         maxKeySim: survivorKeys.length
           ? Math.max(...survivorKeys.map((k) => hybrid.scoreOne(k, q.question)))
           : -1,
-        entityCoverage: entityTokens.length ? covered / entityTokens.length : 1,
+        entityCoverage: entityTokens.length
+          ? (entityTokens.length - missing.length) / entityTokens.length
+          : 1,
       };
       observations.push({
         qid: q.question_id,
