@@ -5,11 +5,11 @@ created: 2026-06-07
 
 ```mermaid
 flowchart TD
-    task-1["task-1: shared helpers (ratified-pairs loader + holdout split)<br/>files: bench/longmemeval/manual/key-alias-auto.ts +3 more"]
-    task-2["task-2: ingestQuestion promotion hook<br/>files: bench/longmemeval/ingest.ts +1 more"]
-    task-3["task-3: protocol document<br/>files: docs/bio/2026-06-07-bio-efficacy-protocol.md"]
-    task-4["task-4: pooling-efficacy harness + property test<br/>files: bench/longmemeval/manual/pooling-efficacy.ts +1 more"]
-    task-5["task-5: oracle run + verdicts<br/>files: docs/bio/2026-06-07-bio-efficacy-protocol.md +1 more"]
+    task-1["task-1: shared helpers (ratified-pairs loader + holdout split)<br/>files: bench/longmemeval/manual/key-alias-auto.ts +3 more"]:::done
+    task-2["task-2: ingestQuestion promotion hook<br/>files: bench/longmemeval/ingest.ts +1 more"]:::done
+    task-3["task-3: protocol document<br/>files: docs/bio/2026-06-07-bio-efficacy-protocol.md"]:::done
+    task-4["task-4: pooling-efficacy harness + property test<br/>files: bench/longmemeval/manual/pooling-efficacy.ts +1 more"]:::done
+    task-5["task-5: oracle run + verdicts<br/>files: docs/bio/2026-06-07-bio-efficacy-protocol.md +1 more"]:::done
     task-1 --> task-4
     task-2 --> task-4
     task-3 --> task-5
@@ -66,7 +66,7 @@ files:
   - bench/longmemeval/manual/key-alias-auto.test.ts
   - bench/longmemeval/manual/holdout.ts
   - bench/longmemeval/manual/holdout.test.ts
-status: pending
+status: done
 ```
 
 Hoist two judgment-bearing helpers the harness needs (principles-audit DRY findings
@@ -151,7 +151,7 @@ depends_on: []
 files:
   - bench/longmemeval/ingest.ts
   - bench/longmemeval/ingest.test.ts
-status: pending
+status: done
 ```
 
 Extend `ingestQuestion` with an optional hook so the harness can create corpora with
@@ -230,7 +230,7 @@ id: task-3
 depends_on: []
 files:
   - docs/bio/2026-06-07-bio-efficacy-protocol.md
-status: pending
+status: done
 is_wiring_task: true
 ```
 
@@ -271,7 +271,7 @@ depends_on: [task-1, task-2]
 files:
   - bench/longmemeval/manual/pooling-efficacy.ts
   - bench/longmemeval/manual/pooling-efficacy.test.ts
-status: pending
+status: done
 ```
 
 The arm-P instrument per spec **Deliverable 2**. Modeled on TWO templates:
@@ -383,7 +383,7 @@ depends_on: [task-3, task-4]
 files:
   - docs/bio/2026-06-07-bio-efficacy-protocol.md
   - bench/RESULTS.md
-status: pending
+status: done
 is_wiring_task: true
 ```
 

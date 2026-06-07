@@ -85,7 +85,7 @@ Any deviation in either direction is a P2 finding. An improvement is reported bu
 
 **Registered expectation:** P2 passes trivially with respect to pooling itself (pooled confidence never affects serving — decision 4). It guards promotion's side effects through ⊕_dedupe and confidence thresholds, which is worth one run.
 
-**Verdict:** FAIL — KU updateCorrect measured 0.542 ≠ registered 0.556 (exact 3-decimal equality required; any deviation in either direction is a P2 finding per the pre-registered gate); recall@3 0.931 and recall@10 0.979 both match exactly.
+**Verdict:** FAIL — KU updateCorrect measured 0.542 ≠ registered 0.556 (exact 3-decimal equality required; any deviation in either direction is a P2 finding per the pre-registered gate); recall@3 0.931 and recall@10 0.979 both match exactly. Root cause uninvestigated in this run (candidate: ⊕_dedupe/confidence-threshold side effects per the registered expectation — an open question, not a resolved one).
 
 Evidence: [`bench/RESULTS.md` — bio-efficacy: P2 headline (2026-06-07)](../../bench/RESULTS.md#bio-efficacy-p2-headline-2026-06-07)
 
