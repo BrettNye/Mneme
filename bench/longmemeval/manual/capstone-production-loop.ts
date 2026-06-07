@@ -29,7 +29,8 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMnemeMcpServer } from "../../../src/mcp/server.js";
-import { openSession } from "../../../src/surface/index.js";
+import { openSession, pipe, leaf } from "../../../src/surface/index.js";
+import { canonicalReadStages } from "../../../src/retrieval/read-pipeline.js";
 import { markdownTable } from "../../lib/measure.js";
 import {
   CacheHeader,
@@ -58,7 +59,13 @@ type CensusStructured = {
     rankFn: string;
   };
 };
-type RecallStructured = { structuredContent?: { abstained: boolean; rankFn: string } };
+type RecallStructured = {
+  structuredContent?: {
+    abstained: boolean;
+    rankFn: string;
+    matches: { value: unknown }[];
+  };
+};
 
 const r3 = (v: number): number => Math.round(v * 1000) / 1000;
 const pairKey = (a: string, b: string): string => (a < b ? `${a}\x1f${b}` : `${b}\x1f${a}`);
@@ -115,6 +122,9 @@ async function main(argv: string[]): Promise<number> {
   let aliasWrites = 0;
   let censusHybrid = 0;
   let recallOk = 0;
+  // Hardening state: per-corpus expected write counts + recall served values
+  const expectedWrites = new Map<string, number>(); // corpus → records + alias writes
+  const recallValues = new Map<string, unknown[]>(); // corpus → recall match values
 
   try {
     for (let qi = 0; qi < questions.length; qi++) {
@@ -168,26 +178,75 @@ async function main(argv: string[]): Promise<number> {
         name: "recall",
         arguments: { about: q.question, corpus, limit: 10 },
       })) as RecallStructured;
-      if (recall.structuredContent) recallOk++;
+      if (recall.structuredContent && recall.structuredContent.abstained === false) recallOk++;
+      recallValues.set(corpus, (recall.structuredContent?.matches ?? []).map((m) => m.value));
+      expectedWrites.set(corpus, records.length + Object.keys(map).length);
 
       if ((qi + 1) % 25 === 0) console.log(`progress: ${qi + 1}/${questions.length} questions through the loop`);
     }
 
     // 5. scoring over the SAME db — alias maps from the LEDGER (recall's internals)
+    // Single pinned instant for all alias-map loads: deterministic within the run
+    // (must only be >= all write times; alias claims are valid to Infinity).
+    const scoringInstant = Date.now();
     const scoringSession = openSession({ dbPath, writer: "capstone-scorer" });
     try {
       const scores: QuestionScore[] = [];
+      let conservationFailures = 0;
+      let servingDivergences = 0;
       for (const q of questions) {
         const corpus = corpusIdFor(q.question_id);
-        const aliasClaims = scoringSession.mneme.read(corpus, { corpusId: corpus, key: KEY_ALIAS_KEY });
-        const { map } = aliasMapOf(aliasClaims, { evaluationInstant: Date.now() });
+        const allCorpusClaims = scoringSession.mneme.read(corpus, { corpusId: corpus });
+        // Hardening A: write conservation — every remember call landed in the ledger
+        const expected = expectedWrites.get(corpus) ?? -1;
+        if (allCorpusClaims.length !== expected) {
+          console.error(`CONSERVATION FAIL ${corpus}: ledger has ${allCorpusClaims.length}, expected ${expected}`);
+          conservationFailures++;
+        }
+        const aliasClaims = allCorpusClaims.filter((c) => c.key === KEY_ALIAS_KEY);
+        const { map } = aliasMapOf(aliasClaims, { evaluationInstant: scoringInstant });
         const result = answerArmA(scoringSession, corpus, q, {
           k: 10,
           keyCardinality: MANUAL_KEY_CARDINALITY,
           keyAliases: map,
           evidencePoolingRule: RULE.MAX_MEAN,
         });
+        // Hardening B: serving equivalence — every value the recall TOOL served must
+        // be a value the same canonical pipeline serves AT A MATCHED CLOCK. Two
+        // deliberate differences are excluded from the comparison: (1) ranking —
+        // recall ranks with the server's rankFn (hybrid) vs the scorer's jaccard,
+        // so we compare survivor SETS, not order; (2) the evaluation instant —
+        // recall reads at wall-clock NOW (production semantics: everything visible)
+        // while METRIC scoring reads at the question date (benchmark τ_known).
+        // The first hardened run compared mismatched clocks and "caught" exactly
+        // that designed τ difference on 2 questions with post-question-date
+        // evidence — verified expected, so equivalence now compares at NOW.
+        const survivorCorpus = scoringSession.mneme.query<{ claims: { value: unknown }[] }>(
+          corpus,
+          pipe(
+            leaf(corpus),
+            ...canonicalReadStages({
+              evaluationInstant: scoringInstant,
+              keyCardinality: MANUAL_KEY_CARDINALITY,
+              keyAliases: map,
+              evidencePoolingRule: RULE.MAX_MEAN,
+            }),
+          ),
+          { evaluationClock: scoringInstant },
+        );
+        const survivors = new Set(survivorCorpus.claims.map((c) => JSON.stringify(c.value)));
+        for (const v of recallValues.get(corpus) ?? []) {
+          if (!survivors.has(JSON.stringify(v))) {
+            console.error(`SERVING DIVERGENCE ${corpus}: recall served ${JSON.stringify(v)} absent from scorer survivors`);
+            servingDivergences++;
+          }
+        }
         scores.push(scoreQuestion(q, result, KS));
+      }
+      console.log(`hardening: conservation failures ${conservationFailures}; serving divergences ${servingDivergences}`);
+      if (conservationFailures > 0 || servingDivergences > 0) {
+        console.error("CAPSTONE HARDENING FAILED — see lines above");
+        return 1;
       }
       const rows = aggregate(scores, KS);
       const tableRows = rows
