@@ -12,7 +12,31 @@
  * Deterministic: keys iterated in sorted order; no randomness, no clock.
  * This is an EXPERIMENT policy — the product keeps human/agent ratification.
  */
+import { readFileSync } from "node:fs";
 import type { KeyAliasMap } from "../../../src/index.js";
+
+/** Order-insensitive pair key — unit-separator (0x1F) between the two strings
+ *  in lexicographic order. Hoisted from inline copies across manual scripts. */
+export const pairKey = (a: string, b: string): string =>
+  a < b ? `${a}\x1f${b}` : `${b}\x1f${a}`;
+
+/** Parse a ratify-judge judgments JSONL into the set of APPROVED pair keys.
+ *  Judgment lines are distinguished from header lines by `kind === undefined`
+ *  and carry {a, b, same}; only same===true pairs are ratified.
+ *  (Hoisted from the 4 inline copies — abstention-signals/calibrate/capstone/sweep;
+ *  replicates their exact filter semantics.) */
+export function loadRatifiedPairs(path: string): Set<string> {
+  const approved = new Set<string>();
+  for (const line of readFileSync(path, "utf-8")
+    .split("\n")
+    .filter((l) => l.trim().length > 0)) {
+    const obj = JSON.parse(line) as { kind?: string; a?: string; b?: string; same?: boolean };
+    if (obj.kind === undefined && obj.same && obj.a && obj.b) {
+      approved.add(pairKey(obj.a, obj.b));
+    }
+  }
+  return approved;
+}
 
 export interface AutoRatifyStats {
   /** Number of variant→canonical entries emitted. */
