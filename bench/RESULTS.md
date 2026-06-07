@@ -223,3 +223,105 @@ in place: structured outputs (`output_config.format`) in `realLlm`, 4-layer leni
 the API message, per-reason skip accounting. **Protocol: always run
 `bench/longmemeval/manual/smoke-one-call.ts` (~1 cent, prints an explicit VERDICT)
 before any bulk extraction run.**
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking jaccard in all passes; scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.5 | 0.417 | 0.493 | 0.91 | 0.965 | 1 | 0.846 | 0 | 486 | 136 | 13 |
+| jaccard | 0.6 | 0.403 | 0.493 | 0.91 | 0.965 | 1 | 0.843 | 0 | 166 | 72 | 8 |
+| jaccard | 0.7 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 19 | 12 | 4 |
+| jaccard | 0.8 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 2 | 2 | 2 |
+| jaccard | 0.9 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| hybrid | 0.5 | 0.903 | 0.493 | 0.618 | 0.688 | 1 | 0.618 | 0 | 4875 | 229 | 79 |
+| hybrid | 0.6 | 0.903 | 0.493 | 0.618 | 0.688 | 1 | 0.618 | 0 | 4875 | 229 | 79 |
+| hybrid | 0.7 | 0.903 | 0.493 | 0.618 | 0.688 | 1 | 0.618 | 0 | 4875 | 229 | 79 |
+| hybrid | 0.8 | 0.903 | 0.493 | 0.625 | 0.694 | 1 | 0.618 | 0 | 4826 | 229 | 79 |
+| hybrid | 0.9 | 0.625 | 0.493 | 0.868 | 0.972 | 1 | 0.822 | 0 | 1769 | 225 | 30 |
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking jaccard in all passes; scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.94 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.96 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.98 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| hybrid | 0.92 | 0.556 | 0.493 | 0.896 | 0.965 | 1 | 0.839 | 0 | 1078 | 208 | 18 |
+| hybrid | 0.94 | 0.486 | 0.493 | 0.896 | 0.965 | 1 | 0.843 | 0 | 494 | 173 | 8 |
+| hybrid | 0.96 | 0.431 | 0.493 | 0.91 | 0.965 | 1 | 0.842 | 0 | 187 | 102 | 5 |
+| hybrid | 0.98 | 0.417 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 51 | 37 | 2 |
+
+### Sweep conclusions (2026-06-06)
+
+1. Drift at oracle scale is SEMANTIC: jaccard merges nothing above theta 0.9 and moves no metric; all lift comes from the embedding scorer (bge-base cosine via hybrid-max).
+2. Key matching recovers up to +22.2pp KU updateCorrect on real extraction drift (0.403 -> 0.625 at hybrid theta 0.90, recall@3 -4.9pp, recall@10 +0.7pp). Pairs-only merging (theta 0.98) is free: +1.4pp at zero recall cost. The degenerate mega-merge ceiling (0.903) shows ~90% of KU questions have the correct claim present - the failure mode is key identity, not retrieval.
+3. No clean threshold exists (smooth precision/recall dial; maxComponent grows 2 -> 79 as theta drops). Empirical vindication of detect -> declare -> contest: blind auto-merge cannot capture the lift safely; a ratification loop over theta ~0.92-0.94 census candidates can. Auto-suggest dial calibration: SUGGEST at ~0.92, never auto-merge.
+4. Discovered product bug en route: alias maps + scalar confidence + same-value drifted claims crash EVIDENCE_POOLED (dedupe is alias-blind). Fixed via DetectionOptions.evidencePoolingRule (default unchanged); MCP recall follow-up open.
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking jaccard in all passes; scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| hybrid | 0.92 | 0.556 | 0.493 | 0.896 | 0.965 | 1 | 0.839 | 0 | 1078 | 208 | 18 |
+| ratified | ratified | 0.528 | 0.493 | 0.903 | 0.965 | 1 | 0.83 | 0 | 380 | 161 | 7 |
+
+### Ratified arm conclusions (2026-06-06)
+
+Judge: claude-sonnet-4-6, ratify-v1, suggest band >=0.92 (1,192 unique census candidates, $~2.3). Approval rate 26.4% (315) - the judge rejects ~3 of 4 candidates in the band (e.g. "current sweetener" vs "sweetener issue" at 0.921: related topic, different attribute). Judgments artifact committed at bench/longmemeval/manual/data/key-ratify-judgments.jsonl for deterministic replay.
+
+Ratified row: KU updateCorrect 0.403 -> 0.528 (+12.5pp, 1.31x baseline, 1.59x naive arm B) at -1.4pp recall@3 and unchanged recall@10, using 380 aliases (35% of blind-0.92 volume, maxComponent 7 vs 18). Per-alias lift efficiency 2.3x blind. Blind-0.92 scores higher updateCorrect (0.556) because false merges sometimes accidentally serve the newest claim - lift without precision; the ratified row is the honest, auditable number (every merge has a recorded reason).
+
+Open lever: the suggest band only exposed >=0.92 to judgment; true drift below 0.92 remains unrecovered (ceiling 0.903). Widening the band (e.g. >=0.85) with the same judge is the next increment toward the ceiling.
+
+### Capstone: production-loop replication (2026-06-06)
+
+The ratified benchmark re-run through the LITERAL product surfaces (in-process MCP server, real SQLite db): every claim via `remember`, candidates via `key_census` (229/229 hybrid), 358 alias ratifications written as supersedable ledger claims via `remember`, every question recalled via `recall` (229/229 served - the scalar-pooling fix verified at scale), scored from the same db with alias maps derived from the ledger (recall internals).
+
+RESULT: KU updateCorrect 0.528, recall@1/3/10 = 0.493/0.903/0.965 - byte-identical to the harness ratified row. The harness numbers ARE production numbers. Script: bench/longmemeval/manual/capstone-production-loop.ts (gate: --expect-update-correct fails loudly on divergence).
+
+### Judge spot-check + validated-band configuration (2026-06-07)
+
+Blind stratified human grading (50 pairs, founder-graded): judge agreement 100% in 0.96-0.98, 86% in 0.94-0.96, 75% in 0.98+ (n=8), but 36% in 0.92-0.94 - ALL 8 sampled approvals at the band floor graded DIFF. falseReject ~2 overall (lost-lift direction is small); falseAccepts concentrate at the floor.
+
+Citable configuration = ratified restricted to human-validated bands (score >= 0.94, ~89% agreement): KU updateCorrect 0.403 -> 0.472 (+6.9pp, 1.42x naive) at -1.4pp recall@3, 225 aliases, maxComponent 4. The full-band 0.528 stands only with the floor-band caveat. The 0.92-0.94 band (+5.6pp) behaved like blind merging - lift without judgment precision; recovering it is a bounded judging problem (richer context / stricter prompt / 3-vote panel).
+
+Artifacts: spot-check.ts (blind sheet + scorer), filled sheet, key-ratify-judgments-min094.jsonl.
+
+### Capstone re-certification on the validated-band config (2026-06-07)
+
+Production-loop re-run with key-ratify-judgments-min094.jsonl: KU updateCorrect 0.472, recall@1/3/10 = 0.493/0.903/0.965 - exact match with the harness validated-band row; hardening clean (0 conservation failures, 0 serving divergences). The CITABLE number now carries the same production certification as the full-band config.
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking: hybrid (integrity baseline always jaccard); scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | rank | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | jaccard | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| — | baseline | hybrid | 0.486 | 0.493 | 0.931 | 0.979 | 1 | 0.887 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | hybrid | 0.486 | 0.493 | 0.931 | 0.979 | 1 | 0.887 | 0 | 0 | 0 | 1 |
+| hybrid | 0.92 | hybrid | 0.625 | 0.493 | 0.917 | 0.979 | 1 | 0.861 | 0 | 1080 | 209 | 18 |
+| ratified | ratified | hybrid | 0.556 | 0.493 | 0.931 | 0.979 | 1 | 0.87 | 0 | 225 | 118 | 4 |
+
+### Hybrid-ranking arm conclusions (2026-06-07)
+
+Ranking was the frozen dial: every prior oracle cell ranked jaccard. Hybrid (bge) ranking ALONE lifts the no-alias baseline 0.403 -> 0.486 (+8.3pp) and improves recall@3 (+1.4pp), recall@10 (+1.4pp), TR recall@3 (+4.4pp) - no trade-off at oracle scale. STACKED with validated-band ratification: KU updateCorrect 0.556 (+15.3pp over baseline, 1.67x naive) with recall@3 0.931 ABOVE the original baseline - the old -1.4pp recall caveat is eliminated. Levers confirmed orthogonal (aliases choose survivors; ranking orders them). Production alignment: the MCP server already ranks hybrid, so this config is closer to production than the jaccard-ranked numbers were. recall@1 frozen at 0.493 across all 6 configs/both rankers - structural, noted. Abstention knobs still OFF (calibration is the next lever).
+
+### Abstention calibration at oracle scale: NEGATIVE result, dial stays OFF (2026-06-07)
+
+Per-question topScore under the citable config (ratified-min094 + hybrid ranking), deterministic 50/50 train/holdout split. Distributions OVERLAP (holdout answerable med 0.890 vs abstention med 0.842, ranges interleave). Best train threshold (0.862) on holdout: abstentionCorrect 0.545 but 16.7% FALSE abstentions on answerable (mostly TR @ 0.83-0.86) - net negative; no threshold wins. The manual-sample 0.872 "clean window" was N=20 luck; the protocol''s do-not-transfer warning vindicated at N=229. Conclusion: similarity topScore is not an abstention signal at scale - related-but-unanswerable claims score high. Abstention forwards to the bio layer (evidence-backed confidence) with measured justification. Bonus: q 07741c45 topScore -Inf (all evidence post-dates the question; tau excludes everything) - structural quirk noted.
+
+### Abstention deep-dive: entity coverage beats every score threshold (2026-06-07)
+
+Multi-signal study (6 signals x 2 directions, train/holdout): no score-derived signal nets positive (best: top1 @ 0.868 -> 7/11 caught but 20/96 false). Qualitative inspection revealed the structure: LME abstention questions are MISSING-ENTITY questions (Sacramento / Porsche / Tom absent) on well-covered TOPICS - invisible to similarity by construction. New signal entityCoverage (fraction of question entity-tokens present in surviving claim text): 5/11 caught at only 3/96 false (62.5% flag precision vs 26% for top1) - the first NET-POSITIVE abstention mechanism, compositional, no LLM, and EXPLAINABLE ("entity X has zero corpus support"). Residual class (entities present, attribute missing) remains the bio-confidence case. Product implication: coverage ANNOTATION on recall warnings (agent-in-the-loop refusal), not silent auto-abstention. Small-n caveat: 19/11 train/holdout abstentions - signal-quality evidence, not a production dial.

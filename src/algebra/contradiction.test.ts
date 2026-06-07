@@ -1,5 +1,6 @@
-import { clustersOf, derivedPairs, pairsOf } from "./contradiction.js";
+﻿import { clustersOf, derivedPairs, pairsOf } from "./contradiction.js";
 import { corpusOf } from "./types.js";
+import { RULE } from "../distribution/rules.js";
 
 // Helper for keyAliases tests: creates a claim with a deterministic valueHash from value string
 const makeClaim = ({ subject, key, value }: { subject: string; key: string; value: string }) => ({
@@ -276,4 +277,40 @@ it("keyAliases undefined is identical to keyAliases absent", () => {
   const withOmitted = pairsOf(corpusOf([a, b]), 0, {});
   expect(withUndefined).toHaveLength(0);
   expect(withOmitted).toHaveLength(0);
+});
+
+// ---------------------------------------------------------------------------
+// evidencePoolingRule: scalar corpora under canonical grouping (sweep finding)
+// ---------------------------------------------------------------------------
+
+describe("evidencePoolingRule", () => {
+  // The sweep crash shape: dedupe is alias-blind, so same-value claims under
+  // DRIFTED keys reach contest un-merged. A contested cluster (>= 2 distinct
+  // values) with a multi-claim value group is what pools.
+  const scalarClaim = (id: string, key: string, valueHash: string, p: number) => ({
+    id,
+    subject: "user",
+    key,
+    scopeHash: "_",
+    valueHash,
+    confidence: { distribution: "scalar", parameters: { p }, raw: p },
+  } as any);
+  const sa = scalarClaim("a", "service date", "vh-March 15", 0.8);
+  const sb = scalarClaim("b", "car service date", "vh-March 15", 0.9);
+  const rival = scalarClaim("r", "service date", "vh-March 16", 0.7);
+
+  it("scalar same-value claims co-located by an alias map pool under max_mean instead of throwing", () => {
+    const clusters = clustersOf(corpusOf([sa, sb, rival]), 0, {
+      keyAliases: { "car service date": "service date" },
+      evidencePoolingRule: RULE.MAX_MEAN,
+    });
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].combinedConfidences.get("vh-March 15")?.raw).toBe(0.9); // max of the two scalar means
+  });
+
+  it("default (absent option) keeps EVIDENCE_POOLED - scalar pooling still throws loudly", () => {
+    expect(() =>
+      clustersOf(corpusOf([sa, sb, rival]), 0, { keyAliases: { "car service date": "service date" } }),
+    ).toThrow(/not supported by the scalar binding/);
+  });
 });

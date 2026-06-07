@@ -28,6 +28,11 @@ export interface ReadPipelineOpts {
   /** Key alias map forwarded to contradiction detection.
    *  Variant keys are grouped with their canonical key during ⊥ detection. */
   keyAliases?: KeyAliasMap;
+  /** Same-value confidence pooling rule for ⊥ (DetectionOptions.evidencePoolingRule).
+   *  Default EVIDENCE_POOLED; scalar corpora combined with alias maps need a
+   *  scalar-supported rule (e.g. RULE.MAX_MEAN) — ⊕_dedupe is alias-blind, so
+   *  drifted same-value claims reach ⊥ un-merged and pool. */
+  evidencePoolingRule?: string;
   /** Confidence ELIGIBILITY floor for ⊥ detection.
    *  Claims with eff(claim) <= threshold cannot contest.
    *  Default 0 — all claims are eligible. */
@@ -69,7 +74,11 @@ export function canonicalReadStages(opts: ReadPipelineOpts): Stage<Corpus, Corpu
 
     // 3. ⊥ / resolveDeprecateOlder: detect contradictions, deprecate the older claim in each pair
     (c: Corpus) => resolveDeprecateOlder(
-      pairsOf(c, threshold, { keyCardinality: opts.keyCardinality, keyAliases: opts.keyAliases }),
+      pairsOf(c, threshold, {
+        keyCardinality: opts.keyCardinality,
+        keyAliases: opts.keyAliases,
+        evidencePoolingRule: opts.evidencePoolingRule,
+      }),
     )(c),
 
     // 4. Drop deprecated claims, contradiction flag artifacts, and alias-shaped infrastructure claims
