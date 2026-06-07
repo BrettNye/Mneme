@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openSession } from "./session.js";
+import { betaFromRaw } from "../write/source-weight.js";
+import type { ClaimSchema } from "../catalog/schema.js";
 
 describe("session persistence", () => {
   it("persists corpora and claims across reopen of the same db", () => {
@@ -160,5 +162,74 @@ describe("openSession", () => {
     // Same (subject,key,scope) with a different value contradicts the first.
     const second = s.write("c11", { subject: "host:a", key: "status", value: "degraded" });
     expect(second.status).toBe("rejected");
+  });
+});
+
+describe("scalarPseudocount defaults (Appendix A.1)", () => {
+  it("spec test 1: betaFromRaw succeeds for all six sources on a surface-created corpus", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "pc", subjects: [] });
+    const def = s.inspectCorpus("pc") as { schema: ClaimSchema };
+    const sources = ["manual", "verification", "workflow", "heuristic", "llm", "imported"] as const;
+    for (const src of sources) {
+      expect(() => betaFromRaw(0.8, src, def.schema)).not.toThrow();
+    }
+  });
+
+  it("spec test 2: scalarPseudocount override merges over A.1 defaults", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "pc2", subjects: [], scalarPseudocount: { llm: 4 } });
+    const def = s.inspectCorpus("pc2") as { schema: ClaimSchema };
+    const pc = def.schema.scalarPseudocount;
+    expect(pc.llm).toBe(4);
+    expect(pc.manual).toBe(10);
+    expect(pc.verification).toBe(10);
+    expect(pc.workflow).toBe(5);
+    expect(pc.heuristic).toBe(5);
+    expect(pc.imported).toBe(2);
+  });
+
+  it("spec test 3: persisted sidecar has scalarPseudocount with exactly six numeric keys", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "pc3", subjects: [] });
+    const sidecar = JSON.parse(readFileSync(`${db}.corpora.json`, "utf8")) as { schema: { scalarPseudocount: Record<string, number> } }[];
+    const pc = sidecar[0].schema.scalarPseudocount;
+    const keys = Object.keys(pc);
+    expect(keys).toHaveLength(6);
+    for (const k of keys) {
+      expect(Number.isFinite(pc[k])).toBe(true);
+    }
+  });
+
+  it("spec test 3b: explicit undefined in override does not overwrite default", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "pc4", subjects: [], scalarPseudocount: { llm: undefined } });
+    const def = s.inspectCorpus("pc4") as { schema: ClaimSchema };
+    expect(def.schema.scalarPseudocount.llm).toBe(2);
+    const sidecar = JSON.parse(readFileSync(`${db}.corpora.json`, "utf8")) as { schema: { scalarPseudocount: Record<string, number> } }[];
+    const pc = sidecar[0].schema.scalarPseudocount;
+    expect(Object.keys(pc)).toHaveLength(6);
+    for (const k of Object.keys(pc)) {
+      expect(typeof pc[k]).toBe("number");
+    }
+  });
+
+  it("spec test 3c: createCorpus throws for NaN, Infinity, and negative overrides; accepts 0", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    expect(() => s.createCorpus({ id: "bad1", subjects: [], scalarPseudocount: { llm: NaN } }))
+      .toThrow(/scalarPseudocount.*llm.*NaN|llm.*scalarPseudocount/);
+    expect(() => s.createCorpus({ id: "bad2", subjects: [], scalarPseudocount: { llm: Infinity } }))
+      .toThrow(/scalarPseudocount.*llm|llm.*scalarPseudocount/);
+    expect(() => s.createCorpus({ id: "bad3", subjects: [], scalarPseudocount: { llm: -1 } }))
+      .toThrow(/scalarPseudocount.*llm|llm.*scalarPseudocount/);
+    // 0 must be accepted
+    expect(() => s.createCorpus({ id: "ok1", subjects: [], scalarPseudocount: { llm: 0 } })).not.toThrow();
+    const def = s.inspectCorpus("ok1") as { schema: ClaimSchema };
+    expect(def.schema.scalarPseudocount.llm).toBe(0);
   });
 });

@@ -3,7 +3,7 @@ import type { CorpusDef, CandidateClaim, Confidence, BatchResult } from "../inde
 import { scalarConfidence } from "../core/confidence.js";
 import { parseDsl, normalizeDsl } from "./dsl.js";
 import { loadCorpora, saveCorpora, ensureDir } from "./corpus-store.js";
-import { SURFACE_DEFAULTS, defaultConfidence } from "./types.js";
+import { SURFACE_DEFAULTS, defaultConfidence, DEFAULT_SCALAR_PSEUDOCOUNT } from "./types.js";
 import type {
   Session,
   SessionOptions,
@@ -59,6 +59,25 @@ export function openSession(opts: SessionOptions = {}): Session {
     mneme,
 
     createCorpus(spec: CorpusSpec): void {
+      // Validate override values before merging (principles-audit finding 13):
+      // NaN/Infinity survive the undefined-strip but JSON.stringify persists them as
+      // null — a non-empty map the backfill can't repair, slipping pseudocountFor's
+      // `=== undefined` check; negatives survive round-trip and produce negative α/β.
+      // 0 is legal (trust-the-prior-only, well-defined in scalarToBeta).
+      for (const [src, v] of Object.entries(spec.scalarPseudocount ?? {})) {
+        if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
+          throw new Error(
+            `invalid scalarPseudocount for source "${src}": ${v} (must be a finite number >= 0)`
+          );
+        }
+      }
+      // Strip explicit-undefined entries BEFORE spreading: a naive spread copies
+      // `{ llm: undefined }` over the default (re-arming pseudocountFor's throw) and
+      // JSON.stringify then drops the key — persisting a 5-key NON-EMPTY map the
+      // load-time backfill predicate can never repair. (Spec audit finding 2.5.)
+      const pcOverrides = Object.fromEntries(
+        Object.entries(spec.scalarPseudocount ?? {}).filter(([, v]) => v !== undefined)
+      );
       const version = spec.schemaVersion ?? SURFACE_DEFAULTS.schemaVersion;
       const def: CorpusDef = {
         id: spec.id,
@@ -71,7 +90,7 @@ export function openSession(opts: SessionOptions = {}): Session {
           // only accepts valid string-typed scope field descriptors anyway.
           scopeFields: (spec.scopeFields ?? {}) as Record<string, "string">,
           required: [],
-          scalarPseudocount: {},
+          scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT, ...pcOverrides },
         },
         defaults: {
           decayPolicy: { kind: "none" },
