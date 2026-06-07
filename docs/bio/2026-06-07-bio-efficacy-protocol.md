@@ -43,7 +43,7 @@ For two same-value claims with scalar raw 0.8 promoted at pseudocount 2 under th
 
 **Verdict:** PASS — all three property tests green (3/3 vitest assertions, exact float64 pins hold).
 
-Evidence: [`bench/RESULTS.md` — bio-efficacy: P0 (2026-06-07)](#bio-efficacy-p0-2026-06-07)
+Evidence: [`bench/RESULTS.md` — bio-efficacy: P0 (2026-06-07)](../../bench/RESULTS.md#bio-efficacy-p0-2026-06-07)
 
 ---
 
@@ -69,7 +69,7 @@ Small-n caveat: evidence of signal quality, not a production dial — knobs stay
 
 **Verdict:** FAIL — pooled signal is identical to scalar/MAX_MEAN across all held-out folds and all pseudocounts (TP=19 FP=198 for both; precision 0.088 << 62.5% gate; falseAbst 198/199 >> 5% ceiling; primary paired comparison shows no strict dominance — pooled does not strictly dominate scalar at any threshold).
 
-Evidence: [`bench/RESULTS.md` — bio-efficacy: P1 cross-fit (2026-06-07)](#bio-efficacy-p1-cross-fit-2026-06-07)
+Evidence: [`bench/RESULTS.md` — bio-efficacy: P1 cross-fit (2026-06-07)](../../bench/RESULTS.md#bio-efficacy-p1-cross-fit-2026-06-07)
 
 ---
 
@@ -87,7 +87,7 @@ Any deviation in either direction is a P2 finding. An improvement is reported bu
 
 **Verdict:** FAIL — KU updateCorrect measured 0.542 ≠ registered 0.556 (exact 3-decimal equality required; any deviation in either direction is a P2 finding per the pre-registered gate); recall@3 0.931 and recall@10 0.979 both match exactly.
 
-Evidence: [`bench/RESULTS.md` — bio-efficacy: P2 headline (2026-06-07)](#bio-efficacy-p2-headline-2026-06-07)
+Evidence: [`bench/RESULTS.md` — bio-efficacy: P2 headline (2026-06-07)](../../bench/RESULTS.md#bio-efficacy-p2-headline-2026-06-07)
 
 ---
 
@@ -103,7 +103,7 @@ Sweep results never gate. Any metric added after the first oracle run is labeled
 
 **Result:** Sweep results are non-gating per the pre-registered rule; pooled signal is invariant across pseudocounts {2, 5, 10} — P1 counts (TP/FP/precision) are identical at all three sweep points, showing no pseudocount sensitivity.
 
-Evidence: [`bench/RESULTS.md` — bio-efficacy: dial sweep (2026-06-07)](#bio-efficacy-dial-sweep-2026-06-07)
+Evidence: [`bench/RESULTS.md` — bio-efficacy: dial sweep (2026-06-07)](../../bench/RESULTS.md#bio-efficacy-dial-sweep-2026-06-07)
 
 ---
 
@@ -124,9 +124,13 @@ Evidence: [`bench/RESULTS.md` — bio-efficacy: dial sweep (2026-06-07)](#bio-ef
 
 **Methodology note (standing):** judge → human-validate → compile-to-rules → shrink. Rule-layer measurement is DEFERRED (normalization holds until window review ~2026-06-20; this protocol must not contaminate that hold).
 
-**Verdict:** UNDERPOWERED — arm D harness motion is declared out of scope in this protocol ("Arm-D harness motion (deferred until bio attaches)"); the capstone run through bio's gateway/ledger cannot be executed until the bio layer attaches, so the reproduction gate cannot be evaluated.
+**Verdict:** NOT EVALUABLE — the reproduction gate awaits bio attachment (the
+"Arm-D harness motion (deferred until bio attaches)" out-of-scope declaration
+applies); gate pins (0.556 / 0.931 / 0.979 / 0.528) remain binding for when bio
+attaches. (UNDERPOWERED is a P1-only token per the registered fill format and is
+not used here — spec-review correction.)
 
-Evidence: [`bench/RESULTS.md` — bio-efficacy: arm D (2026-06-07)](#bio-efficacy-arm-d-2026-06-07)
+Evidence: [`bench/RESULTS.md` — bio-efficacy: arm D (2026-06-07)](../../bench/RESULTS.md#bio-efficacy-arm-d-2026-06-07)
 
 ---
 
