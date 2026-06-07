@@ -223,3 +223,44 @@ in place: structured outputs (`output_config.format`) in `realLlm`, 4-layer leni
 the API message, per-reason skip accounting. **Protocol: always run
 `bench/longmemeval/manual/smoke-one-call.ts` (~1 cent, prints an explicit VERDICT)
 before any bulk extraction run.**
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking jaccard in all passes; scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.5 | 0.417 | 0.493 | 0.91 | 0.965 | 1 | 0.846 | 0 | 486 | 136 | 13 |
+| jaccard | 0.6 | 0.403 | 0.493 | 0.91 | 0.965 | 1 | 0.843 | 0 | 166 | 72 | 8 |
+| jaccard | 0.7 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 19 | 12 | 4 |
+| jaccard | 0.8 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 2 | 2 | 2 |
+| jaccard | 0.9 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| hybrid | 0.5 | 0.903 | 0.493 | 0.618 | 0.688 | 1 | 0.618 | 0 | 4875 | 229 | 79 |
+| hybrid | 0.6 | 0.903 | 0.493 | 0.618 | 0.688 | 1 | 0.618 | 0 | 4875 | 229 | 79 |
+| hybrid | 0.7 | 0.903 | 0.493 | 0.618 | 0.688 | 1 | 0.618 | 0 | 4875 | 229 | 79 |
+| hybrid | 0.8 | 0.903 | 0.493 | 0.625 | 0.694 | 1 | 0.618 | 0 | 4826 | 229 | 79 |
+| hybrid | 0.9 | 0.625 | 0.493 | 0.868 | 0.972 | 1 | 0.822 | 0 | 1769 | 225 | 30 |
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking jaccard in all passes; scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.94 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.96 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.98 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| hybrid | 0.92 | 0.556 | 0.493 | 0.896 | 0.965 | 1 | 0.839 | 0 | 1078 | 208 | 18 |
+| hybrid | 0.94 | 0.486 | 0.493 | 0.896 | 0.965 | 1 | 0.843 | 0 | 494 | 173 | 8 |
+| hybrid | 0.96 | 0.431 | 0.493 | 0.91 | 0.965 | 1 | 0.842 | 0 | 187 | 102 | 5 |
+| hybrid | 0.98 | 0.417 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 51 | 37 | 2 |
+
+### Sweep conclusions (2026-06-06)
+
+1. Drift at oracle scale is SEMANTIC: jaccard merges nothing above theta 0.9 and moves no metric; all lift comes from the embedding scorer (bge-base cosine via hybrid-max).
+2. Key matching recovers up to +22.2pp KU updateCorrect on real extraction drift (0.403 -> 0.625 at hybrid theta 0.90, recall@3 -4.9pp, recall@10 +0.7pp). Pairs-only merging (theta 0.98) is free: +1.4pp at zero recall cost. The degenerate mega-merge ceiling (0.903) shows ~90% of KU questions have the correct claim present - the failure mode is key identity, not retrieval.
+3. No clean threshold exists (smooth precision/recall dial; maxComponent grows 2 -> 79 as theta drops). Empirical vindication of detect -> declare -> contest: blind auto-merge cannot capture the lift safely; a ratification loop over theta ~0.92-0.94 census candidates can. Auto-suggest dial calibration: SUGGEST at ~0.92, never auto-merge.
+4. Discovered product bug en route: alias maps + scalar confidence + same-value drifted claims crash EVIDENCE_POOLED (dedupe is alias-blind). Fixed via DetectionOptions.evidencePoolingRule (default unchanged); MCP recall follow-up open.
