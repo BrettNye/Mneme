@@ -771,3 +771,65 @@ describe("recall/census - scalar pooling under aliases", () => {
     s.close();
   });
 });
+
+describe("recall — coverage annotation + provenance handles", () => {
+  it("reports missing entities with the auditable warning wording", async () => {
+    const s = freshSession();
+    remember(s, { subject: "user", key: "accommodation", value: "Airbnb", corpus: "cov" });
+    const r = await recall(s, { about: "When did I book the Airbnb in Sacramento?", corpus: "cov" }, jaccardDeps);
+    expect(r.coverage.missing).toEqual(["Sacramento"]);
+    expect(r.coverage.entities).toEqual([
+      { text: "Airbnb", supported: true },
+      { text: "Sacramento", supported: false },
+    ]);
+    expect(r.warnings?.some((w) => w.includes("no claim available to this recall") && w.includes("'Sacramento'"))).toBe(true);
+    s.close();
+  });
+
+  it("fully covered question: coverage present, no coverage warning", async () => {
+    const s = freshSession();
+    remember(s, { subject: "user", key: "city", value: "Sacramento trip", corpus: "cov2" });
+    const r = await recall(s, { about: "What about Sacramento?", corpus: "cov2" }, jaccardDeps);
+    expect(r.coverage.missing).toEqual([]);
+    expect(r.warnings?.some((w) => w.includes("no claim available"))).toBeFalsy();
+    s.close();
+  });
+
+  it("basis is PRE-knob: a floor-dropped claim still counts as available", async () => {
+    const s = freshSession();
+    remember(s, { subject: "user", key: "note", value: "Sacramento mention", corpus: "cov3" });
+    // relevanceFloor 0.99 drops everything from matches, but the claim was AVAILABLE
+    const r = await recall(s, { about: "Sacramento?", corpus: "cov3", relevanceFloor: 0.99 }, jaccardDeps);
+    expect(r.matches).toEqual([]);
+    expect(r.coverage.missing).toEqual([]); // Sacramento was available pre-knob
+    s.close();
+  });
+
+  it("empty corpus: every entity missing and the warning fires", async () => {
+    const s = freshSession();
+    ensureCorpus(s, "cov-empty");
+    const r = await recall(s, { about: "Anything about Sacramento?", corpus: "cov-empty" }, jaccardDeps);
+    expect(r.coverage.missing).toEqual(["Anything", "Sacramento"]);
+    expect(r.warnings?.some((w) => w.includes("no claim available to this recall"))).toBe(true);
+    s.close();
+  });
+
+  it("UNKNOWN corpus early-return still carries all-missing coverage + warning (audit M1)", async () => {
+    const s = freshSession();
+    const r = await recall(s, { about: "Anything about Sacramento?", corpus: "never-created" }, jaccardDeps);
+    expect(r.matches).toEqual([]);
+    expect(r.coverage.missing).toEqual(["Anything", "Sacramento"]);
+    expect(r.warnings?.some((w) => w.includes("no claim available to this recall"))).toBe(true);
+    s.close();
+  });
+
+  it("matches carry id and tags from the underlying claim", async () => {
+    const s = freshSession();
+    remember(s, { subject: "user", key: "editor", value: "vim", corpus: "prov", tags: ["session:s1"] });
+    const r = await recall(s, { about: "editor", corpus: "prov" }, jaccardDeps);
+    expect(r.matches[0].id).toEqual(expect.any(String));
+    expect(r.matches[0].id.length).toBeGreaterThan(0);
+    expect(r.matches[0].tags).toContain("session:s1");
+    s.close();
+  });
+});

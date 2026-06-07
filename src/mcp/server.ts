@@ -127,6 +127,8 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
             value: z.any().describe("the claim value (any JSON)"),
             confidence: z.number().describe("point estimate of the claim's confidence, 0..1"),
             score: z.number().describe("similarity score against the query"),
+            id: z.string().describe("claim id — provenance handle to cite the exact claim"),
+            tags: z.array(z.string()).describe("claim tags (e.g. session:...) — attribution handle"),
           }),
         ),
         topScore: z.number().optional().describe("pre-knob top similarity score; present when the corpus has at least one scored claim"),
