@@ -35,6 +35,7 @@ import { scoreQuestion, aggregate, type QuestionScore, type ScoreRow } from "../
 import { EXTRACTION_MODEL, PROMPT_VERSION } from "../../convert/longmemeval.js";
 import { MANUAL_KEY_CARDINALITY } from "../run.js";
 import { simJaccard } from "../../../src/algebra/similarity.js";
+import { RULE } from "../../../src/distribution/rules.js";
 import { EmbeddingCache, cosineOver, hybridMax } from "../../../src/index.js";
 import { warmEmbeddings } from "../../../src/algebra/embedding.js";
 import { createLocalEmbeddingAdapter } from "../embeddings-local.js";
@@ -132,7 +133,17 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
       qstates.push({ q, corpusId: `lme-${q.question_id}`, keyCounts });
     }
 
-    const armAOpts = { k: MAX_K, keyCardinality: MANUAL_KEY_CARDINALITY };
+    // MAX_MEAN pooling: extraction claims are SCALAR-confidence; canonical
+    // grouping co-locates same-value claims across drifted keys (⊕_dedupe is
+    // alias-blind) and the scalar binding rejects EVIDENCE_POOLED. MAX_MEAN is
+    // the conservative scalar choice. Applied uniformly INCLUDING the baseline
+    // pass — pooling never fires there (dedupe collapses same-key duplicates
+    // first), which the sanity gate verifies by reproducing the recorded value.
+    const armAOpts = {
+      k: MAX_K,
+      keyCardinality: MANUAL_KEY_CARDINALITY,
+      evidencePoolingRule: RULE.MAX_MEAN,
+    };
     const cells: SweepCell[] = [];
 
     // --- baseline pass (no aliases) + sanity gate ---

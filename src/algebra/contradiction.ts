@@ -13,6 +13,16 @@ export interface DetectionOptions {
   keyCardinality?: Record<string, "single" | "multi">;
   /** Variant keys mapped to their canonical key; grouping and cardinality use canonical(k). */
   keyAliases?: KeyAliasMap;
+  /**
+   * Rule used to pool same-value confidences within a contested cluster.
+   * Default RULE.EVIDENCE_POOLED (unchanged). Scalar corpora must supply a
+   * scalar-supported rule (e.g. RULE.MAX_MEAN — conservative: agreement never
+   * decreases confidence, never invents evidence) when canonical grouping can
+   * co-locate same-value claims, because ⊕_dedupe is alias-blind and the
+   * scalar binding rejects EVIDENCE_POOLED until pseudocount promotion lands
+   * (C7 / bio slice). Discovered by the key-matching oracle sweep, 2026-06-06.
+   */
+  evidencePoolingRule?: string;
 }
 
 const canonicalKeyOf = (key: string, aliases?: KeyAliasMap): string => aliases?.[key] ?? key;
@@ -99,10 +109,11 @@ export function clustersOf(corpus: Corpus, threshold: number, opts?: DetectionOp
 
       const binding = bindingFor(distribution);
 
-      // Fold left-to-right via EVIDENCE_POOLED
+      // Fold left-to-right via the pooling rule (default EVIDENCE_POOLED)
+      const poolingRule = opts?.evidencePoolingRule ?? RULE.EVIDENCE_POOLED;
       let pooledParams = claims[0].confidence.parameters;
       for (let i = 1; i < claims.length; i++) {
-        pooledParams = binding.combine(RULE.EVIDENCE_POOLED, pooledParams, claims[i].confidence.parameters);
+        pooledParams = binding.combine(poolingRule, pooledParams, claims[i].confidence.parameters);
       }
 
       const pooledMean = binding.mean(pooledParams);
