@@ -12,6 +12,14 @@ This document pre-registers the success gates, thresholds, decision rule, and co
 
 **Split definition:** the deterministic sha256 question-id split is implemented in `bench/longmemeval/manual/holdout.ts` (`isTrain`). Every abstention question is evaluated held-out exactly once across the two cross-fit folds.
 
+**Verdict fill format:** each `PENDING` slot is replaced with the single token
+**PASS**, **FAIL**, or **UNDERPOWERED** (P1 only), followed by one sentence naming
+the decision-rule branch applied. **Evidence anchor format (binding):** each
+evidence link resolves to a RESULTS.md heading of exactly the form
+`### bio-efficacy: <slot> (YYYY-MM-DD)` where `<slot>` ∈
+{`P1 cross-fit`, `P2 headline`, `dial sweep`, `arm D`} — the runner MUST use these
+heading strings so the links compile the day the anchors are created.
+
 ---
 
 ## Arm P — pooling/promotion gate
@@ -110,7 +118,7 @@ Evidence link: see `bench/RESULTS.md` [#bio-dial-sweep dated anchor — filled a
 
 **Anchor-referenced, never copied:** lift decomposition, alias counts, and the per-band judge agreement table are referenced by the dated heading anchor in `bench/RESULTS.md`. The earlier "95%→17% band precision" figure has no committed provenance and is dropped from registration.
 
-**Reproduction gate:** a capstone-style run through bio's gateway/ledger must reproduce the citable numbers exactly, as the in-process capstone did. Judge port follows the EmbeddingAdapter precedent (seam when bio attaches, one adapter).
+**Reproduction gate:** a capstone-style run through bio's gateway/ledger must reproduce the citable numbers exactly, as the in-process capstone did. **Binary:** any deviation in any pinned metric (exact, 3-decimal — the P2 convention) is a gate fail. Judge port follows the EmbeddingAdapter precedent (seam when bio attaches, one adapter).
 
 **Methodology note (standing):** judge → human-validate → compile-to-rules → shrink. Rule-layer measurement is DEFERRED (normalization holds until window review ~2026-06-20; this protocol must not contaminate that hold).
 
