@@ -32,6 +32,8 @@ import { warmValues } from "../algebra/embedding.js";
 import type { EmbeddingState } from "./embeddings.js";
 import { KEY_ALIAS_KEY, aliasMapOf, keyFamilyOf } from "../retrieval/key-alias.js";
 import type { KeyAliasMap } from "../retrieval/key-alias.js";
+import { entityTokensOf, coverageOf } from "../retrieval/coverage.js";
+import type { CoverageReport } from "../retrieval/coverage.js";
 import type { Corpus as AlgebraCorpus } from "../algebra/types.js";
 import type { EvalContext } from "../algebra/expression.js";
 
@@ -177,6 +179,10 @@ export interface RecallMatch {
   value: unknown;
   confidence: number;
   score: number;
+  /** Claim id — provenance handle so agents can cite the exact claim. */
+  id: string;
+  /** Claim tags (e.g. session:...) — attribution handle. */
+  tags: string[];
 }
 export interface RecallResult {
   corpus: string;
@@ -195,6 +201,9 @@ export interface RecallResult {
    *  Present only when there is at least one warning; undefined otherwise.
    *  The server layer is responsible for surfacing these to the caller. */
   warnings?: string[];
+  /** Entity-coverage facts over the PRE-knob ranked survivors ("available to
+   *  this recall"). Always present; agent-in-the-loop refusal input. */
+  coverage: CoverageReport;
 }
 
 export async function recall(
@@ -207,18 +216,29 @@ export async function recall(
 
   const maxTokens = args.maxTokens ?? 2000;
   const limit = args.limit ?? 5;
-  const emptyResult: RecallResult = {
+  const emptyResult = {
     corpus: args.corpus,
     content: "",
-    matches: [],
+    matches: [] as RecallMatch[],
     abstained: false,
     rankFn: embeddings.rankFn,
   };
 
+  // Entity tokens computed once — used by the unknown-corpus early return AND
+  // the post-pipeline coverage computation.
+  const entities = entityTokensOf(args.about);
+  const coverageWarning = (missing: string[]): string =>
+    `question entities with no claim available to this recall: ${missing.map((m) => `'${m}'`).join(", ")}`;
+
   // Read-only: a recall against an unknown corpus returns empty — it MUST NOT create the
   // corpus (so the tool can honestly advertise readOnlyHint). remember() still ensures-on-write.
   if (!session.listCorpora().some((c) => c.id === args.corpus)) {
-    return emptyResult;
+    const coverage = coverageOf(entities, []); // unknown corpus: nothing available
+    return {
+      ...emptyResult,
+      coverage,
+      warnings: coverage.missing.length > 0 ? [coverageWarning(coverage.missing)] : undefined,
+    };
   }
 
   // ── Alias map loading ────────────────────────────────────────────────────────
@@ -304,6 +324,13 @@ export async function recall(
   // topScore: pre-knob, extracted immediately after canonical resolution + ranking.
   const topScore = ranked.scored[0]?.score;
 
+  // Entity coverage over the PRE-knob survivor set (the bench-validated basis;
+  // knobs affect what is returned, not what was available).
+  const coverage = coverageOf(entities, ranked.scored.map((s) => s.claim));
+  if (coverage.missing.length > 0) {
+    allWarnings.push(coverageWarning(coverage.missing));
+  }
+
   // In-memory knobs (pure RankedCorpus fns — NO second query):
   const abstainThreshold = args.abstainBelowTop ?? 0;
   const floorThreshold = args.relevanceFloor ?? 0;
@@ -324,6 +351,8 @@ export async function recall(
     value: s.claim.value,
     confidence: pointEstimate(s.claim.confidence),
     score: s.score,
+    id: s.claim.id,
+    tags: [...s.claim.tags],
   }));
 
   // In-memory κ compose (pure — no second query).
@@ -337,6 +366,7 @@ export async function recall(
     topScore,
     abstained,
     rankFn: embeddings.rankFn,
+    coverage,
     warnings: allWarnings.length > 0 ? allWarnings : undefined,
   };
 }

@@ -127,12 +127,18 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
             value: z.any().describe("the claim value (any JSON)"),
             confidence: z.number().describe("point estimate of the claim's confidence, 0..1"),
             score: z.number().describe("similarity score against the query"),
+            id: z.string().describe("claim id — provenance handle to cite the exact claim"),
+            tags: z.array(z.string()).describe("claim tags (e.g. session:...) — attribution handle"),
           }),
         ),
         topScore: z.number().optional().describe("pre-knob top similarity score; present when the corpus has at least one scored claim"),
         abstained: z.boolean().describe("true when abstainBelowTop was applied and the top score was below the threshold"),
         rankFn: z.string().describe("the similarity function name used for ranking (e.g. 'jaccard' or 'hybrid')"),
         warnings: z.array(z.string()).optional().describe("non-fatal warnings from alias loading or cardinality checking"),
+        coverage: z.object({
+          entities: z.array(z.object({ text: z.string(), supported: z.boolean() })),
+          missing: z.array(z.string()),
+        }).describe("entity-coverage facts over the pre-knob survivors; agents decide refusal"),
       },
     },
     async (a) => {
@@ -183,6 +189,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           topScore: r.topScore,
           abstained: r.abstained,
           rankFn: r.rankFn,
+          coverage: r.coverage,
           warnings: r.warnings,
         },
       };

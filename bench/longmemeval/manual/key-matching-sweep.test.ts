@@ -64,3 +64,26 @@ it("--ratified with no matching approved pairs is a baseline identity and adds a
   expect(ratified!.aliases).toBe(0); // approved pair never co-occurs in fixture corpora
   expect(ratified!.rows).toEqual(baseline!.rows); // identity
 }, 120_000);
+
+it("--agent-decides adds an agent cell (fixtures fully covered -> identity with ratified)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "agent-test-"));
+  const judgments = join(dir, "judgments.jsonl");
+  writeFileSync(
+    judgments,
+    JSON.stringify({ kind: "key-ratify-header", model: "x", promptVersion: "ratify-v1", suggestTheta: 0.92 }) + "\n" +
+      JSON.stringify({ a: "no such key", b: "also absent", same: true, reason: "test", score: 0.95 }) + "\n",
+    "utf8",
+  );
+  let cells: SweepCell[] = [];
+  const code = await main(
+    ["--file", fixture("dataset.json"), "--claims", fixture("claims.jsonl"), "--thetas", "0.99", "--ratified", judgments, "--agent-decides"],
+    { collect: (c) => (cells = c) },
+  );
+  expect(code).toBe(0);
+  const agent = cells.find((c) => c.scorer === "agent");
+  expect(agent).toBeDefined();
+  expect(agent!.rows.length).toBeGreaterThan(0);
+}, 120_000);

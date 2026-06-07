@@ -523,4 +523,27 @@ describe("mneme MCP server (key_census wiring)", () => {
       errorSpy.mockRestore();
     }
   });
+
+  it("recall structuredContent carries coverage and match provenance handles", async () => {
+    const { client } = await connected("covsrv");
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", key: "accommodation", value: "Airbnb", tags: ["session:s1"] },
+    });
+    const res = (await client.callTool({
+      name: "recall",
+      arguments: { about: "When did I book the Airbnb in Sacramento?" },
+    })) as {
+      structuredContent?: {
+        coverage: { entities: { text: string; supported: boolean }[]; missing: string[] };
+        matches: { id: string; tags: string[] }[];
+        warnings?: string[];
+      };
+    };
+    expect(res.structuredContent?.coverage.missing).toEqual(["Sacramento"]);
+    expect(res.structuredContent?.matches[0]?.id).toEqual(expect.any(String));
+    expect(res.structuredContent?.matches[0]?.tags).toContain("session:s1");
+    expect(res.structuredContent?.warnings?.some((w) => w.includes("no claim available to this recall"))).toBe(true);
+    await client.close();
+  });
 });

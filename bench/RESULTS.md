@@ -325,3 +325,20 @@ Per-question topScore under the citable config (ratified-min094 + hybrid ranking
 ### Abstention deep-dive: entity coverage beats every score threshold (2026-06-07)
 
 Multi-signal study (6 signals x 2 directions, train/holdout): no score-derived signal nets positive (best: top1 @ 0.868 -> 7/11 caught but 20/96 false). Qualitative inspection revealed the structure: LME abstention questions are MISSING-ENTITY questions (Sacramento / Porsche / Tom absent) on well-covered TOPICS - invisible to similarity by construction. New signal entityCoverage (fraction of question entity-tokens present in surviving claim text): 5/11 caught at only 3/96 false (62.5% flag precision vs 26% for top1) - the first NET-POSITIVE abstention mechanism, compositional, no LLM, and EXPLAINABLE ("entity X has zero corpus support"). Residual class (entities present, attribute missing) remains the bio-confidence case. Product implication: coverage ANNOTATION on recall warnings (agent-in-the-loop refusal), not silent auto-abstention. Small-n caveat: 19/11 train/holdout abstentions - signal-quality evidence, not a production dial.
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking: hybrid (integrity baseline always jaccard); scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | rank | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | jaccard | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| — | baseline | hybrid | 0.486 | 0.493 | 0.931 | 0.979 | 1 | 0.887 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | hybrid | 0.486 | 0.493 | 0.931 | 0.979 | 1 | 0.887 | 0 | 0 | 0 | 1 |
+| hybrid | 0.92 | hybrid | 0.625 | 0.493 | 0.917 | 0.979 | 1 | 0.861 | 0 | 1080 | 209 | 18 |
+| ratified | ratified | hybrid | 0.556 | 0.493 | 0.931 | 0.979 | 1 | 0.87 | 0 | 225 | 118 | 4 |
+| agent | agent-decides | hybrid | 0.556 | 0.486 | 0.924 | 0.972 | 0.937 | 0.821 | 0.367 | 225 | 118 | 4 |
+
+### Agent-decides arm conclusions (2026-06-07)
+
+Trivial simulated-agent policy (decline when coverage fraction < 0.75 over the canonical-pipeline survivors - the validated operating point): ABS_correct 0 -> 0.367 (11/30, each refusal citing its missing entity) at the cost of 9 false declines (8 TR, 1 KU; 4.5% of answerable). Raw counts net +2; decisively positive where declining-correctly outweighs answering (the compliance value function). KU updateCorrect unchanged at 0.556. This is the FLOOR of what coverage annotation enables - the trivial policy has no conversation context; a real agent consumes the same structured facts with more information. Headline config remains 0.556/0.931/ABS-0; agent-decides is the option row.
