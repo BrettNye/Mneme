@@ -88,6 +88,7 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
       rank: { type: "string", default: "jaccard" },
       "agent-decides": { type: "boolean", default: false },
       distractors: { type: "string", default: "0" },
+      "skip-blind": { type: "boolean", default: false },
       "expect-update-correct": { type: "string" },
       "append-results": { type: "string" },
     },
@@ -272,7 +273,12 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
     }
 
     // --- sweep ---
-    for (const scorer of scorers) {
+    // --skip-blind: the blind-scorer arm memoizes K² pair scores per corpus —
+    // sized for oracle (~17 keys/q), it OOMs/stalls at high --distractors
+    // (~1,000+ keys/q). Stress runs need baselines + ratified only.
+    const blindScorers = values["skip-blind"] ? [] : scorers;
+    if (values["skip-blind"]) console.log("blind-scorer sweep skipped (--skip-blind)");
+    for (const scorer of blindScorers) {
       // Pair scores are theta-independent: memoize per question, filter per theta.
       const pairScores = qstates.map((s) => {
         const keys = [...s.keyCounts.keys()].sort();
