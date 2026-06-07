@@ -18,7 +18,11 @@ import { parseArgs } from "node:util";
 import { mkdtempSync, rmSync, readFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openSession } from "../../../src/surface/index.js";
+import { openSession, pipe, leaf } from "../../../src/surface/index.js";
+import type { Corpus as AlgebraCorpus } from "../../../src/algebra/types.js";
+import { canonicalReadStages } from "../../../src/retrieval/read-pipeline.js";
+import { entityTokensOf, coverageOf } from "../../../src/retrieval/coverage.js";
+import { evaluationInstant } from "../answer.js";
 import { markdownTable } from "../../lib/measure.js";
 import {
   CacheHeader,
@@ -47,7 +51,7 @@ const MAX_K = 10;
 
 export interface SweepCell {
   scorer: string;
-  theta: number | "baseline" | "ratified";
+  theta: number | "baseline" | "ratified" | "agent-decides";
   /** Ranking similarity fn for the answer arm ("jaccard" | "hybrid"). The
    *  jaccard-gated integrity baseline is always emitted; --rank hybrid adds
    *  hybrid-RANKED cells (abstention knobs stay OFF — calibration is a
@@ -82,6 +86,7 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
       raw: { type: "boolean", default: false },
       ratified: { type: "string" },
       rank: { type: "string", default: "jaccard" },
+      "agent-decides": { type: "boolean", default: false },
       "expect-update-correct": { type: "string" },
       "append-results": { type: "string" },
     },
@@ -265,6 +270,15 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
       }
     }
 
+    // --- agent-decides arm (coverage-annotation refusal, simulated agent) ---
+    // The PRODUCT ships coverage as an annotation; the AGENT decides refusal.
+    // This arm simulates the trivial agent policy at the VALIDATED operating
+    // point: decline when the coverage fraction over the canonical-pipeline
+    // survivors (the same pre-knob basis production recall annotates) drops
+    // below 0.75 (abstention-signals study: 5/11 caught, 3/96 false). Declined
+    // answerable questions pay full price in their metrics — no free lunch.
+    const AGENT_DECLINE_BELOW = 0.75;
+
     // --- ratified arm (judged census candidates → precision-by-judgment maps) ---
     if (values.ratified) {
       const approved = new Set<string>();
@@ -305,6 +319,61 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
         largestComponent: largest,
       });
       console.log(`pass done: scorer=ratified aliases=${aliases} affected=${affected}`);
+
+      if (values["agent-decides"]) {
+        const agentScores: QuestionScore[] = [];
+        let declines = 0;
+        const declinedByCategory = new Map<string, number>();
+        for (const s of qstates) {
+          const { map } = autoRatify(s.keyCounts, indicator, 1);
+          const t = evaluationInstant(s.q);
+          // The same survivor basis production recall annotates: canonical
+          // pipeline output, pre-knob (ρ only orders; the claim set is equal).
+          const survivors = session.mneme.query<AlgebraCorpus>(
+            s.corpusId,
+            pipe(
+              leaf(s.corpusId),
+              ...canonicalReadStages({
+                evaluationInstant: t,
+                keyCardinality: MANUAL_KEY_CARDINALITY,
+                keyAliases: map,
+                evidencePoolingRule: RULE.MAX_MEAN,
+              }),
+            ),
+            { evaluationClock: t },
+          );
+          const entityTokens = entityTokensOf(s.q.question);
+          const { missing } = coverageOf(entityTokens, survivors.claims);
+          const fraction = entityTokens.length
+            ? (entityTokens.length - missing.length) / entityTokens.length
+            : 1;
+          if (fraction < AGENT_DECLINE_BELOW) {
+            declines++;
+            const cat = categoryOf(s.q);
+            declinedByCategory.set(cat, (declinedByCategory.get(cat) ?? 0) + 1);
+            agentScores.push(scoreQuestion(s.q, { arm: "A", claims: [], abstained: true }, KS));
+          } else {
+            agentScores.push(
+              scoreQuestion(s.q, answerArmA(session, s.corpusId, s.q, { ...rankedOpts, keyAliases: map }), KS),
+            );
+          }
+        }
+        cells.push({
+          scorer: "agent",
+          theta: "agent-decides",
+          rank,
+          rows: aggregate(agentScores, KS),
+          aliases,
+          questionsAffected: affected,
+          largestComponent: largest,
+        });
+        console.log(
+          `pass done: scorer=agent declines=${declines} byCategory=${JSON.stringify([...declinedByCategory.entries()])}`,
+        );
+      }
+    } else if (values["agent-decides"]) {
+      logError("--agent-decides requires --ratified (the citable config's alias maps)");
+      return 1;
     }
 
     opts?.collect?.(cells);
