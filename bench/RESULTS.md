@@ -301,3 +301,19 @@ Artifacts: spot-check.ts (blind sheet + scorer), filled sheet, key-ratify-judgme
 ### Capstone re-certification on the validated-band config (2026-06-07)
 
 Production-loop re-run with key-ratify-judgments-min094.jsonl: KU updateCorrect 0.472, recall@1/3/10 = 0.493/0.903/0.965 - exact match with the harness validated-band row; hardening clean (0 conservation failures, 0 serving divergences). The CITABLE number now carries the same production certification as the full-band config.
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking: hybrid (integrity baseline always jaccard); scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | rank | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | jaccard | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| — | baseline | hybrid | 0.486 | 0.493 | 0.931 | 0.979 | 1 | 0.887 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | hybrid | 0.486 | 0.493 | 0.931 | 0.979 | 1 | 0.887 | 0 | 0 | 0 | 1 |
+| hybrid | 0.92 | hybrid | 0.625 | 0.493 | 0.917 | 0.979 | 1 | 0.861 | 0 | 1080 | 209 | 18 |
+| ratified | ratified | hybrid | 0.556 | 0.493 | 0.931 | 0.979 | 1 | 0.87 | 0 | 225 | 118 | 4 |
+
+### Hybrid-ranking arm conclusions (2026-06-07)
+
+Ranking was the frozen dial: every prior oracle cell ranked jaccard. Hybrid (bge) ranking ALONE lifts the no-alias baseline 0.403 -> 0.486 (+8.3pp) and improves recall@3 (+1.4pp), recall@10 (+1.4pp), TR recall@3 (+4.4pp) - no trade-off at oracle scale. STACKED with validated-band ratification: KU updateCorrect 0.556 (+15.3pp over baseline, 1.67x naive) with recall@3 0.931 ABOVE the original baseline - the old -1.4pp recall caveat is eliminated. Levers confirmed orthogonal (aliases choose survivors; ranking orders them). Production alignment: the MCP server already ranks hybrid, so this config is closer to production than the jaccard-ranked numbers were. recall@1 frozen at 0.493 across all 6 configs/both rankers - structural, noted. Abstention knobs still OFF (calibration is the next lever).
