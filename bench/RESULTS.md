@@ -283,3 +283,9 @@ Judge: claude-sonnet-4-6, ratify-v1, suggest band >=0.92 (1,192 unique census ca
 Ratified row: KU updateCorrect 0.403 -> 0.528 (+12.5pp, 1.31x baseline, 1.59x naive arm B) at -1.4pp recall@3 and unchanged recall@10, using 380 aliases (35% of blind-0.92 volume, maxComponent 7 vs 18). Per-alias lift efficiency 2.3x blind. Blind-0.92 scores higher updateCorrect (0.556) because false merges sometimes accidentally serve the newest claim - lift without precision; the ratified row is the honest, auditable number (every merge has a recorded reason).
 
 Open lever: the suggest band only exposed >=0.92 to judgment; true drift below 0.92 remains unrecovered (ceiling 0.903). Widening the band (e.g. >=0.85) with the same judge is the next increment toward the ceiling.
+
+### Capstone: production-loop replication (2026-06-06)
+
+The ratified benchmark re-run through the LITERAL product surfaces (in-process MCP server, real SQLite db): every claim via `remember`, candidates via `key_census` (229/229 hybrid), 358 alias ratifications written as supersedable ledger claims via `remember`, every question recalled via `recall` (229/229 served - the scalar-pooling fix verified at scale), scored from the same db with alias maps derived from the ledger (recall internals).
+
+RESULT: KU updateCorrect 0.528, recall@1/3/10 = 0.493/0.903/0.965 - byte-identical to the harness ratified row. The harness numbers ARE production numbers. Script: bench/longmemeval/manual/capstone-production-loop.ts (gate: --expect-update-correct fails loudly on divergence).
