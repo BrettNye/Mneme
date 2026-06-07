@@ -87,3 +87,23 @@ it("--agent-decides adds an agent cell (fixtures fully covered -> identity with 
   expect(agent).toBeDefined();
   expect(agent!.rows.length).toBeGreaterThan(0);
 }, 120_000);
+
+it("--distractors runs end-to-end on fixtures (corpora enlarged, no conservation errors)", async () => {
+  let cells: SweepCell[] = [];
+  const code = await main(
+    ["--file", fixture("dataset.json"), "--claims", fixture("claims.jsonl"), "--thetas", "0.99", "--distractors", "2"],
+    { collect: (c) => (cells = c) },
+  );
+  expect(code).toBe(0);
+  expect(cells.find((c) => c.theta === "baseline")).toBeDefined();
+});
+
+it("--distractors with --expect-update-correct is rejected (gate is oracle-calibrated)", async () => {
+  const errors: string[] = [];
+  const code = await main(
+    ["--file", fixture("dataset.json"), "--claims", fixture("claims.jsonl"), "--thetas", "0.99", "--distractors", "2", "--expect-update-correct", "0.403"],
+    { onError: (m) => errors.push(m) },
+  );
+  expect(code).toBe(1);
+  expect(errors.some((m) => m.includes("oracle-calibrated"))).toBe(true);
+});

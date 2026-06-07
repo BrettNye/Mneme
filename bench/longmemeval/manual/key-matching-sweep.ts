@@ -87,6 +87,7 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
       ratified: { type: "string" },
       rank: { type: "string", default: "jaccard" },
       "agent-decides": { type: "boolean", default: false },
+      distractors: { type: "string", default: "0" },
       "expect-update-correct": { type: "string" },
       "append-results": { type: "string" },
     },
@@ -110,6 +111,21 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
   const rank = String(values.rank);
   if (rank !== "jaccard" && rank !== "hybrid") {
     logError(`--rank must be "jaccard" or "hybrid", got "${rank}"`);
+    return 1;
+  }
+  // --distractors D: synthetic haystack rehearsal. Each question's corpus gets
+  // D x |own| additional claims pooled DETERMINISTICALLY from other questions
+  // (whole-question blocks, rotating from i+1). Bounds the middle: harder than
+  // oracle (crowded ranking, noisier census/coverage), easier than real
+  // haystack (cross-question distractors are less confusable than same-user
+  // sessions). $0 — reuses the existing extraction.
+  const distractors = parseInt(String(values.distractors), 10);
+  if (Number.isNaN(distractors) || distractors < 0) {
+    logError(`--distractors must be a non-negative integer, got "${values.distractors}"`);
+    return 1;
+  }
+  if (distractors > 0 && expectUpdateCorrect !== undefined) {
+    logError("--expect-update-correct is oracle-calibrated; omit it when --distractors > 0");
     return 1;
   }
 
@@ -143,12 +159,38 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
       records: ClaimRecordT[];
     }
     const qstates: QState[] = [];
-    for (const q of questions) {
-      const records = claimsFor(q, allClaims, { oracle: true });
-      ingestQuestion(session, q, records);
+    // Two passes: per-question evidence first, then deterministic distractor
+    // pooling (whole-question blocks rotating from i+1 until D x |own| added).
+    const perQuestion = questions.map((q) => claimsFor(q, allClaims, { oracle: true }));
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      const own = perQuestion[i];
+      let combined = own;
+      if (distractors > 0) {
+        const target = distractors * own.length;
+        // Dedup by record reference: evidence sessions can be SHARED across
+        // questions (perQuestion arrays alias the same allClaims objects), and
+        // ingestQuestion's conservation check rejects duplicate records.
+        const seen = new Set<ClaimRecordT>(own);
+        const extra: ClaimRecordT[] = [];
+        for (let step = 1; extra.length < target && step < questions.length; step++) {
+          for (const r of perQuestion[(i + step) % questions.length]) {
+            if (!seen.has(r)) {
+              seen.add(r);
+              extra.push(r);
+            }
+          }
+        }
+        combined = [...own, ...extra.slice(0, target)];
+      }
+      ingestQuestion(session, q, combined);
       const keyCounts = new Map<string, number>();
-      for (const r of records) keyCounts.set(r.key, (keyCounts.get(r.key) ?? 0) + 1);
-      qstates.push({ q, corpusId: `lme-${q.question_id}`, keyCounts, records });
+      for (const r of combined) keyCounts.set(r.key, (keyCounts.get(r.key) ?? 0) + 1);
+      qstates.push({ q, corpusId: `lme-${q.question_id}`, keyCounts, records: combined });
+    }
+    if (distractors > 0) {
+      const total = qstates.reduce((n, s) => n + s.records.length, 0);
+      console.log(`distractor mode: D=${distractors}, total ingested claims ${total} across ${qstates.length} corpora`);
     }
 
     // --- embedding adapter (shared by key-pair scorer and, with --rank hybrid, ranking) ---
