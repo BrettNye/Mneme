@@ -342,3 +342,93 @@ Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attri
 ### Agent-decides arm conclusions (2026-06-07)
 
 Trivial simulated-agent policy (decline when coverage fraction < 0.75 over the canonical-pipeline survivors - the validated operating point): ABS_correct 0 -> 0.367 (11/30, each refusal citing its missing entity) at the cost of 9 false declines (8 TR, 1 KU; 4.5% of answerable). Raw counts net +2; decisively positive where declining-correctly outweighs answering (the compliance value function). KU updateCorrect unchanged at 0.556. This is the FLOOR of what coverage annotation enables - the trivial policy has no conversation context; a real agent consumes the same structured facts with more information. Headline config remains 0.556/0.931/ABS-0; agent-decides is the option row.
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking: hybrid (integrity baseline always jaccard); scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | rank | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | jaccard | 0.389 | 0.444 | 0.84 | 0.958 | 0.976 | 0.761 | 0 | 0 | 0 | 1 |
+| — | baseline | hybrid | 0.431 | 0.479 | 0.944 | 0.979 | 1 | 0.854 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | hybrid | 0.431 | 0.479 | 0.944 | 0.979 | 1 | 0.854 | 0 | 0 | 0 | 1 |
+| hybrid | 0.92 | hybrid | 0.569 | 0.486 | 0.903 | 0.972 | 1 | 0.823 | 0 | 7791 | 229 | 37 |
+| ratified | ratified | hybrid | 0.5 | 0.479 | 0.924 | 0.972 | 1 | 0.836 | 0 | 1434 | 223 | 6 |
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking: hybrid (integrity baseline always jaccard); scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | rank | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | jaccard | 0.375 | 0.431 | 0.799 | 0.931 | 0.969 | 0.723 | 0 | 0 | 0 | 1 |
+| — | baseline | hybrid | 0.444 | 0.479 | 0.91 | 0.972 | 1 | 0.817 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | hybrid | 0.444 | 0.479 | 0.91 | 0.972 | 1 | 0.817 | 0 | 2 | 1 | 2 |
+| hybrid | 0.92 | hybrid | 0.569 | 0.486 | 0.868 | 0.951 | 1 | 0.817 | 0 | 15446 | 229 | 72 |
+| ratified | ratified | hybrid | 0.5 | 0.479 | 0.889 | 0.958 | 1 | 0.805 | 0 | 2732 | 229 | 7 |
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking: hybrid (integrity baseline always jaccard); scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | rank | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | jaccard | 0.347 | 0.424 | 0.729 | 0.896 | 0.937 | 0.664 | 0 | 0 | 0 | 1 |
+| — | baseline | hybrid | 0.403 | 0.465 | 0.896 | 0.972 | 0.976 | 0.766 | 0 | 0 | 0 | 1 |
+| ratified | ratified | hybrid | 0.458 | 0.465 | 0.868 | 0.958 | 0.984 | 0.76 | 0 | 6480 | 229 | 9 |
+
+---
+
+## Bio efficacy oracle run (2026-06-07)
+
+Protocol: docs/bio/2026-06-07-bio-efficacy-protocol.md. Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl. Ratified: bench/longmemeval/manual/data/key-ratify-judgments-min094.jsonl (201 approved pairs). Pseudocount sweep {2, 5, 10}. One shared EmbeddingCache + warmEmbeddings pass (bge-base, 3803 keys + 229 questions). 229 questions total: 30 abstention, 199 answerable.
+
+**Harness invocation:**
+```
+npx tsx bench/longmemeval/manual/pooling-efficacy.ts \
+  --file bench/datasets/longmemeval/longmemeval_oracle_target.json \
+  --claims bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl \
+  --ratified bench/longmemeval/manual/data/key-ratify-judgments-min094.jsonl \
+  --expect-update-correct 0.556 --expect-recall3 0.931 --expect-recall10 0.979
+```
+
+Harness exit code: 1 (P2 gate abort on KU updateCorrect mismatch — measured outcome, not instrument error).
+
+### bio-efficacy: P0 (2026-06-07)
+
+P0 property tests (vitest): 3/3 PASS. Command: `npx vitest run bench/longmemeval/manual/pooling-efficacy.test.ts`
+
+### bio-efficacy: P1 cross-fit (2026-06-07)
+
+Cross-fit P1 sweep table (pooled + baseline rows). All pooled and scalar signals are identical across all pseudocounts — pooled confidence carries no additional separation over the constant scalar baseline.
+
+| pc | signal | TP | FP | precision | falseAbst | totalResidual | totalAnswerable | underpowered |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2 | pooled | 19 | 198 | 0.088 | 198 | 19 | 199 | - |
+| 2 | scalar/MAX_MEAN | 19 | 198 | 0.088 | 198 | 19 | 199 | - |
+| 5 | pooled | 19 | 198 | 0.088 | 198 | 19 | 199 | - |
+| 5 | scalar/MAX_MEAN | 19 | 198 | 0.088 | 198 | 19 | 199 | - |
+| 10 | pooled | 19 | 198 | 0.088 | 198 | 19 | 199 | - |
+| 10 | scalar/MAX_MEAN | 19 | 198 | 0.088 | 198 | 19 | 199 | - |
+
+Gates checked (pc=2, held-out pooled): precision 0.088 << 62.5%; falseAbst 198/199 = 99.5% >> 5% ceiling; pooled TP == scalar TP (no strict dominance). All three conditions fail.
+
+### bio-efficacy: P2 headline (2026-06-07)
+
+P2 metrics at pc=2 (citable cell, EVIDENCE_POOLED + hybrid ranking + ratified-min094 aliases):
+
+| pc | metric | value |
+| --- | --- | --- |
+| 2 | KU updateCorrect | 0.542 |
+| 2 | recall@3 | 0.931 |
+| 2 | recall@10 | 0.979 |
+
+KU updateCorrect 0.542 ≠ registered 0.556 (GATE FAIL). recall@3 0.931 = registered 0.931 (PASS). recall@10 0.979 = registered 0.979 (PASS). Cause not investigated in this run; see the protocol's registered expectation for candidate mechanisms (⊕_dedupe/confidence-threshold side effects of promotion).
+
+### bio-efficacy: dial sweep (2026-06-07)
+
+Pseudocount sweep {2, 5, 10}: pooled signal is identical to scalar at all three sweep points. P1 counts (TP/FP/precision) are invariant across pseudocounts. No movement with pseudocount magnitude.
+
+### bio-efficacy: arm D (2026-06-07)
+
+Arm D (dream-ratification baseline pin) harness motion is declared out of scope in the protocol ("Arm-D harness motion (deferred until bio attaches)"). No capstone run through bio's gateway/ledger was executed.
