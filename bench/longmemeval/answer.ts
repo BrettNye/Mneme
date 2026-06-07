@@ -18,6 +18,10 @@ export interface AnswerOpts {
   conflictThreshold?: number;
   /** Per-key cardinality map forwarded to detection (additive keys never contest). */
   keyCardinality?: Record<string, "single" | "multi">;
+  /** Flat variant→canonical alias map forwarded to detection (⊥ groups on the
+   *  canonical key). Bench callers supply experiment-computed maps; absent =
+   *  today's behavior (key-matching oracle experiment, 2026-06-06 spec). */
+  keyAliases?: Record<string, string>;
   /** Jaccard cutoff for the dedupe stage — a measured dial. Default 0.5. */
   dedupeCutoff?: number;
   /** Registered similarity fn for ranking; default "jaccard" — never probes the registry. */
@@ -109,6 +113,7 @@ export function answerArmA(
     ...canonicalReadStages({
       evaluationInstant: t,
       keyCardinality: opts.keyCardinality,
+      keyAliases: opts.keyAliases,
       conflictThreshold: opts.conflictThreshold,
       dedupe: { fn: "jaccard", cutoff: opts.dedupeCutoff ?? 0.5 },
     }),

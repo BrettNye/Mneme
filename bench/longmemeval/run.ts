@@ -68,7 +68,7 @@ const TARGET_CATEGORIES = new Set(["knowledge-update", "temporal-reasoning", "ab
 // Manual-sample cardinality hints (keys that are additive / multi-value)
 // ---------------------------------------------------------------------------
 
-const MANUAL_KEY_CARDINALITY: Record<string, "single" | "multi"> = {
+export const MANUAL_KEY_CARDINALITY: Record<string, "single" | "multi"> = {
   cooking_interest: "multi",
   work_tasks: "multi",
   activity: "multi",

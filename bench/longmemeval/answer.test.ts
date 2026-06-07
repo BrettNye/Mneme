@@ -988,3 +988,35 @@ it("recipe-based arm A matches the hand-rolled stage list claim-for-claim", () =
 
   close();
 });
+
+// ---------------------------------------------------------------------------
+// keyAliases: drifted-key pair contests under the alias map (oracle experiment plumb)
+// ---------------------------------------------------------------------------
+
+it("arm A with keyAliases resolves a DRIFTED-key superseding pair; without the map both serve", () => {
+  const { session, close, corpusId, q } = seedSupersedingPair(); // employer: Initech -> Globex
+  // Newer claim under a drifted key (extraction-style drift)
+  session.write(corpusId, {
+    subject: "employer",
+    key: "current employer",
+    value: "Hooli",
+    valid: { from: new Date("2023-11-01T10:00:00Z").getTime(), to: Infinity },
+    tags: ["session:sess-ku-9", "turn:0"],
+    confidence: 0.9,
+  });
+
+  // Without the map: drifted key never contests; Globex AND Hooli both serve
+  const plain = answerArmA(session, corpusId, q, { k: 10 });
+  expect(plain.claims.map((c) => c.value)).toEqual(expect.arrayContaining(["Globex", "Hooli"]));
+
+  // With the map: drifted key groups canonically; only the newest survives
+  const aliased = answerArmA(session, corpusId, q, {
+    k: 10,
+    keyAliases: { "current employer": "employer" },
+  });
+  const values = aliased.claims.map((c) => c.value);
+  expect(values).toContain("Hooli");
+  expect(values).not.toContain("Globex");
+  expect(values).not.toContain("Initech");
+  close();
+});
