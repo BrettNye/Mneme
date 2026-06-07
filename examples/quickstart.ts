@@ -17,6 +17,7 @@ import {
   delta,
   astLeaf,
   astSigma,
+  DEFAULT_SCALAR_PSEUDOCOUNT,
 } from "../src/index.js";
 // index.ts exports the catalog corpus as `CorpusDef` and the algebra corpus as `Corpus`.
 import type { CorpusDef, ComposedContext, Corpus } from "../src/index.js";
@@ -42,7 +43,7 @@ const corpusDef: CorpusDef = {
     subjects: ["host:web-01", "host:web-02"],
     scopeFields: {},
     required: [],
-    scalarPseudocount: {},
+    scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT },
   },
   defaults: {
     decayPolicy: { kind: "none" },

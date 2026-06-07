@@ -10,7 +10,7 @@
  * and consolidates. It does not replace claims — it learns which ones matter.
  */
 import { fileURLToPath } from "node:url";
-import { createMneme, createSqliteAdapter, createBioMemory } from "../src/index.js";
+import { createMneme, createSqliteAdapter, createBioMemory, DEFAULT_SCALAR_PSEUDOCOUNT } from "../src/index.js";
 import type { CorpusDef, RetrievalContext, Claim } from "../src/index.js";
 
 export interface BioQuickstartResult {
@@ -33,7 +33,7 @@ const corpusDef: CorpusDef = {
     subjects: ["project"],
     scopeFields: {},
     required: [],
-    scalarPseudocount: {},
+    scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT },
   },
   defaults: {
     decayPolicy: { kind: "none" },
