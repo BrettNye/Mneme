@@ -5,9 +5,9 @@ created: 2026-06-07
 
 ```mermaid
 flowchart TD
-    task-1["task-1: createCorpus complete pseudocount map<br/>files: src/surface/types.ts +2 more"]
-    task-2["task-2: load-time C7 backfill<br/>files: src/surface/session.ts +1 more"]
-    task-3["task-3: barrel exports + examples wiring<br/>files: src/surface/index.ts +4 more"]
+    task-1["task-1: createCorpus complete pseudocount map<br/>files: src/surface/types.ts +2 more"]:::done
+    task-2["task-2: load-time C7 backfill<br/>files: src/surface/session.ts +1 more"]:::done
+    task-3["task-3: barrel exports + examples wiring<br/>files: src/surface/index.ts +4 more"]:::done
     task-1 --> task-2
     task-1 --> task-3
 
@@ -57,7 +57,7 @@ files:
   - src/surface/types.ts
   - src/surface/session.ts
   - src/surface/session.test.ts
-status: pending
+status: done
 ```
 
 Declare `DEFAULT_SCALAR_PSEUDOCOUNT` (Appendix A.1 trust tiers) in
@@ -179,7 +179,7 @@ depends_on: [task-1]
 files:
   - src/surface/session.ts
   - src/surface/session.test.ts
-status: pending
+status: done
 ```
 
 In `openSession`'s corpus re-registration loop, repair persisted defs carrying the C7
@@ -272,7 +272,7 @@ files:
   - src/core/source-trust.ts
   - examples/quickstart.ts
   - examples/bio-quickstart.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
