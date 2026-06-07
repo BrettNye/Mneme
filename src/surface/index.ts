@@ -5,6 +5,7 @@ export type { RowMapper } from "./import.js";
 export { formatQueryResult, formatClaim } from "./format.js";
 export { pipe, leaf, sigma, rho, kappa } from "../index.js";
 export { pointEstimate } from "../core/confidence.js";
+export { DEFAULT_SCALAR_PSEUDOCOUNT } from "./types.js";
 export type {
   Session,
   SessionOptions,

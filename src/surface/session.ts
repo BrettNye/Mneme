@@ -3,7 +3,7 @@ import type { CorpusDef, CandidateClaim, Confidence, BatchResult } from "../inde
 import { scalarConfidence } from "../core/confidence.js";
 import { parseDsl, normalizeDsl } from "./dsl.js";
 import { loadCorpora, saveCorpora, ensureDir } from "./corpus-store.js";
-import { SURFACE_DEFAULTS, defaultConfidence } from "./types.js";
+import { SURFACE_DEFAULTS, defaultConfidence, DEFAULT_SCALAR_PSEUDOCOUNT } from "./types.js";
 import type {
   Session,
   SessionOptions,
@@ -22,8 +22,24 @@ export function openSession(opts: SessionOptions = {}): Session {
   const mneme = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
 
   // Re-register any corpora persisted from a previous session.
+  // Repair any defs carrying the C7 bug signature (absent-OR-empty scalarPseudocount).
   const defs: CorpusDef[] = loadCorpora(dbPath);
-  for (const d of defs) mneme.createCorpus(d);
+  let repaired = false;
+  for (const d of defs) {
+    const pc = d.schema.scalarPseudocount;
+    if (pc == null || Object.keys(pc).length === 0) {
+      // C7 bug signature: surface used to persist {} (and older sidecars may lack
+      // the field). Post-task-1, createCorpus always persists a complete map, so
+      // this predicate stays forever-unambiguous.
+      d.schema.scalarPseudocount = { ...DEFAULT_SCALAR_PSEUDOCOUNT };
+      console.error(
+        `${dbPath}.corpora.json: backfilled scalarPseudocount for '${d.id}' (C7 repair, A.1 defaults)`
+      );
+      repaired = true;
+    }
+    mneme.createCorpus(d);
+  }
+  if (repaired) saveCorpora(dbPath, mneme.listCorpora());
 
   // Track schema version per corpus so write() can build "corpusId@version".
   const versionOf = new Map<string, string>(defs.map((d) => [d.id, d.schema.version]));
@@ -59,6 +75,25 @@ export function openSession(opts: SessionOptions = {}): Session {
     mneme,
 
     createCorpus(spec: CorpusSpec): void {
+      // Validate override values before merging (principles-audit finding 13):
+      // NaN/Infinity survive the undefined-strip but JSON.stringify persists them as
+      // null — a non-empty map the backfill can't repair, slipping pseudocountFor's
+      // `=== undefined` check; negatives survive round-trip and produce negative α/β.
+      // 0 is legal (trust-the-prior-only, well-defined in scalarToBeta).
+      for (const [src, v] of Object.entries(spec.scalarPseudocount ?? {})) {
+        if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
+          throw new Error(
+            `invalid scalarPseudocount for source "${src}": ${v} (must be a finite number >= 0)`
+          );
+        }
+      }
+      // Strip explicit-undefined entries BEFORE spreading: a naive spread copies
+      // `{ llm: undefined }` over the default (re-arming pseudocountFor's throw) and
+      // JSON.stringify then drops the key — persisting a 5-key NON-EMPTY map the
+      // load-time backfill predicate can never repair. (Spec audit finding 2.5.)
+      const pcOverrides = Object.fromEntries(
+        Object.entries(spec.scalarPseudocount ?? {}).filter(([, v]) => v !== undefined)
+      );
       const version = spec.schemaVersion ?? SURFACE_DEFAULTS.schemaVersion;
       const def: CorpusDef = {
         id: spec.id,
@@ -71,7 +106,7 @@ export function openSession(opts: SessionOptions = {}): Session {
           // only accepts valid string-typed scope field descriptors anyway.
           scopeFields: (spec.scopeFields ?? {}) as Record<string, "string">,
           required: [],
-          scalarPseudocount: {},
+          scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT, ...pcOverrides },
         },
         defaults: {
           decayPolicy: { kind: "none" },

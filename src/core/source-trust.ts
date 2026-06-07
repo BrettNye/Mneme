@@ -1,4 +1,6 @@
 // Source-trust data constants (core layer): per-source weights and confidence half-lives.
+// Sibling A.1 table: DEFAULT_SCALAR_PSEUDOCOUNT (src/surface/types.ts) — per-source
+// Beta pseudocounts, independently calibrated alongside the weights/half-lives here.
 import type { Source } from "./claim.js";
 
 export const SOURCE_WEIGHT: Record<Source, number> = {

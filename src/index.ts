@@ -94,3 +94,6 @@ export { serializeExpr, parseExpr } from "./algebra/serialize.js";
 // Replay re-execution engine — replay
 export { replayStatus } from "./write/replay.js";
 export type { ReplayStatus, ReplayResult } from "./write/replay.js";
+
+// Surface layer default constants
+export { DEFAULT_SCALAR_PSEUDOCOUNT } from "./surface/types.js";

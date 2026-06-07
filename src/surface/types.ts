@@ -31,6 +31,26 @@ export interface ImportStats {
   skipped: number; elapsedMs: number; claimsPerSec: number;
 }
 
+/**
+ * Per-source pseudocounts for scalar→Beta coercion, from canonical Appendix A.1
+ * trust tiers. Spec-authored priors, UNCALIBRATED — the bio efficacy instrument
+ * sweeps this dial (flat-2 vs tiered is one config via the CorpusSpec override).
+ * An explicit surface declaration: §3.2's no-silent-default MUST stays intact at
+ * the substrate (pseudocountFor still throws on missing sources).
+ *
+ * Sibling A.1 tables — SOURCE_WEIGHT / HALF_LIFE_DAYS — live in
+ * src/core/source-trust.ts and are independently calibrated; an A.1 retune
+ * touches both files.
+ */
+export const DEFAULT_SCALAR_PSEUDOCOUNT: Record<Source, number> = {
+  manual: 10,
+  verification: 10,
+  workflow: 5,
+  heuristic: 5,
+  llm: 2,
+  imported: 2,
+};
+
 /** Ergonomic corpus creation input; the session expands it to a full CorpusDef. */
 export interface CorpusSpec {
   id: string;
@@ -40,6 +60,8 @@ export interface CorpusSpec {
   schemaVersion?: string;
   /** Corpus default contradiction policy. Defaults to `{ kind: "always_accept" }`. */
   contradictionPolicy?: ContradictionPolicy;
+  /** Per-source scalar→Beta pseudocounts; merged over DEFAULT_SCALAR_PSEUDOCOUNT. */
+  scalarPseudocount?: Partial<Record<Source, number>>;
 }
 
 export interface SessionOptions {

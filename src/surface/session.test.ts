@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openSession } from "./session.js";
+import { betaFromRaw } from "../write/source-weight.js";
+import type { ClaimSchema } from "../catalog/schema.js";
 
 describe("session persistence", () => {
   it("persists corpora and claims across reopen of the same db", () => {
@@ -160,5 +162,175 @@ describe("openSession", () => {
     // Same (subject,key,scope) with a different value contradicts the first.
     const second = s.write("c11", { subject: "host:a", key: "status", value: "degraded" });
     expect(second.status).toBe("rejected");
+  });
+});
+
+describe("scalarPseudocount defaults (Appendix A.1)", () => {
+  it("spec test 1: betaFromRaw succeeds for all six sources on a surface-created corpus", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "pc", subjects: [] });
+    const def = s.inspectCorpus("pc") as { schema: ClaimSchema };
+    const sources = ["manual", "verification", "workflow", "heuristic", "llm", "imported"] as const;
+    for (const src of sources) {
+      expect(() => betaFromRaw(0.8, src, def.schema)).not.toThrow();
+    }
+  });
+
+  it("spec test 2: scalarPseudocount override merges over A.1 defaults", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "pc2", subjects: [], scalarPseudocount: { llm: 4 } });
+    const def = s.inspectCorpus("pc2") as { schema: ClaimSchema };
+    const pc = def.schema.scalarPseudocount;
+    expect(pc.llm).toBe(4);
+    expect(pc.manual).toBe(10);
+    expect(pc.verification).toBe(10);
+    expect(pc.workflow).toBe(5);
+    expect(pc.heuristic).toBe(5);
+    expect(pc.imported).toBe(2);
+  });
+
+  it("spec test 3: persisted sidecar has scalarPseudocount with exactly six numeric keys", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "pc3", subjects: [] });
+    const sidecar = JSON.parse(readFileSync(`${db}.corpora.json`, "utf8")) as { schema: { scalarPseudocount: Record<string, number> } }[];
+    const pc = sidecar[0].schema.scalarPseudocount;
+    const keys = Object.keys(pc);
+    expect(keys).toHaveLength(6);
+    for (const k of keys) {
+      expect(Number.isFinite(pc[k])).toBe(true);
+    }
+  });
+
+  it("spec test 3b: explicit undefined in override does not overwrite default", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "pc4", subjects: [], scalarPseudocount: { llm: undefined } });
+    const def = s.inspectCorpus("pc4") as { schema: ClaimSchema };
+    expect(def.schema.scalarPseudocount.llm).toBe(2);
+    const sidecar = JSON.parse(readFileSync(`${db}.corpora.json`, "utf8")) as { schema: { scalarPseudocount: Record<string, number> } }[];
+    const pc = sidecar[0].schema.scalarPseudocount;
+    expect(Object.keys(pc)).toHaveLength(6);
+    for (const k of Object.keys(pc)) {
+      expect(typeof pc[k]).toBe("number");
+    }
+  });
+
+  it("spec test 3c: createCorpus throws for NaN, Infinity, and negative overrides; accepts 0", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    expect(() => s.createCorpus({ id: "bad1", subjects: [], scalarPseudocount: { llm: NaN } }))
+      .toThrow(/scalarPseudocount.*llm.*NaN|llm.*scalarPseudocount/);
+    expect(() => s.createCorpus({ id: "bad2", subjects: [], scalarPseudocount: { llm: Infinity } }))
+      .toThrow(/scalarPseudocount.*llm|llm.*scalarPseudocount/);
+    expect(() => s.createCorpus({ id: "bad3", subjects: [], scalarPseudocount: { llm: -1 } }))
+      .toThrow(/scalarPseudocount.*llm|llm.*scalarPseudocount/);
+    // 0 must be accepted
+    expect(() => s.createCorpus({ id: "ok1", subjects: [], scalarPseudocount: { llm: 0 } })).not.toThrow();
+    const def = s.inspectCorpus("ok1") as { schema: ClaimSchema };
+    expect(def.schema.scalarPseudocount.llm).toBe(0);
+  });
+});
+
+describe("C7 backfill on session re-open", () => {
+  it("spec test 4: backfills an empty scalarPseudocount on load, persists, and announces", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "legacy", subjects: [] });
+    s1.close();
+    // Simulate the pre-fix bug state in the sidecar.
+    const sidecar = `${db}.corpora.json`;
+    const defs = JSON.parse(readFileSync(sidecar, "utf8"));
+    defs[0].schema.scalarPseudocount = {};
+    writeFileSync(sidecar, JSON.stringify(defs), "utf8");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    openSession({ dbPath: db }).close();
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(errSpy.mock.calls[0][0]).toContain("C7 repair");
+    const persisted = JSON.parse(readFileSync(sidecar, "utf8"));
+    expect(Object.keys(persisted[0].schema.scalarPseudocount)).toHaveLength(6);
+    errSpy.mockRestore();
+
+    // Idempotency pin: a third open after the repair emits no stderr.
+    const errSpy2 = vi.spyOn(console, "error").mockImplementation(() => {});
+    const contentBefore = readFileSync(sidecar, "utf8");
+    openSession({ dbPath: db }).close();
+    expect(errSpy2).not.toHaveBeenCalled();
+    const contentAfter = readFileSync(sidecar, "utf8");
+    expect(contentAfter).toBe(contentBefore);
+    errSpy2.mockRestore();
+  });
+
+  it("spec test 5: backfills a missing scalarPseudocount field (field deleted entirely)", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "missing-pc", subjects: [] });
+    s1.close();
+    // Simulate older sidecar with the field deleted entirely.
+    const sidecar = `${db}.corpora.json`;
+    const defs = JSON.parse(readFileSync(sidecar, "utf8"));
+    delete defs[0].schema.scalarPseudocount;
+    writeFileSync(sidecar, JSON.stringify(defs), "utf8");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    openSession({ dbPath: db }).close();
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(errSpy.mock.calls[0][0]).toContain("C7 repair");
+    const persisted = JSON.parse(readFileSync(sidecar, "utf8"));
+    expect(Object.keys(persisted[0].schema.scalarPseudocount)).toHaveLength(6);
+    errSpy.mockRestore();
+  });
+
+  it("spec test 6: stderr fires once per repaired corpus; healthy load emits no stderr and does not rewrite sidecar", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "corp-a", subjects: [] });
+    s1.createCorpus({ id: "corp-b", subjects: [] });
+    s1.close();
+    // Corrupt only the first corpus.
+    const sidecar = `${db}.corpora.json`;
+    const defs = JSON.parse(readFileSync(sidecar, "utf8"));
+    defs[0].schema.scalarPseudocount = {};
+    writeFileSync(sidecar, JSON.stringify(defs), "utf8");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    openSession({ dbPath: db }).close();
+    // Exactly one stderr line for the one repaired corpus.
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    const msg = errSpy.mock.calls[0][0] as string;
+    expect(msg).toMatch(new RegExp(`${sidecar.replace(/\\/g, "\\\\").replace(/\./g, "\\.")}.*backfilled.*C7 repair`));
+    errSpy.mockRestore();
+
+    // Now healthy — re-open must emit no stderr and not rewrite sidecar.
+    const contentBefore = readFileSync(sidecar, "utf8");
+    const errSpy2 = vi.spyOn(console, "error").mockImplementation(() => {});
+    openSession({ dbPath: db }).close();
+    expect(errSpy2).not.toHaveBeenCalled();
+    const contentAfter = readFileSync(sidecar, "utf8");
+    expect(contentAfter).toBe(contentBefore);
+    errSpy2.mockRestore();
+  });
+
+  it("spec test 7: persisted non-empty map loads verbatim — no merge, no rewrite, no stderr", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "custom-pc", subjects: [] });
+    s1.close();
+    // Overwrite the sidecar with a partial but non-empty map (simulating a custom config).
+    const sidecar = `${db}.corpora.json`;
+    const defs = JSON.parse(readFileSync(sidecar, "utf8"));
+    defs[0].schema.scalarPseudocount = { workflow: 4, manual: 8 };
+    writeFileSync(sidecar, JSON.stringify(defs), "utf8");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s2 = openSession({ dbPath: db });
+    expect(errSpy).not.toHaveBeenCalled();
+    const persisted = JSON.parse(readFileSync(sidecar, "utf8"));
+    expect(persisted[0].schema.scalarPseudocount).toEqual({ workflow: 4, manual: 8 });
+    s2.close();
+    errSpy.mockRestore();
   });
 });
