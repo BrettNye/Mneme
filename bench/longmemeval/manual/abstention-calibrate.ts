@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Abstention calibration from the oracle topScore distribution (lever #2).
  *
  *   npx tsx bench/longmemeval/manual/abstention-calibrate.ts \
@@ -8,7 +8,7 @@
  * Honest protocol (the 0.872 manual-sample dial explicitly does NOT transfer):
  *   1. For each question, compute topScore under the CITABLE config
  *      (validated-band ratified aliases + hybrid ranking, knobs off).
- *   2. Deterministic 50/50 split by sha256(question_id) parity — no RNG.
+ *   2. Deterministic 50/50 split by sha256(question_id) parity â€” no RNG.
  *   3. On TRAIN: choose abstainBelowTop maximizing balanced accuracy
  *      (mean of abstention-recall and answerable-precision) over candidate
  *      thresholds = midpoints between adjacent distinct train scores.
@@ -126,7 +126,7 @@ async function main(argv: string[]): Promise<number> {
         ),
         { evaluationClock: t },
       );
-      const topScore = ranked.entries.length > 0 ? ranked.entries[0].score : -Infinity;
+      const topScore = ranked.scored.length > 0 ? ranked.scored[0].score : -Infinity;
       const category = categoryOf(q);
       observations.push({
         qid: q.question_id,
@@ -189,7 +189,7 @@ async function main(argv: string[]): Promise<number> {
     hAbst.length && hAns.length
       ? Math.max(...hAbst.map((o) => o.topScore)) < Math.min(...hAns.map((o) => o.topScore))
         ? "CLEAN separation on holdout (zero overlap)"
-        : "OVERLAP on holdout — dial trades abstention recall vs false abstentions; see lines above"
+        : "OVERLAP on holdout â€” dial trades abstention recall vs false abstentions; see lines above"
       : "insufficient holdout data";
   console.log(`  separation: ${sepNote}`);
   return 0;
