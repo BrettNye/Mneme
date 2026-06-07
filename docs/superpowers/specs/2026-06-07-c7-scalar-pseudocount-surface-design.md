@@ -63,16 +63,36 @@ export const DEFAULT_SCALAR_PSEUDOCOUNT: Record<Source, number> = {
 scalarPseudocount?: Partial<Record<Source, number>>;
 ```
 
+(`Partial<Record<Source, number>>` matches `ClaimSchema.scalarPseudocount` exactly —
+src/catalog/schema.ts:14; no type bridge needed.)
+
+**Exports:** `DEFAULT_SCALAR_PSEUDOCOUNT` is declared in `src/surface/types.ts` and
+re-exported via `src/surface/index.ts` **and the root barrel `src/index.ts`** — the
+examples import exclusively from `../src/index.js` (modeling the published package
+surface), so the root export is load-bearing for the examples amendment below.
+
 ### Change 2 — createCorpus merge (src/surface/session.ts)
 
-In `session.createCorpus`, replace the hardcoded empty map:
+In `session.createCorpus`, replace the hardcoded empty map with a merge that **strips
+explicit-`undefined` override entries**:
 
 ```ts
-scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT, ...spec.scalarPseudocount },
+const pcOverrides = Object.fromEntries(
+  Object.entries(spec.scalarPseudocount ?? {}).filter(([, v]) => v !== undefined)
+);
+// ...
+scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT, ...pcOverrides },
 ```
 
 Merge, not replace: a partial override can never re-arm the throw for an undeclared
-source. `ensureCorpus` (src/mcp/tools.ts) needs **no change** — it inherits the default.
+source. The strip is load-bearing, not pedantry (audit finding 2.5): under `Partial`,
+`{ scalarPseudocount: { llm: undefined } }` type-checks (no
+`exactOptionalPropertyTypes`), a naive spread copies the `undefined` over the default
+(`pseudocountFor` checks `=== undefined` → throw re-armed), and `JSON.stringify` then
+**drops** the entry — persisting a five-key map that is non-empty, so the Change-3
+backfill predicate can never repair it. Pinned by test 3b.
+
+`ensureCorpus` (src/mcp/tools.ts) needs **no change** — it inherits the default.
 
 **Invariant (pinned by test):** every post-fix `createCorpus` persists a **complete**
 six-source map. `{}` (or a partial map missing legal sources) can never be written by
@@ -105,7 +125,9 @@ The sidecar isn't git-tracked; this line is the only audit visibility the repair
 (Considered and declined: a warnings-on-open return surfaced by the MCP layer via the
 tools-pure/server-prints pattern — proportionate ceremony for a recurring condition,
 not for a one-time bug repair. If a second load-time repair class ever appears,
-revisit.)
+revisit.) Noted deliberately: this is the **first** `console.error` in `src/surface/`
+— precedent exists in `src/cli/` and `src/mcp/` (server.ts:175,253,282; recall-log.ts:24;
+embeddings.ts:81), none in the surface layer until now.
 
 After the re-registration loop, if **any** def was repaired, call
 `saveCorpora(dbPath, mneme.listCorpora())` **once**. No repair → no write (load stays
@@ -138,6 +160,9 @@ sidecar upgrade and one stderr line on the first post-fix session open.
    other five at A.1 defaults.
 3. **Complete-map invariant**: post-fix corpus → persisted sidecar map has all six
    sources (pins the Change-2 invariant against partial-persist refactors).
+3b. **Explicit-`undefined` override stripped**: `createCorpus({ scalarPseudocount:
+   { llm: undefined } })` → llm at default 2; persisted map has six **numeric**
+   values (pins the strip against a naive-spread refactor; audit finding 2.5).
 4. **Backfill, empty**: sidecar with `scalarPseudocount: {}` → re-open → map
    backfilled, sidecar persisted with full map.
 5. **Backfill, absent** (A2): sidecar def lacking the field → same repair.
@@ -145,7 +170,7 @@ sidecar upgrade and one stderr line on the first post-fix session open.
    healthy corpus → no line, no sidecar rewrite.
 7. **Non-empty respected**: persisted `{ workflow: 4, manual: 8 }` → loaded verbatim,
    no merge, no rewrite, no stderr.
-8. Full suite + tsc green (baseline 1,660).
+8. Full suite + tsc green (baseline 1,661 — audit-verified by full run).
 
 ## Out of scope
 
