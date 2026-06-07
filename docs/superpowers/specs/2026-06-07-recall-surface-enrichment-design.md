@@ -82,7 +82,8 @@ export function coverageOf(entities: readonly string[], claims: readonly Claim[]
 |---|---|
 | Extraction on any string | Never throws (regex + set ops); empty/whitespace text ⇒ `[]` |
 | Empty entity list | `coverage` present with empty arrays; NO warning |
-| Zero served claims (abstained/empty corpus) | All entities reported missing; warning fires — intended (strongest signal for the agent) |
+| Empty/unknown corpus (zero claims AVAILABLE) | All entities reported missing; warning fires — intended (strongest signal for the agent) |
+| Abstained result (knob emptied the RETURNS) | Coverage unchanged — computed pre-knob; entities supported by available claims stay `supported: true` even though matches is empty |
 | Non-string claim values | `String(value)` before scan (matches census/judge precedent) |
 
 ### 6. Testing
