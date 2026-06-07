@@ -1,10 +1,87 @@
 import { describe, it, expect } from "vitest";
-import { autoRatify } from "./key-alias-auto.js";
+import { writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { autoRatify, pairKey, loadRatifiedPairs } from "./key-alias-auto.js";
 import { simJaccard } from "../../../src/algebra/similarity.js";
 
 const jac = (a: string, b: string): number => simJaccard.scoreOne(a, b);
 
+// Helper: write a temp JSONL file with the given lines
+function writeTempJsonl(lines: unknown[]): string {
+  const dir = mkdtempSync(join(tmpdir(), "mneme-test-"));
+  const file = join(dir, "test.jsonl");
+  writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n"), "utf-8");
+  return file;
+}
+
 const counts = (entries: Array<[string, number]>): Map<string, number> => new Map(entries);
+
+describe("pairKey", () => {
+  it("is order-insensitive: pairKey(a,b) === pairKey(b,a)", () => {
+    expect(pairKey("foo", "bar")).toBe(pairKey("bar", "foo"));
+    expect(pairKey("x", "y")).toBe(pairKey("y", "x"));
+  });
+
+  it("uses lexicographic ordering (smaller first) with unit separator", () => {
+    // "bar" < "foo" lexicographically
+    expect(pairKey("foo", "bar")).toBe("bar\x1ffoo");
+    expect(pairKey("bar", "foo")).toBe("bar\x1ffoo");
+  });
+
+  it("identical strings yield a stable key", () => {
+    expect(pairKey("same", "same")).toBe("same\x1fsame");
+  });
+});
+
+describe("loadRatifiedPairs", () => {
+  it("returns non-empty set from committed min094 judgments file", () => {
+    // Uses the real committed fixture
+    const pairs = loadRatifiedPairs(
+      new URL("./data/key-ratify-judgments-min094.jsonl", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    expect(pairs.size).toBeGreaterThan(0);
+  });
+
+  it("skips header lines (kind !== undefined) and same===false lines", () => {
+    const file = writeTempJsonl([
+      { kind: "key-ratify-header", model: "test", promptVersion: "v1" }, // header — skip
+      { a: "foo", b: "bar", same: true },  // ratified — include
+      { a: "baz", b: "qux", same: false }, // rejected — exclude
+      { a: "alpha", b: "beta", same: true }, // ratified — include
+    ]);
+    const pairs = loadRatifiedPairs(file);
+    expect(pairs.size).toBe(2);
+    expect(pairs.has(pairKey("foo", "bar"))).toBe(true);
+    expect(pairs.has(pairKey("baz", "qux"))).toBe(false);
+    expect(pairs.has(pairKey("alpha", "beta"))).toBe(true);
+  });
+
+  it("pairKey order-insensitive: loadRatifiedPairs of {a:'x',b:'y'} contains pairKey('y','x')", () => {
+    const file = writeTempJsonl([
+      { a: "x", b: "y", same: true },
+    ]);
+    const pairs = loadRatifiedPairs(file);
+    expect(pairs.has(pairKey("y", "x"))).toBe(true);
+    expect(pairs.has(pairKey("x", "y"))).toBe(true);
+  });
+
+  it("lines missing a or b are skipped gracefully", () => {
+    const file = writeTempJsonl([
+      { a: "foo", same: true },       // missing b — skip
+      { b: "bar", same: true },       // missing a — skip
+      { a: "p", b: "q", same: true }, // valid — include
+    ]);
+    const pairs = loadRatifiedPairs(file);
+    expect(pairs.size).toBe(1);
+    expect(pairs.has(pairKey("p", "q"))).toBe(true);
+  });
+
+  it("empty file returns empty set", () => {
+    const file = writeTempJsonl([]);
+    expect(loadRatifiedPairs(file).size).toBe(0);
+  });
+});
 
 describe("autoRatify", () => {
   it("merges a near-duplicate pair; most-claims key wins canonical", () => {
