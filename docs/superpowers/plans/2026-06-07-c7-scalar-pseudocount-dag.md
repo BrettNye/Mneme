@@ -40,6 +40,12 @@ corpus schema shape (`inspectCorpus` test checks `.id` only; corpus-store tests 
 call `openSession`; MCP tests have no scalarPseudocount/sidecar assertions). No
 cleanup tasks expected.
 
+**Per-task verification is SCOPED** (tasks 2 and 3 run in parallel in a shared tree —
+repo-wide gates would see each other's in-flight edits): task-1/task-2 run
+`npx vitest run src/surface src/mcp`; task-3 runs the two examples only. **Final gate
+(executor, after all tasks done): `npm test` (≥1,661 passing + the new tests) and
+`npx tsc --noEmit` clean — this is spec test 8.**
+
 ## Tasks
 
 ## Task: createCorpus complete pseudocount map
@@ -135,7 +141,12 @@ it("surface-created corpus supports scalar→Beta promotion for every source", (
   efficacy instrument sweeps this dial".
 - No change to `src/catalog/schema.ts`, `src/write/source-weight.ts`, or
   `src/mcp/tools.ts` (ensureCorpus inherits).
-- Existing surface tests stay green.
+- Existing surface tests stay green (`npx vitest run src/surface src/mcp` — scoped;
+  full suite is the executor's final gate).
+
+Import housekeeping (audit finding 3): extend `session.test.ts` line-2 `node:fs`
+import with `readFileSync, writeFileSync` (tests 3/3b read the sidecar); extend
+`session.ts` line-6 `./types.js` import with `DEFAULT_SCALAR_PSEUDOCOUNT`.
 
 Test file: `src/surface/session.test.ts`.
 
@@ -158,7 +169,9 @@ never on healthy loads (spec Change 3, amendments A1 + A2).
 ## Implementation
 
 ```typescript
-// src/surface/session.ts — openSession; replaces the plain re-registration loop
+// src/surface/session.ts — openSession; replaces ONLY lines 24-26 (the load +
+// plain re-registration loop). Keep the versionOf map construction (line ~29)
+// intact — it reads only schema.version, which the backfill never touches.
 const defs: CorpusDef[] = loadCorpora(dbPath);
 let repaired = false;
 for (const d of defs) {
@@ -215,7 +228,12 @@ it("backfills an empty scalarPseudocount on load, persists, and announces", () =
 - `saveCorpora` is called at most once per `openSession`, only when ≥1 def was
   repaired.
 - Existing surface + MCP integration tests stay green (fresh corpora are created
-  complete by task-1, so no backfill fires in them).
+  complete by task-1, so no backfill fires in them). Scoped gate:
+  `npx vitest run src/surface src/mcp`; full suite is the executor's final gate.
+
+Import housekeeping (audit finding 3): add `vi` to the `session.test.ts` vitest
+import (the file uses explicit imports, not globals-style, despite globals being
+enabled).
 
 Test file: `src/surface/session.test.ts`.
 
@@ -254,8 +272,14 @@ scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT },
 - `grep "scalarPseudocount: {}" examples/` returns zero matches.
 - `npx tsx examples/quickstart.ts` and `npx tsx examples/bio-quickstart.ts` both run
   to completion with exit code 0 (examples are NOT tsc-included — `tsconfig.json`
-  includes `src/**` only — so running them is the verification).
-- `npx tsc --noEmit` stays clean (barrel changes are inside `src/**`).
+  includes `src/**` only — so running them is the verification; both use
+  `:memory:` adapters, no artifacts/network).
+- `DEFAULT_SCALAR_PSEUDOCOUNT` is added to the examples' **value** import block
+  (quickstart.ts:9-20, bio-quickstart.ts:13), NOT the `import type` block — tsx
+  erases type imports, which would make the spread a runtime ReferenceError
+  (audit finding 6).
+- tsc is NOT this task's gate (parallel task-2 edits src/ concurrently); the
+  executor's final gate covers `npx tsc --noEmit`.
 
 Test file: none new — verification is the two example runs + tsc + existing suite
 (the barrel re-export is type-checked by tsc; surface-barrel consumers unchanged).
