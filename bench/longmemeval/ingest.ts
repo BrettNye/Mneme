@@ -1,4 +1,5 @@
 import type { Session, ImportStats, WriteRecord } from "../../src/surface/index.js";
+import type { Source } from "../../src/core/claim.js";
 import type { ClaimRecordT, LmeQuestionT } from "./types.js";
 
 /** Derive the corpus ID for a given LongMemEval question. */
@@ -50,6 +51,22 @@ export function mapClaimRecord(rec: ClaimRecordT): WriteRecord {
     base.confidence = rec.confidence;
   }
   return base;
+}
+
+/**
+ * Optional hooks for `ingestQuestion` — extend behavior without forking.
+ * No-hooks behavior is byte-identical; passing `undefined` is equivalent to
+ * calling the original function with no fourth argument.
+ */
+export interface IngestHooks {
+  /** Per-source pseudocount overrides threaded into `session.createCorpus`. */
+  scalarPseudocount?: Partial<Record<Source, number>>;
+  /**
+   * Map the default WriteRecord before write — e.g. promote confidence to Beta.
+   * Receives the ClaimRecordT and the base WriteRecord built by `mapClaimRecord`;
+   * returns the WriteRecord that will be written.
+   */
+  mapRecord?: (rec: ClaimRecordT, base: WriteRecord) => WriteRecord;
 }
 
 /**
@@ -110,7 +127,8 @@ export class IngestConservationError extends Error {
 export function ingestQuestion(
   session: Session,
   q: LmeQuestionT,
-  records: ClaimRecordT[]
+  records: ClaimRecordT[],
+  hooks?: IngestHooks
 ): ImportStats {
   const corpusId = corpusIdFor(q.question_id);
 
@@ -122,9 +140,15 @@ export function ingestQuestion(
   session.createCorpus({
     id: corpusId,
     contradictionPolicy: { kind: "always_accept" },
+    ...(hooks?.scalarPseudocount !== undefined && {
+      scalarPseudocount: hooks.scalarPseudocount,
+    }),
   });
 
-  const writeRecords = records.map(mapClaimRecord);
+  const writeRecords = records.map((rec) => {
+    const base = mapClaimRecord(rec);
+    return hooks?.mapRecord ? hooks.mapRecord(rec, base) : base;
+  });
   const stats = session.writeMany(corpusId, writeRecords);
 
   if (stats.committed !== records.length) {

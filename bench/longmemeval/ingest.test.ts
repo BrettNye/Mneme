@@ -10,6 +10,9 @@ import {
 } from "./ingest.js";
 import { openTmpSession, fixturePath } from "./test-support.js";
 import type { LmeQuestionT, ClaimRecordT } from "./types.js";
+import { betaFromRaw } from "../../src/write/source-weight.js";
+import type { ClaimSchema } from "../../src/catalog/schema.js";
+import type { CorpusDef } from "../../src/index.js";
 
 // ---------------------------------------------------------------------------
 // Load fixture data
@@ -347,5 +350,83 @@ describe("ingestQuestion", () => {
     // message must mention duplicate count for diagnosability
     expect(error!.message).toMatch(/duplicate/i);
     expect(error!.message).toContain(String(duplicateCount));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IngestHooks
+// ---------------------------------------------------------------------------
+
+describe("IngestHooks", () => {
+  it("mapRecord hook promotes confidence to Beta and scalarPseudocount reaches the schema", () => {
+    const { session, close } = openTmpSession();
+    try {
+      const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+      const corpusId = corpusIdFor(kuFixtureQuestion.question_id);
+
+      ingestQuestion(session, kuFixtureQuestion, records, {
+        scalarPseudocount: { imported: 5 },
+        mapRecord: (rec, base) => ({
+          ...base,
+          confidence: betaFromRaw(
+            typeof base.confidence === "number"
+              ? base.confidence
+              : (base.confidence as { raw?: number })?.raw ?? 0.9,
+            "imported",
+            { scalarPseudocount: { imported: 5 } } as unknown as ClaimSchema
+          ),
+        }),
+      });
+
+      // scalarPseudocount reaches the corpus schema
+      const corpusDef = session.inspectCorpus(corpusId) as CorpusDef;
+      expect(corpusDef.schema.scalarPseudocount.imported).toBe(5);
+
+      // at least one stored claim has distribution === "beta"
+      const corpus = session.q(corpusId, "") as { claims: Array<{ confidence: { distribution: string } }> };
+      expect(corpus.claims.some((c) => c.confidence.distribution === "beta")).toBe(true);
+    } finally {
+      close();
+    }
+  });
+
+  it("AlreadyIngestedError is still thrown on duplicate corpus ingest WITH hooks", () => {
+    const { session, close } = openTmpSession();
+    try {
+      const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+      ingestQuestion(session, kuFixtureQuestion, records, {
+        scalarPseudocount: { imported: 5 },
+      });
+      expect(() =>
+        ingestQuestion(session, kuFixtureQuestion, records, {
+          scalarPseudocount: { imported: 5 },
+        })
+      ).toThrow(AlreadyIngestedError);
+    } finally {
+      close();
+    }
+  });
+
+  it("conservation check is still enforced with hooks present (writeMany path preserved)", () => {
+    const records = claimsFor(kuFixtureQuestion, fixtureClaims);
+    const stubSession = {
+      createCorpus: () => undefined,
+      listCorpora: () => [],
+      writeMany: () => ({
+        total: records.length,
+        committed: 0,
+        rejected: 0,
+        duplicate: 0,
+        skipped: records.length,
+        elapsedMs: 0,
+        claimsPerSec: 0,
+      }),
+    } as unknown as Parameters<typeof ingestQuestion>[0];
+
+    expect(() =>
+      ingestQuestion(stubSession, kuFixtureQuestion, records, {
+        scalarPseudocount: { imported: 5 },
+      })
+    ).toThrow(IngestConservationError);
   });
 });
