@@ -47,6 +47,9 @@ import { MANUAL_KEY_CARDINALITY } from "../run.js";
 import { KEY_ALIAS_KEY, aliasMapOf } from "../../../src/retrieval/key-alias.js";
 import { RULE } from "../../../src/distribution/rules.js";
 import { autoRatify } from "./key-alias-auto.js";
+import { simJaccard, registerSimilarity, similarityFn } from "../../../src/algebra/similarity.js";
+import { EmbeddingCache, cosineOver, hybridMax } from "../../../src/index.js";
+import { createLocalEmbeddingAdapter, warmForQuestion } from "../embeddings-local.js";
 
 const TARGET_CATEGORIES = new Set(["knowledge-update", "temporal-reasoning", "abstention"]);
 const KS = [1, 3, 10];
@@ -78,6 +81,7 @@ async function main(argv: string[]): Promise<number> {
       claims: { type: "string" },
       judgments: { type: "string" },
       limit: { type: "string" },
+      rank: { type: "string", default: "jaccard" },
       "expect-update-correct": { type: "string" },
     },
   });
@@ -86,6 +90,11 @@ async function main(argv: string[]): Promise<number> {
     return 1;
   }
   const limit = values.limit !== undefined ? parseInt(String(values.limit), 10) : Infinity;
+  const rank = String(values.rank);
+  if (rank !== "jaccard" && rank !== "hybrid") {
+    console.error(`--rank must be "jaccard" or "hybrid", got "${rank}"`);
+    return 1;
+  }
   const expect =
     values["expect-update-correct"] !== undefined
       ? parseFloat(String(values["expect-update-correct"]))
@@ -189,6 +198,23 @@ async function main(argv: string[]): Promise<number> {
     // Single pinned instant for all alias-map loads: deterministic within the run
     // (must only be >= all write times; alias claims are valid to Infinity).
     const scoringInstant = Date.now();
+    // --rank hybrid: the scoring side ranks with the SAME fn the production
+    // recall tool used in the loop above (the server registers bge hybrid at
+    // startup). Scoring-process registration + per-question value warm-up.
+    if (rank === "hybrid") {
+      // The in-process MCP server already owns the "cosine"/"hybrid" registry
+      // names (its own adapter+cache, warmed per recall call). Scoring uses a
+      // SEPARATE registered name backed by its own fully-warmed cache —
+      // identical model + math, no registry collision.
+      const adapter = await createLocalEmbeddingAdapter();
+      const cache = new EmbeddingCache();
+      registerSimilarity("hybrid-scoring", hybridMax(simJaccard, cosineOver(adapter, cache)));
+      for (const q of questions) {
+        await warmForQuestion(adapter, cache, claimsFor(q, allClaims, { oracle: true }), q.question);
+      }
+      console.log("scoring rank: hybrid (values + questions warmed; registered as hybrid-scoring)");
+    }
+    const rankOpts = rank === "hybrid" ? { rankFn: "hybrid-scoring" } : {};
     const scoringSession = openSession({ dbPath, writer: "capstone-scorer" });
     try {
       const scores: QuestionScore[] = [];
@@ -210,6 +236,7 @@ async function main(argv: string[]): Promise<number> {
           keyCardinality: MANUAL_KEY_CARDINALITY,
           keyAliases: map,
           evidencePoolingRule: RULE.MAX_MEAN,
+          ...rankOpts,
         });
         // Hardening B: serving equivalence — every value the recall TOOL served must
         // be a value the same canonical pipeline serves AT A MATCHED CLOCK. Two
