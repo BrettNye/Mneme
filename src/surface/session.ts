@@ -22,8 +22,24 @@ export function openSession(opts: SessionOptions = {}): Session {
   const mneme = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
 
   // Re-register any corpora persisted from a previous session.
+  // Repair any defs carrying the C7 bug signature (absent-OR-empty scalarPseudocount).
   const defs: CorpusDef[] = loadCorpora(dbPath);
-  for (const d of defs) mneme.createCorpus(d);
+  let repaired = false;
+  for (const d of defs) {
+    const pc = d.schema.scalarPseudocount;
+    if (pc == null || Object.keys(pc).length === 0) {
+      // C7 bug signature: surface used to persist {} (and older sidecars may lack
+      // the field). Post-task-1, createCorpus always persists a complete map, so
+      // this predicate stays forever-unambiguous.
+      d.schema.scalarPseudocount = { ...DEFAULT_SCALAR_PSEUDOCOUNT };
+      console.error(
+        `${dbPath}.corpora.json: backfilled scalarPseudocount for '${d.id}' (C7 repair, A.1 defaults)`
+      );
+      repaired = true;
+    }
+    mneme.createCorpus(d);
+  }
+  if (repaired) saveCorpora(dbPath, mneme.listCorpora());
 
   // Track schema version per corpus so write() can build "corpusId@version".
   const versionOf = new Map<string, string>(defs.map((d) => [d.id, d.schema.version]));

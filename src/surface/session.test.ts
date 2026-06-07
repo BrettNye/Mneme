@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openSession } from "./session.js";
@@ -231,5 +231,106 @@ describe("scalarPseudocount defaults (Appendix A.1)", () => {
     expect(() => s.createCorpus({ id: "ok1", subjects: [], scalarPseudocount: { llm: 0 } })).not.toThrow();
     const def = s.inspectCorpus("ok1") as { schema: ClaimSchema };
     expect(def.schema.scalarPseudocount.llm).toBe(0);
+  });
+});
+
+describe("C7 backfill on session re-open", () => {
+  it("spec test 4: backfills an empty scalarPseudocount on load, persists, and announces", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "legacy", subjects: [] });
+    s1.close();
+    // Simulate the pre-fix bug state in the sidecar.
+    const sidecar = `${db}.corpora.json`;
+    const defs = JSON.parse(readFileSync(sidecar, "utf8"));
+    defs[0].schema.scalarPseudocount = {};
+    writeFileSync(sidecar, JSON.stringify(defs), "utf8");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    openSession({ dbPath: db }).close();
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(errSpy.mock.calls[0][0]).toContain("C7 repair");
+    const persisted = JSON.parse(readFileSync(sidecar, "utf8"));
+    expect(Object.keys(persisted[0].schema.scalarPseudocount)).toHaveLength(6);
+    errSpy.mockRestore();
+
+    // Idempotency pin: a third open after the repair emits no stderr.
+    const errSpy2 = vi.spyOn(console, "error").mockImplementation(() => {});
+    const contentBefore = readFileSync(sidecar, "utf8");
+    openSession({ dbPath: db }).close();
+    expect(errSpy2).not.toHaveBeenCalled();
+    const contentAfter = readFileSync(sidecar, "utf8");
+    expect(contentAfter).toBe(contentBefore);
+    errSpy2.mockRestore();
+  });
+
+  it("spec test 5: backfills a missing scalarPseudocount field (field deleted entirely)", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "missing-pc", subjects: [] });
+    s1.close();
+    // Simulate older sidecar with the field deleted entirely.
+    const sidecar = `${db}.corpora.json`;
+    const defs = JSON.parse(readFileSync(sidecar, "utf8"));
+    delete defs[0].schema.scalarPseudocount;
+    writeFileSync(sidecar, JSON.stringify(defs), "utf8");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    openSession({ dbPath: db }).close();
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(errSpy.mock.calls[0][0]).toContain("C7 repair");
+    const persisted = JSON.parse(readFileSync(sidecar, "utf8"));
+    expect(Object.keys(persisted[0].schema.scalarPseudocount)).toHaveLength(6);
+    errSpy.mockRestore();
+  });
+
+  it("spec test 6: stderr fires once per repaired corpus; healthy load emits no stderr and does not rewrite sidecar", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "corp-a", subjects: [] });
+    s1.createCorpus({ id: "corp-b", subjects: [] });
+    s1.close();
+    // Corrupt only the first corpus.
+    const sidecar = `${db}.corpora.json`;
+    const defs = JSON.parse(readFileSync(sidecar, "utf8"));
+    defs[0].schema.scalarPseudocount = {};
+    writeFileSync(sidecar, JSON.stringify(defs), "utf8");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    openSession({ dbPath: db }).close();
+    // Exactly one stderr line for the one repaired corpus.
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    const msg = errSpy.mock.calls[0][0] as string;
+    expect(msg).toMatch(new RegExp(`${sidecar.replace(/\\/g, "\\\\").replace(/\./g, "\\.")}.*backfilled.*C7 repair`));
+    errSpy.mockRestore();
+
+    // Now healthy — re-open must emit no stderr and not rewrite sidecar.
+    const contentBefore = readFileSync(sidecar, "utf8");
+    const errSpy2 = vi.spyOn(console, "error").mockImplementation(() => {});
+    openSession({ dbPath: db }).close();
+    expect(errSpy2).not.toHaveBeenCalled();
+    const contentAfter = readFileSync(sidecar, "utf8");
+    expect(contentAfter).toBe(contentBefore);
+    errSpy2.mockRestore();
+  });
+
+  it("spec test 7: persisted non-empty map loads verbatim — no merge, no rewrite, no stderr", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "custom-pc", subjects: [] });
+    s1.close();
+    // Overwrite the sidecar with a partial but non-empty map (simulating a custom config).
+    const sidecar = `${db}.corpora.json`;
+    const defs = JSON.parse(readFileSync(sidecar, "utf8"));
+    defs[0].schema.scalarPseudocount = { workflow: 4, manual: 8 };
+    writeFileSync(sidecar, JSON.stringify(defs), "utf8");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s2 = openSession({ dbPath: db });
+    expect(errSpy).not.toHaveBeenCalled();
+    const persisted = JSON.parse(readFileSync(sidecar, "utf8"));
+    expect(persisted[0].schema.scalarPseudocount).toEqual({ workflow: 4, manual: 8 });
+    s2.close();
+    errSpy.mockRestore();
   });
 });
