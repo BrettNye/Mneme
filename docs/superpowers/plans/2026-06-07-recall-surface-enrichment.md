@@ -212,6 +212,15 @@ describe("recall — coverage annotation + provenance handles", () => {
     s.close();
   });
 
+  it("UNKNOWN corpus early-return still carries all-missing coverage + warning (audit M1)", async () => {
+    const s = freshSession();
+    const r = await recall(s, { about: "Anything about Sacramento?", corpus: "never-created" }, jaccardDeps);
+    expect(r.matches).toEqual([]);
+    expect(r.coverage.missing).toEqual(["Anything", "Sacramento"]);
+    expect(r.warnings?.some((w) => w.includes("no claim available to this recall"))).toBe(true);
+    s.close();
+  });
+
   it("matches carry id and tags from the underlying claim", async () => {
     const s = freshSession();
     remember(s, { subject: "user", key: "editor", value: "vim", corpus: "prov", tags: ["session:s1"] });
@@ -263,20 +272,41 @@ export interface RecallMatch {
   coverage: CoverageReport;
 ```
 
-3d. In `recall()`, immediately after `const topScore = ranked.scored[0]?.score;`
+3d-i. **Unknown-corpus early return (MUST also carry coverage — audit M1):** `recall()`
+returns an `emptyResult` for unknown corpora (tools.ts:210-222) BEFORE the pipeline
+runs; with `coverage` non-optional that literal no longer compiles, and the spec
+§5 row (unknown corpus ⇒ all-missing + warning) requires it. Compute entities
+once, up where `emptyResult` is built, and rework the early return:
+
+```typescript
+  // Entity tokens computed once — used by the unknown-corpus early return AND
+  // the post-pipeline coverage computation.
+  const entities = entityTokensOf(args.about);
+  const coverageWarning = (missing: string[]): string =>
+    `question entities with no claim available to this recall: ${missing.map((m) => `'${m}'`).join(", ")}`;
+
+  if (!session.listCorpora().some((c) => c.id === args.corpus)) {
+    const coverage = coverageOf(entities, []); // unknown corpus: nothing available
+    return {
+      ...emptyResult,
+      coverage,
+      warnings: coverage.missing.length > 0 ? [coverageWarning(coverage.missing)] : undefined,
+    };
+  }
+```
+
+(Keep `emptyResult` itself coverage-free and spread it — or inline the fields;
+either way the RETURNED object satisfies the non-optional contract.)
+
+3d-ii. In the main path, immediately after `const topScore = ranked.scored[0]?.score;`
 (the pre-knob point — this IS the basis):
 
 ```typescript
   // Entity coverage over the PRE-knob survivor set (the bench-validated basis;
   // knobs affect what is returned, not what was available).
-  const coverage = coverageOf(
-    entityTokensOf(args.about),
-    ranked.scored.map((s) => s.claim),
-  );
+  const coverage = coverageOf(entities, ranked.scored.map((s) => s.claim));
   if (coverage.missing.length > 0) {
-    allWarnings.push(
-      `question entities with no claim available to this recall: ${coverage.missing.map((m) => `'${m}'`).join(", ")}`,
-    );
+    allWarnings.push(coverageWarning(coverage.missing));
   }
 ```
 
@@ -322,6 +352,8 @@ git commit -m "feat(mcp): recall coverage annotation (pre-knob basis) + provenan
 - Modify: `src/mcp/server.ts` (recall outputSchema ~120-136, structuredContent ~179-187)
 - Modify: `src/index.ts` (retrieval barrel block)
 - Test: `src/mcp/server.integration.test.ts` (append)
+
+Note (audit S2): the integration test omits `corpus` args deliberately — `connected("covsrv")` wires `defaultCorpus: "covsrv"`, and the server resolves omitted corpus to it.
 
 - [ ] **Step 1: Write the failing integration test**
 
@@ -421,11 +453,13 @@ import { entityTokensOf, coverageOf } from "../../../src/retrieval/coverage.js";
 ```
 
 Replace the inline block (the `QUESTION_WORDS` set, `entityTokens`, `corpusText`,
-`covered` lines) with:
+`covered` lines) with (preserving a one-line pointer to the original rationale —
+audit S1):
 
 ```typescript
       // entityCoverage via the SHARED retrieval module (single implementation;
-      // this study remains the standing verification instrument for the signal).
+      // this study remains the standing verification instrument for the signal —
+      // rationale: abstention questions are missing-entity questions on covered topics).
       // The scalar is derived locally — coverageOf returns the structured report;
       // the bench's empty-list ⇒ 1 convention is preserved here.
       const entityTokens = entityTokensOf(q.question);
