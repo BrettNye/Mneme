@@ -289,3 +289,11 @@ Open lever: the suggest band only exposed >=0.92 to judgment; true drift below 0
 The ratified benchmark re-run through the LITERAL product surfaces (in-process MCP server, real SQLite db): every claim via `remember`, candidates via `key_census` (229/229 hybrid), 358 alias ratifications written as supersedable ledger claims via `remember`, every question recalled via `recall` (229/229 served - the scalar-pooling fix verified at scale), scored from the same db with alias maps derived from the ledger (recall internals).
 
 RESULT: KU updateCorrect 0.528, recall@1/3/10 = 0.493/0.903/0.965 - byte-identical to the harness ratified row. The harness numbers ARE production numbers. Script: bench/longmemeval/manual/capstone-production-loop.ts (gate: --expect-update-correct fails loudly on divergence).
+
+### Judge spot-check + validated-band configuration (2026-06-07)
+
+Blind stratified human grading (50 pairs, founder-graded): judge agreement 100% in 0.96-0.98, 86% in 0.94-0.96, 75% in 0.98+ (n=8), but 36% in 0.92-0.94 - ALL 8 sampled approvals at the band floor graded DIFF. falseReject ~2 overall (lost-lift direction is small); falseAccepts concentrate at the floor.
+
+Citable configuration = ratified restricted to human-validated bands (score >= 0.94, ~89% agreement): KU updateCorrect 0.403 -> 0.472 (+6.9pp, 1.42x naive) at -1.4pp recall@3, 225 aliases, maxComponent 4. The full-band 0.528 stands only with the floor-band caveat. The 0.92-0.94 band (+5.6pp) behaved like blind merging - lift without judgment precision; recovering it is a bounded judging problem (richer context / stricter prompt / 3-vote panel).
+
+Artifacts: spot-check.ts (blind sheet + scorer), filled sheet, key-ratify-judgments-min094.jsonl.
