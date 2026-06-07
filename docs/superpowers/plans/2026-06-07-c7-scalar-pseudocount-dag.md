@@ -7,7 +7,7 @@ created: 2026-06-07
 flowchart TD
     task-1["task-1: createCorpus complete pseudocount map<br/>files: src/surface/types.ts +2 more"]
     task-2["task-2: load-time C7 backfill<br/>files: src/surface/session.ts +1 more"]
-    task-3["task-3: barrel exports + examples wiring<br/>files: src/surface/index.ts +3 more"]
+    task-3["task-3: barrel exports + examples wiring<br/>files: src/surface/index.ts +4 more"]
     task-1 --> task-2
     task-1 --> task-3
 
@@ -100,6 +100,18 @@ export interface CorpusSpec {
 // `{ llm: undefined }` over the default (re-arming pseudocountFor's throw) and
 // JSON.stringify then drops the key — persisting a 5-key NON-EMPTY map the
 // task-2 backfill predicate can never repair. (Spec audit finding 2.5.)
+// Validate override VALUES before merging (principles-audit finding 13):
+// NaN/Infinity survive the undefined-strip but JSON.stringify persists them as
+// null — a non-empty map the backfill can't repair, slipping pseudocountFor's
+// `=== undefined` check; negatives survive round-trip and produce negative α/β.
+// 0 is legal (trust-the-prior-only, well-defined in scalarToBeta).
+for (const [src, v] of Object.entries(spec.scalarPseudocount ?? {})) {
+  if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
+    throw new Error(
+      `invalid scalarPseudocount for source "${src}": ${v} (must be a finite number >= 0)`
+    );
+  }
+}
 const pcOverrides = Object.fromEntries(
   Object.entries(spec.scalarPseudocount ?? {}).filter(([, v]) => v !== undefined)
 );
@@ -136,9 +148,18 @@ it("surface-created corpus supports scalar→Beta promotion for every source", (
   exactly six keys, all finite numbers. Pins against partial-persist refactors.
 - Spec test 3b (strip): `createCorpus({ scalarPseudocount: { llm: undefined } })` →
   schema llm is 2 (the default), and the persisted map has six numeric values.
+- Spec test 3c (value validation): `createCorpus` throws for overrides
+  `{ llm: NaN }`, `{ llm: Infinity }`, `{ llm: -1 }` (message names the source and
+  value); `{ llm: 0 }` is accepted and persists as 0.
 - A.1 values exactly as in the spec: `{ manual: 10, verification: 10, workflow: 5,
   heuristic: 5, llm: 2, imported: 2 }`; doc-comment notes "uncalibrated spec priors,
   efficacy instrument sweeps this dial".
+- Cross-reference comment (principles-audit finding 1): the
+  `DEFAULT_SCALAR_PSEUDOCOUNT` doc-comment points at `src/core/source-trust.ts`
+  ("sibling A.1 tables — SOURCE_WEIGHT / HALF_LIFE_DAYS — independently
+  calibrated; an A.1 retune touches both files"). The reverse pointer in
+  `source-trust.ts` belongs to task-3 (H3: src/core/ is outside this task's
+  subsystem).
 - No change to `src/catalog/schema.ts`, `src/write/source-weight.ts`, or
   `src/mcp/tools.ts` (ensureCorpus inherits).
 - Existing surface tests stay green (`npx vitest run src/surface src/mcp` — scoped;
@@ -217,7 +238,10 @@ it("backfills an empty scalarPseudocount on load, persists, and announces", () =
 ## Acceptance criteria
 
 - Spec test 4: sidecar with `scalarPseudocount: {}` → re-open → in-memory schema AND
-  persisted sidecar carry the full six-source A.1 map.
+  persisted sidecar carry the full six-source A.1 map. **Idempotency pin
+  (principles-audit finding 9): a third open after the repair emits no stderr and
+  leaves the sidecar bytes unchanged** — pins the predicate/repair pair against
+  drift (a future repair writing a map the predicate still matches).
 - Spec test 5 (A2): sidecar def with the field **deleted entirely** → same repair.
 - Spec test 6: stderr fires exactly once per repaired corpus with the message shape
   `<sidecar-path>: backfilled scalarPseudocount for '<id>' (C7 repair, A.1 defaults)`;
@@ -245,6 +269,7 @@ depends_on: [task-1]
 files:
   - src/surface/index.ts
   - src/index.ts
+  - src/core/source-trust.ts
   - examples/quickstart.ts
   - examples/bio-quickstart.ts
 status: pending
@@ -278,6 +303,10 @@ scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT },
   (quickstart.ts:9-20, bio-quickstart.ts:13), NOT the `import type` block — tsx
   erases type imports, which would make the spread a runtime ReferenceError
   (audit finding 6).
+- Reverse cross-reference comment added in `src/core/source-trust.ts` above
+  SOURCE_WEIGHT/HALF_LIFE_DAYS: one line naming
+  `DEFAULT_SCALAR_PSEUDOCOUNT` (src/surface/types.ts) as the sibling A.1 table,
+  independently calibrated (comment-only; principles-audit finding 1).
 - tsc is NOT this task's gate (parallel task-2 edits src/ concurrently); the
   executor's final gate covers `npx tsc --noEmit`.
 

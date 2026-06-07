@@ -92,6 +92,16 @@ source. The strip is load-bearing, not pedantry (audit finding 2.5): under `Part
 **drops** the entry — persisting a five-key map that is non-empty, so the Change-3
 backfill predicate can never repair it. Pinned by test 3b.
 
+**Override values are validated** (principles-audit finding 13 — finding 2.5's
+JSON-round-trip logic carried to its remaining cases): `createCorpus` throws on any
+override entry where `!Number.isFinite(v) || v < 0`. Rationale: `NaN`/`Infinity`
+survive the `!== undefined` strip but `JSON.stringify` persists them as `null` —
+non-empty map (backfill can't repair) that slips `pseudocountFor`'s `=== undefined`
+check and feeds `null` into Beta math; negative values survive round-trip intact and
+produce negative α/β (silent corruption at promotion time). `0` is **legal** —
+"trust the prior only" is mathematically well-defined in `scalarToBeta`. Pinned by
+test 3c.
+
 `ensureCorpus` (src/mcp/tools.ts) needs **no change** — it inherits the default.
 
 **Invariant (pinned by test):** every post-fix `createCorpus` persists a **complete**
@@ -163,6 +173,9 @@ sidecar upgrade and one stderr line on the first post-fix session open.
 3b. **Explicit-`undefined` override stripped**: `createCorpus({ scalarPseudocount:
    { llm: undefined } })` → llm at default 2; persisted map has six **numeric**
    values (pins the strip against a naive-spread refactor; audit finding 2.5).
+3c. **Invalid override values rejected**: `createCorpus` throws for
+   `{ llm: NaN }`, `{ llm: Infinity }`, and `{ llm: -1 }`; `{ llm: 0 }` is
+   accepted (principles-audit finding 13).
 4. **Backfill, empty**: sidecar with `scalarPseudocount: {}` → re-open → map
    backfilled, sidecar persisted with full map.
 5. **Backfill, absent** (A2): sidecar def lacking the field → same repair.
@@ -186,3 +199,14 @@ sidecar upgrade and one stderr line on the first post-fix session open.
 read/derive time, **verify the map is stamped into derivation provenance for replay
 determinism** — the keyAliases field-by-field-rebuild lesson (PR #23 plan audit) says
 verify, never assume.
+
+**Pre-existing warts noted by the principles audit (NOT this slice; backlog):**
+`openSession` has no try/finally around its body — a throw after
+`createSqliteAdapter` (today's `mneme.createCorpus(d)`, or the new repair-persist)
+leaks the adapter handle, notable on Windows. Two-process `createCorpus` of
+*different* corpora can drop one (each persists its own `listCorpora()`); the repair
+does not enlarge this (concurrent repairs write byte-identical content).
+Doc-comment hygiene folded in: `DEFAULT_SCALAR_PSEUDOCOUNT` and
+`src/core/source-trust.ts` (SOURCE_WEIGHT / HALF_LIFE_DAYS) cross-reference each
+other as sibling A.1 tables, independently calibrated — an A.1 retune touches two
+files.
