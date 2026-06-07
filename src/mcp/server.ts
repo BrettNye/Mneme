@@ -135,6 +135,10 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         abstained: z.boolean().describe("true when abstainBelowTop was applied and the top score was below the threshold"),
         rankFn: z.string().describe("the similarity function name used for ranking (e.g. 'jaccard' or 'hybrid')"),
         warnings: z.array(z.string()).optional().describe("non-fatal warnings from alias loading or cardinality checking"),
+        coverage: z.object({
+          entities: z.array(z.object({ text: z.string(), supported: z.boolean() })),
+          missing: z.array(z.string()),
+        }).describe("entity-coverage facts over the pre-knob survivors; agents decide refusal"),
       },
     },
     async (a) => {
@@ -185,6 +189,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           topScore: r.topScore,
           abstained: r.abstained,
           rankFn: r.rankFn,
+          coverage: r.coverage,
           warnings: r.warnings,
         },
       };
