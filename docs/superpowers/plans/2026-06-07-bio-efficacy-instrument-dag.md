@@ -98,9 +98,11 @@ import { createHash } from "node:crypto";
 
 /** Deterministic 50/50 split by question id — byte-identical to the inline
  *  expression in abstention-signals.ts (the deep-dive split). The efficacy
- *  protocol cites THIS function as the split definition. */
+ *  protocol cites THIS function as the split definition.
+ *  The exact expression (audit-quoted from abstention-signals.ts:156):
+ *  parseInt(createHash("sha256").update(questionId).digest("hex").slice(0, 8), 16) % 2 === 0 */
 export function isTrain(questionId: string): boolean {
-  // replicate abstention-signals.ts's sha256-based expression EXACTLY
+  // the expression above, verbatim
 }
 
 /** Cross-fit folds: every item is evaluated held-out exactly once. */
@@ -170,14 +172,24 @@ export interface IngestHooks {
   mapRecord?: (rec: ClaimRecordT, base: WriteRecord) => WriteRecord;
 }
 
+// Source type: import from src/index.js (root barrel) or src/core/claim.js — NOT
+// the surface barrel (it doesn't re-export Source). No new src exports needed.
 export function ingestQuestion(
   session: Session,
   question: LmeQuestionT,
   claims: ClaimRecordT[],
   hooks?: IngestHooks
-): IngestReport {
+): ImportStats {  // actual existing return type — `IngestReport` does not exist
   // createCorpus({ id, contradictionPolicy, ...(hooks?.scalarPseudocount && { scalarPseudocount: hooks.scalarPseudocount }) })
-  // per record: const base = mapClaimRecord(rec); session.write(corpusId, hooks?.mapRecord ? hooks.mapRecord(rec, base) : base)
+  // PRESERVE the writeMany-based conservation path (plan-audit finding 5 — the real
+  // ingest maps all records then calls session.writeMany once, and conservation
+  // checks the returned ImportStats; per-record session.write would change duplicate
+  // semantics and break the stats):
+  //   const writeRecords = records.map((rec) => {
+  //     const base = mapClaimRecord(rec);
+  //     return hooks?.mapRecord ? hooks.mapRecord(rec, base) : base;
+  //   });
+  //   const stats = session.writeMany(corpusId, writeRecords);
   // conservation + AlreadyIngestedError guards UNCHANGED
 }
 ```
@@ -186,9 +198,12 @@ export function ingestQuestion(
 // bench/longmemeval/ingest.test.ts — minimum-viable failing test
 it("mapRecord hook promotes confidence to Beta and scalarPseudocount reaches the schema", () => {
   // openSession over tmp db; ingestQuestion(..., { scalarPseudocount: { imported: 5 },
-  //   mapRecord: (rec, base) => ({ ...base, confidence: betaFromRaw(1, "imported", schemaOf(session, corpusId)) }) });
+  //   mapRecord: (rec, base) => ({ ...base,
+  //     confidence: betaFromRaw(1, "imported", { scalarPseudocount: { imported: 5 } } as unknown as ClaimSchema) }) });
+  //   (no `schemaOf` helper exists; build the schema literal — the source-weight.test.ts cast precedent —
+  //    or cast inspectCorpus's `unknown` return to CorpusDef and use .schema)
   // assert a written claim's confidence.distribution === "beta"
-  // assert inspectCorpus(corpusId).schema.scalarPseudocount.imported === 5
+  // assert (session.inspectCorpus(corpusId) as CorpusDef).schema.scalarPseudocount.imported === 5
 });
 ```
 
@@ -231,8 +246,10 @@ never copied tables. Arm-D inline pins are ONLY the four gate numbers
 ## Acceptance criteria
 
 - Sections present: pre-registration header (status, date, derived-from spec link),
-  Arm P (P0 exact parameters incl. Beta(4.2,1.8) / Beta(2.2,3.8) and bracketing
-  invariant; P1 cross-fit gates in counts — ≥4 residual TP, precision ≥62.5%
+  Arm P (P0 exact parameters with the registered float64 footnote — rational
+  targets 21/5, 9/5, 11/5, 19/5; "exact" = exact float64 determinism of the
+  substrate's fold expressions, agreeing-case β lands 1 ulp below 1.8 — and
+  bracketing invariant; P1 cross-fit gates in counts — ≥4 residual TP, precision ≥62.5%
   (FP ≤ ⌊0.6·TP⌋), ≤9/199 false abstentions, paired dominance primary,
   UNDERPOWERED floor; P2 exact 3-decimal equality via --expect convention;
   dial sweep {2,5,10} with the three-places-one-constant source note), Arm D
@@ -279,13 +296,23 @@ const PSEUDOCOUNTS = [2, 5, 10];    // --pseudocounts override
 //   })
 // ONE EmbeddingCache + ONE warmEmbeddings pass shared across all sweep points (attribution)
 // per question (citable config: loadRatifiedPairs(min094) -> autoRatify alias map; hybridMax):
-//   surviving = canonicalReadStages(...with keyAliases, evidencePoolingRule: RULE.EVIDENCE_POOLED /* config fidelity; inert for serving */)
+//   POOLING-RULE BRANCH (plan-audit finding 2 — scalar binding THROWS on EVIDENCE_POOLED):
+//     promoted Beta corpora -> evidencePoolingRule: RULE.EVIDENCE_POOLED (config fidelity; inert for serving)
+//     unpromoted scalar BASELINE pass -> RULE.MAX_MEAN (the recorded config, key-matching-sweep precedent)
 //   pooled top-1 signal: group survivors by (subject, canonicalKey(aliasMap), valueHash);
 //     take top-ranked claim's group; fold via bindingFor("beta").combine(RULE.EVIDENCE_POOLED, ...)
 //   baseline row: scalar path (no promotion) MAX_MEAN top-1 confidence
 // cross-fit via splitFolds/isTrain (holdout.ts): threshold on A -> eval B; swap; pool held-out
+//   (cross-fit LOOP lives here in the harness; only the split is hoisted — registered note)
 // residual class: abstention-labeled && coverageOf does NOT flag
-// P2: answerArmA + scoreQuestion + aggregate over the promoted pc=2 corpus; --expect-update-correct 0.556 etc.
+// P2 (plan-audit finding 3 — do NOT copy the template's gate placement, it guards the
+//   no-alias jaccard baseline 0.403): run the CITABLE cell — ratified aliases + hybrid rank —
+//   over the promoted pc=2 corpus via answerArmA(evidencePoolingRule branch as above) +
+//   scoreQuestion + aggregate; THREE new flags --expect-update-correct/--expect-recall3/
+//   --expect-recall10 wired to 0.556/0.931/0.979 at r3 precision, template abort convention.
+// SMOKE is a CLI mode of THIS script (plan-audit finding 4): fixture paths + the synthetic
+//   residual-class case, jaccard rank acceptable, exits nonzero — run via npx tsx during
+//   verification. The .test.ts file stays substrate-only (never imports this script).
 // output: markdown table per sweep point (P0 status; P1 counts TP/FP/precision/falseAbst for pooled + baseline; P2 row)
 // exit nonzero on any integrity failure
 ```
@@ -297,11 +324,13 @@ import { bindingFor } from "../../../src/distribution/registry.js"; // (or the a
 import { RULE } from "../../../src/distribution/rules.js";
 import { betaFromRaw } from "../../../src/write/source-weight.js";
 
-it("P0: agreeing 0.8 inputs pool to exactly Beta(4.2, 1.8)", () => {
+it("P0: agreeing 0.8 inputs pool to the exact float64 fold values", () => {
   const schema = { scalarPseudocount: { imported: 2 } } as unknown as ClaimSchema;
-  const x = betaFromRaw(0.8, "imported", schema); // Beta(2.6, 1.4)
+  const x = betaFromRaw(0.8, "imported", schema); // Beta(2.6, 1.4) — float-exact
   const pooled = bindingFor("beta").combine(RULE.EVIDENCE_POOLED, x.parameters, x.parameters);
-  expect(pooled).toEqual({ alpha: 4.2, beta: 1.8 }); // exact rational params (shape per beta binding)
+  expect(pooled.alpha).toBe(4.2);          // rational 21/5, float-exact
+  expect(pooled.beta).toBe(1.4 + 1.4 - 1); // rational 9/5; float64 = 1.7999999999999998 (1 ulp low)
+  // "exact" = exact float64 determinism of the substrate's fold expressions (registered footnote)
 });
 
 it("P0 below-prior: raw 0.3 pools to exactly Beta(2.2, 3.8) and brackets", () => {
@@ -316,10 +345,13 @@ it("P0 in-substrate: a contrived CONTESTED cluster's combinedConfidences matches
 
 ## Acceptance criteria
 
-- P0 tests: exact parameters (4.2/1.8 and 2.2/3.8 at pc 2, default prior),
+- P0 tests: exact float64 parameters (α 4.2 exactly, β `1.4 + 1.4 - 1` =
+  1.7999999999999998 for the agreeing case; 2.2/3.8 float-exact below-prior),
   bracketing invariant strict both ends, concentration increase both cases,
   contested-cluster `clustersOf` agreement — all green in CI with NO
-  embeddings-local import (verify: grep the test file's import graph).
+  embeddings-local import (verify: grep the test file's import graph; the audit
+  confirmed the chain registry/rules/source-weight/contradiction pulls no
+  @huggingface/transformers).
 - Harness implements: per-sweep-point tmp DB; single shared embedding cache/warm
   pass; SOURCE constant used in exactly the three specced places; pooled top-1
   computed harness-side per the spec's grouping; scalar/MAX_MEAN baseline row;
@@ -328,10 +360,16 @@ it("P0 in-substrate: a contrived CONTESTED cluster's combinedConfidences matches
   pooled AND baseline, per sweep point); P2 via answerArmA/scoreQuestion/aggregate
   with --expect-* abort wired to 0.556/0.931/0.979; UNDERPOWERED detection (<4
   total flags) printed as a distinct outcome.
-- Smoke path (network-free): runs against the committed fixture PLUS a synthetic
-  residual-class case (abstention-labeled question whose entity tokens appear in
-  claims but whose attribute is missing — the committed fixture alone cannot
-  exercise the residual class); exits nonzero on integrity failure.
+- Smoke path (network-free): a CLI mode of pooling-efficacy.ts itself (NOT the
+  .test.ts file — the sweep-test precedent of importing the script would pull
+  embeddings transitively), run via `npx tsx` during verification against the
+  committed fixture PLUS a synthetic residual-class case (abstention-labeled
+  question whose entity tokens appear in claims but whose attribute is missing —
+  the committed fixture alone cannot exercise the residual class); jaccard rank
+  acceptable for the smoke; exits nonzero on integrity failure.
+- P2 gate wired to the CITABLE cell (ratified aliases + hybrid over promoted pc=2)
+  — NOT the template's no-alias jaccard baseline placement (which would abort at
+  0.403); three new --expect flags at r3 precision.
 - No writes to bench/RESULTS.md from this task (that is task-5's run).
 - Scoped gate: `npx vitest run bench/longmemeval`.
 

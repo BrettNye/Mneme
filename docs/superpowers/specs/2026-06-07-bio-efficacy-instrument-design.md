@@ -49,9 +49,13 @@ information that scalar/MAX_MEAN confidence does not?"*
 - **P0 (hard property, binary, exact):** for two same-value claims with scalar raw
   0.8 promoted at pseudocount 2 under the default prior:
   - inputs are Beta(2.6, 1.4) each (mean 0.65, concentration 4.0);
-  - the `EVIDENCE_POOLED` fold yields **exactly Beta(4.2, 1.8)** (mean 0.70,
-    concentration 6.0) — exact rational parameters pinned, which makes the
-    determinism claim executable;
+  - the `EVIDENCE_POOLED` fold yields **the exact float64 values of the substrate's
+    own fold expressions**: α = 4.2 exactly; β = `1.4 + 1.4 − 1` =
+    1.7999999999999998 (1 ulp below the rational target 9/5). "Exact" is
+    registered as exact float64 determinism of the pinned expressions — the
+    rational targets (21/5, 9/5; below-prior 11/5, 19/5) are the analytic
+    derivation, the float64 pins are the executable property (plan-audit
+    finding: asserting rational 1.8 ships a red test);
   - below-prior case raw 0.3: inputs Beta(1.6, 2.4) (mean 0.40) pool to **exactly
     Beta(2.2, 3.8)** (mean ≈0.3667) with the **bracketing invariant**
     `raw < pooledMean < inputMean` (strict both ends) — pooling moves the mean
