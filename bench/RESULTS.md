@@ -264,3 +264,22 @@ Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attri
 2. Key matching recovers up to +22.2pp KU updateCorrect on real extraction drift (0.403 -> 0.625 at hybrid theta 0.90, recall@3 -4.9pp, recall@10 +0.7pp). Pairs-only merging (theta 0.98) is free: +1.4pp at zero recall cost. The degenerate mega-merge ceiling (0.903) shows ~90% of KU questions have the correct claim present - the failure mode is key identity, not retrieval.
 3. No clean threshold exists (smooth precision/recall dial; maxComponent grows 2 -> 79 as theta drops). Empirical vindication of detect -> declare -> contest: blind auto-merge cannot capture the lift safely; a ratification loop over theta ~0.92-0.94 census candidates can. Auto-suggest dial calibration: SUGGEST at ~0.92, never auto-merge.
 4. Discovered product bug en route: alias maps + scalar confidence + same-value drifted claims crash EVIDENCE_POOLED (dedupe is alias-blind). Fixed via DetectionOptions.evidencePoolingRule (default unchanged); MCP recall follow-up open.
+
+## Key-matching oracle experiment — auto-ratification threshold sweep (2026-06-06)
+
+Dataset: bench/datasets/longmemeval/longmemeval_oracle_target.json (oracle attribution). Claims: bench/datasets/longmemeval/longmemeval-oracle-claims.jsonl (model claude-sonnet-4-6, promptVersion lme-extract-v1). Ranking jaccard in all passes; scorer drives key-pair auto-ratification only (single-link components, canonical = most-claims then lexicographic). Bench-only experiment policy — the product keeps human/agent ratification; this curve is calibration evidence for a future auto-suggest dial. Spec: docs/superpowers/specs/2026-06-06-key-matching-oracle-experiment-design.md
+
+| scorer | theta | KU_updateCorrect | KU_recall@1 | KU_recall@3 | KU_recall@10 | TR_correct | TR_recall@3 | ABS_correct | aliases | qAffected | maxComponent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | baseline | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| jaccard | 0.92 | 0.403 | 0.493 | 0.917 | 0.965 | 1 | 0.843 | 0 | 0 | 0 | 1 |
+| hybrid | 0.92 | 0.556 | 0.493 | 0.896 | 0.965 | 1 | 0.839 | 0 | 1078 | 208 | 18 |
+| ratified | ratified | 0.528 | 0.493 | 0.903 | 0.965 | 1 | 0.83 | 0 | 380 | 161 | 7 |
+
+### Ratified arm conclusions (2026-06-06)
+
+Judge: claude-sonnet-4-6, ratify-v1, suggest band >=0.92 (1,192 unique census candidates, $~2.3). Approval rate 26.4% (315) - the judge rejects ~3 of 4 candidates in the band (e.g. "current sweetener" vs "sweetener issue" at 0.921: related topic, different attribute). Judgments artifact committed at bench/longmemeval/manual/data/key-ratify-judgments.jsonl for deterministic replay.
+
+Ratified row: KU updateCorrect 0.403 -> 0.528 (+12.5pp, 1.31x baseline, 1.59x naive arm B) at -1.4pp recall@3 and unchanged recall@10, using 380 aliases (35% of blind-0.92 volume, maxComponent 7 vs 18). Per-alias lift efficiency 2.3x blind. Blind-0.92 scores higher updateCorrect (0.556) because false merges sometimes accidentally serve the newest claim - lift without precision; the ratified row is the honest, auditable number (every merge has a recorded reason).
+
+Open lever: the suggest band only exposed >=0.92 to judgment; true drift below 0.92 remains unrecovered (ceiling 0.903). Widening the band (e.g. >=0.85) with the same judge is the next increment toward the ceiling.
