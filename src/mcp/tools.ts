@@ -15,6 +15,18 @@ import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Session } from "../surface/index.js";
 import { pointEstimate } from "../surface/index.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
+import { RULE } from "../distribution/rules.js";
+
+/**
+ * MCP corpora carry SCALAR confidences (remember writes scalarConfidence), and
+ * the scalar binding rejects EVIDENCE_POOLED until pseudocount promotion lands
+ * (C7 / bio slice). With a ratified alias map, ⊥'s canonical grouping can
+ * co-locate same-value claims from drifted keys (⊕_dedupe is alias-blind) and
+ * the pooling fold would crash recall/census. MAX_MEAN is the conservative
+ * scalar choice: agreement never decreases confidence, never invents evidence.
+ * Discovered by the key-matching oracle sweep, 2026-06-06.
+ */
+const MCP_EVIDENCE_POOLING_RULE = RULE.MAX_MEAN;
 import { abstainBelowTop, relevanceFloor, similarityFn } from "../algebra/similarity.js";
 import { warmValues } from "../algebra/embedding.js";
 import type { EmbeddingState } from "./embeddings.js";
@@ -278,7 +290,12 @@ export async function recall(
     pipe(
       leaf(args.corpus),
       ...sigmas,
-      ...canonicalReadStages({ evaluationInstant: now, keyCardinality, keyAliases: aliasMap }),
+      ...canonicalReadStages({
+        evaluationInstant: now,
+        keyCardinality,
+        keyAliases: aliasMap,
+        evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
+      }),
       rho.by(embeddings.rankFn, args.about),
     ),
     { evaluationClock: now },
@@ -400,7 +417,12 @@ export async function keyCensus(
   //   - non-deprecated (resolveDeprecateOlder + drop)
   //   - valid at evaluationInstant (tauValid)
   //   - excluding isKeyAliasShaped and CONTRADICTION_FLAG_KEY (drop stage)
-  const stages = canonicalReadStages({ evaluationInstant: now, keyCardinality: deps.keyCardinality, keyAliases: aliasMap });
+  const stages = canonicalReadStages({
+    evaluationInstant: now,
+    keyCardinality: deps.keyCardinality,
+    keyAliases: aliasMap,
+    evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
+  });
 
   // Apply pipeline stages manually over the raw corpus (no query needed, we already have rawClaims)
   // Build a minimal Corpus structure consistent with how algebra stages expect it

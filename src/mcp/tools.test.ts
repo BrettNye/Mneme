@@ -735,3 +735,39 @@ describe("ensureCorpus — default scopeFields for new corpora", () => {
     }).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// evidencePoolingRule at the MCP surface (sweep-discovered crash)
+// ---------------------------------------------------------------------------
+
+describe("recall/census - scalar pooling under aliases", () => {
+  it("recall does not crash when a ratified alias co-locates same-VALUE scalar claims in a contested cluster", async () => {
+    const s = freshSession();
+    const corpus = "pooling-crash";
+    // Same value under DRIFTED keys (dedupe is alias-blind; these reach contest un-merged)
+    remember(s, { subject: "user:a", key: "service-date", value: "March 15", corpus, confidence: 0.8, validFrom: "2026-01-01T00:00:00Z" });
+    remember(s, { subject: "user:a", key: "car-service-date", value: "March 15", corpus, confidence: 0.9, validFrom: "2026-01-02T00:00:00Z" });
+    // Rival value under the canonical key -> contested cluster -> pooling fires
+    remember(s, { subject: "user:a", key: "service-date", value: "March 16", corpus, confidence: 0.7, validFrom: "2026-01-03T00:00:00Z" });
+    // Ratify the alias
+    remember(s, { subject: "key:car-service-date", key: "alias-of", value: "service-date", corpus });
+
+    const r = await recall(s, { about: "service date", corpus }, jaccardDeps);
+    expect(r.abstained).toBe(false);
+    expect(r.matches.length).toBeGreaterThan(0);
+    s.close();
+  });
+
+  it("key_census does not crash on the same corpus shape", async () => {
+    const s = freshSession();
+    const corpus = "pooling-crash-census";
+    remember(s, { subject: "user:a", key: "service-date", value: "March 15", corpus, confidence: 0.8, validFrom: "2026-01-01T00:00:00Z" });
+    remember(s, { subject: "user:a", key: "car-service-date", value: "March 15", corpus, confidence: 0.9, validFrom: "2026-01-02T00:00:00Z" });
+    remember(s, { subject: "user:a", key: "service-date", value: "March 16", corpus, confidence: 0.7, validFrom: "2026-01-03T00:00:00Z" });
+    remember(s, { subject: "key:car-service-date", key: "alias-of", value: "service-date", corpus });
+
+    const r = await keyCensus(s, { corpus }, jaccardDeps);
+    expect(r.keys.length).toBeGreaterThan(0);
+    s.close();
+  });
+});

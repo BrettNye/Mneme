@@ -47,7 +47,7 @@ const MAX_K = 10;
 
 export interface SweepCell {
   scorer: string;
-  theta: number | "baseline";
+  theta: number | "baseline" | "ratified";
   rows: ScoreRow[]; // arm A aggregate rows for this cell
   aliases: number; // total alias entries across questions
   questionsAffected: number;
@@ -75,6 +75,7 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
       claims: { type: "string" },
       thetas: { type: "string", default: "0.5,0.6,0.7,0.8,0.9" },
       raw: { type: "boolean", default: false },
+      ratified: { type: "string" },
       "expect-update-correct": { type: "string" },
       "append-results": { type: "string" },
     },
@@ -218,6 +219,47 @@ export async function main(argv: string[], opts?: SweepOpts): Promise<number> {
         });
         console.log(`pass done: scorer=${scorer.name} theta=${theta} aliases=${aliases} affected=${affected}`);
       }
+    }
+
+    // --- ratified arm (judged census candidates → precision-by-judgment maps) ---
+    if (values.ratified) {
+      const approved = new Set<string>();
+      let judgedTotal = 0;
+      for (const line of readFileSync(String(values.ratified), "utf-8")
+        .split("\n")
+        .filter((l) => l.trim().length > 0)) {
+        const obj = JSON.parse(line) as { kind?: string; a?: string; b?: string; same?: boolean };
+        if (obj.kind !== undefined) continue; // header
+        judgedTotal++;
+        if (obj.same && obj.a && obj.b) {
+          approved.add(obj.a < obj.b ? `${obj.a}\x1f${obj.b}` : `${obj.b}\x1f${obj.a}`);
+        }
+      }
+      console.log(`ratified arm: ${approved.size} approved of ${judgedTotal} judged pairs`);
+      // Indicator scorer reuses autoRatify verbatim: components + canonical
+      // rule identical to the blind arms; only edge admission differs.
+      const indicator = (a: string, b: string): number =>
+        approved.has(a < b ? `${a}\x1f${b}` : `${b}\x1f${a}`) ? 1 : 0;
+      const scores: QuestionScore[] = [];
+      let aliases = 0;
+      let affected = 0;
+      let largest = 1;
+      for (const s of qstates) {
+        const { map, stats } = autoRatify(s.keyCounts, indicator, 1);
+        aliases += stats.aliases;
+        if (stats.aliases > 0) affected++;
+        if (stats.largestComponent > largest) largest = stats.largestComponent;
+        scores.push(scoreQuestion(s.q, answerArmA(session, s.corpusId, s.q, { ...armAOpts, keyAliases: map }), KS));
+      }
+      cells.push({
+        scorer: "ratified",
+        theta: "ratified",
+        rows: aggregate(scores, KS),
+        aliases,
+        questionsAffected: affected,
+        largestComponent: largest,
+      });
+      console.log(`pass done: scorer=ratified aliases=${aliases} affected=${affected}`);
     }
 
     opts?.collect?.(cells);
