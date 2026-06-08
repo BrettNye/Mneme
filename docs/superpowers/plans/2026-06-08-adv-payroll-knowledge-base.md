@@ -10,8 +10,9 @@
 
 **Conventions (from spec):**
 - Controlled keys: `definition`, `requirement`, `coverage`, `field-spec`, `threshold`, `pitfall`, `relates-to`, `rationale`. Do NOT introduce others.
+- **One fact per `(subject, key, scope)`:** distinct facts need distinct subjects (e.g. `form:wh-347:column-6` vs `:column-7`). Writing multiple facts under the same subject+key makes combine/resolve keep only the last (silent deprecation). Verify with `key_census`: claims-per-key must equal the distinct facts written under it.
 - Every claim gets exactly one layer tag: `regulatory` | `operational` | `vocabulary`.
-- `scope: { jurisdiction: 'federal', authority: 'DOL-WHD' }` on every claim in this slice.
+- Jurisdiction/authority go on **`tags`**, not `scope`: add `jur:federal` and `auth:DOL-WHD` to every claim's tag list. (The MCP can't declare custom scope fields — a `scope: {...}` write is rejected by strict-scope; see the spec's "Orthogonal axes" note and memory `mneme-mcp-scope-declaration-gap`. `scope` is left empty in this slice.)
 - Verified hot facts: `confidence: 1` + a `src:` tag. Soft/conceptual claims: `confidence` 0.8–0.9, no `src:`.
 
 ---
@@ -36,7 +37,7 @@ Expected: empty / no matches (corpus has no claims yet). This is the failing tes
 
 **Files:** none (writes to `adv-payroll`).
 
-Each step is one `mcp__mneme__remember` call. Common fields for every claim in this task: `corpus: "adv-payroll"`, `scope: { jurisdiction: "federal", authority: "DOL-WHD" }`, layer tag `vocabulary`.
+Each step is one `mcp__mneme__remember` call. Common fields for every claim in this task: `corpus: "adv-payroll"`, tags include `jur:federal` + `auth:DOL-WHD` + layer tag `vocabulary` (no `scope` — see Conventions).
 
 - [ ] **Step 1: Write the core definitions**
 
@@ -97,7 +98,7 @@ Expected: `term:prevailing-wage` and `concept:davis-bacon` definitions surface i
 
 **Files:** none (writes to `adv-payroll`).
 
-These are HOT FACTS. For each, the draft value below is a starting point — **verify against a source before writing**, then write with `confidence: 1` and the appropriate `src:` tag. Common fields: `corpus: "adv-payroll"`, `scope: { jurisdiction: "federal", authority: "DOL-WHD" }`, layer tag `regulatory`.
+These are HOT FACTS. For each, the draft value below is a starting point — **verify against a source before writing**, then write with `confidence: 1` and the appropriate `src:` tag. Common fields: `corpus: "adv-payroll"`, tags include `jur:federal` + `auth:DOL-WHD` + layer tag `regulatory` (no `scope` — see Conventions).
 
 - [ ] **Step 1: Fetch the authoritative sources**
 
@@ -110,32 +111,36 @@ Record the exact section/page each verified fact comes from for the `src:` tag.
 
 ```
 remember(subject="concept:davis-bacon", key="threshold",
-  value="Davis-Bacon applies to federal/federally-assisted construction contracts in excess of $2,000.",
-  tags=["regulatory", "src:DBA-40USC3142", "coverage"], confidence=1)
+  value="Davis-Bacon applies to federal or federally-assisted construction contracts in excess of $2,000. The threshold is measured on the prime contract; covered subcontractors are bound regardless of their subcontract size.",
+  tags=["regulatory", "src:40USC3142", "coverage"], confidence=1)
 
 remember(subject="rule:dbra-coverage", key="coverage",
-  value="Applies to laborers and mechanics employed directly on the site of the work; does NOT cover bona-fide executive/administrative/professional staff or material suppliers who are not also performing construction.",
+  value="Covers laborers and mechanics (manual/physical workers, including apprentices and helpers) employed on the 'site of the work'; excludes those whose duties are primarily administrative, executive, or clerical, and bona-fide material suppliers whose facilities pre-exist the project and are not on the construction site.",
   tags=["regulatory", "src:29CFR5.2", "coverage"], confidence=1)
 
+# NOTE: the pre-2023 "within seven days of the regular pay date" window was REMOVED in the
+# 2023 DBRA rule revision — verify current text; do not assert the 7-day window at confidence 1.
 remember(subject="rule:weekly-submission", key="requirement",
-  value="Covered contractors must submit a certified payroll for each week any covered work is performed, within seven days after the regular pay date for that week.",
-  tags=["regulatory", "src:29CFR5.5", "certified-payroll"], confidence=1)
+  value="On covered projects, the contractor and each subcontractor must submit a certified payroll weekly for every week in which any covered work is performed.",
+  tags=["regulatory", "src:29CFR5.5(a)(3)", "certified-payroll"], confidence=1)
 ```
 
 - [ ] **Step 3: Write the WH-347 field-spec claims (after verifying against form instructions)**
 
+**One fact per `(subject, key)`** — each WH-347 part is a DISTINCT subject, or combine/resolve will silently deprecate all but the last write (see Conventions).
+
 ```
-remember(subject="form:wh-347", key="field-spec",
-  value="Column 6 reports the rate of pay (including the cash-paid fringe portion); Column 7 reports gross amount earned. Fringe benefits paid into plans are reflected via the fringe checkboxes/Statement of Compliance, not as cash in Column 6.",
+remember(subject="form:wh-347:column-6", key="field-spec",
+  value="Column 6 (Rate of Pay) shows the straight-time hourly rate actually paid plus any cash paid in lieu of fringe benefits; the cash-in-lieu portion may be shown separately from the basic rate, e.g. '$12.25/.40'. The overtime rate plus cash-in-lieu goes in the overtime box.",
   tags=["regulatory", "src:DOL-WH347-instructions", "certified-payroll", "fringe"], confidence=1)
 
-remember(subject="form:wh-347", key="field-spec",
-  value="The Statement of Compliance (page 2) requires the contractor to check whether fringe benefits are paid to approved plans/funds or in cash, and to certify wages paid are not less than the applicable wage determination.",
-  tags=["regulatory", "src:DOL-WH347-instructions", "certified-payroll", "fringe"], confidence=1)
+remember(subject="form:wh-347:column-7", key="field-spec",
+  value="Column 7 (Gross Amount Earned) reports gross pay for the week; if the worker also worked on other projects, enter the amount earned on the federal/federally-assisted project first, then total gross across all projects, e.g. '$163.00/$420.00'.",
+  tags=["regulatory", "src:DOL-WH347-instructions", "certified-payroll"], confidence=1)
 
-remember(subject="form:wh-347", key="field-spec",
-  value="Each worker's day-by-day hours (Column 4) must separate straight-time and overtime hours; the form covers one weekly pay period per submission.",
-  tags=["regulatory", "src:DOL-WH347-instructions", "certified-payroll", "overtime"], confidence=1)
+remember(subject="form:wh-347:statement-of-compliance", key="field-spec",
+  value="On the Statement of Compliance (page 2), check box 4(a) when all fringe benefits are paid into approved plans/funds/programs (then show basic cash + overtime rates on the payroll face), or 4(b) when fringe is paid as cash in lieu; any shortfall to a plan must be paid to the worker as cash in lieu of fringe.",
+  tags=["regulatory", "src:DOL-WH347-instructions", "certified-payroll", "fringe"], confidence=1)
 ```
 
 - [ ] **Step 4: Write the fringe / overtime mechanics claims (after verifying)**
@@ -179,7 +184,7 @@ Expected: the WH-347 fringe field-spec and `rule:fringe-credit` surface with `co
 
 ### Task 4: Operational know-how layer (~8 pitfall claims)
 
-**Files:** none (writes to `adv-payroll`). Common fields: `corpus: "adv-payroll"`, `scope: { jurisdiction: "federal", authority: "DOL-WHD" }`, layer tag `operational`, `confidence` 0.8.
+**Files:** none (writes to `adv-payroll`). Common fields: `corpus: "adv-payroll"`, tags include `jur:federal` + `auth:DOL-WHD` + layer tag `operational` (no `scope` — see Conventions), `confidence` 0.8.
 
 - [ ] **Step 1: Write the pitfalls**
 

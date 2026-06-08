@@ -50,6 +50,9 @@ Prefix every subject with a type so related claims cluster and recall stays clea
 - `form:<slug>` — forms/artifacts, e.g. `form:wh-347`
 - `rule:<slug>` — specific rules/mechanics, e.g. `rule:fringe-credit`
 - `pitfall:<slug>` — operational failure modes, e.g. `pitfall:fringe-cash-vs-plan`
+- Compound subjects for the distinct parts of one artifact: `form:wh-347:column-6`, `form:wh-347:column-7`, `form:wh-347:statement-of-compliance` — see the one-fact rule below.
+
+> **Claim identity — one fact per `(subject, key, scope)`.** Mneme groups claims by the tuple `(subject, key, scopeHash)` and applies combine/resolve to a group. Writing several *different* facts under the **same** `(subject, key)` (with empty scope they share a `scopeHash`) makes later writes supersede earlier ones via `resolveDeprecateOlder` — the earlier facts silently drop out of active recall. So each distinct fact MUST get a distinct subject (or key). This is why the three WH-347 facts are modeled as `form:wh-347:column-6` / `:column-7` / `:statement-of-compliance` rather than three `form:wh-347` / `field-spec` writes. (Same mechanism as the cross-jurisdiction collision in the scope note below — it just fires within one scope when subject+key is overloaded.) Detection: after seeding, `key_census` claim-count per key must equal the number of distinct facts written under it.
 
 ### `key` — controlled predicate vocabulary (~8)
 Use ONLY these keys. Adding a key requires a deliberate decision (and a `key_census`
@@ -68,11 +71,14 @@ re-check):
 
 | Field | Carries | Example |
 |---|---|---|
-| `scope` | jurisdiction + authority (future-proofs state expansion) | `{ jurisdiction: 'federal', authority: 'DOL-WHD' }` |
-| `tags` | **layer** + **source** + **topic** | `['regulatory', 'src:29CFR5.5', 'fringe']` |
+| `tags` | **jurisdiction** + **authority** + **layer** + **source** + **topic** | `['jur:federal', 'auth:DOL-WHD', 'regulatory', 'src:29CFR5.5', 'fringe']` |
 | `confidence` | trust signal | `1` = verified hot fact · `~0.8` = soft/conceptual |
 | `validFrom` | effective date — only when a fact has one | thresholds, rule changes |
 
+> **Jurisdiction/authority ride on `tags`, not `scope` — forced by an MCP-surface gap, and this slice's hard prerequisite before state expansion.** The MCP can't declare custom scope fields: a freshly auto-created corpus gets a hardcoded `{project, person, context}` schema (`src/mcp/tools.ts` `ensureCorpus`), and strict-scope (`src/catalog/schema.ts` `validateScope`) rejects any undeclared field, so a `scope: { jurisdiction, authority }` write is refused. Tags work (`jur:federal`, `auth:DOL-WHD`) and `tagIn` is a real σ predicate, so jurisdiction stays filterable. **But tags are not a substitute for scope past one jurisdiction:** contradiction grouping keys on `(subject, key, scopeHash)` (`src/algebra/contradiction.ts`), *not* tags. With every claim at empty scope, a future state's differing value for the same `(subject, key)` would collide with the federal one in the same cluster and `resolveDeprecateOlder` would silently deprecate the older true claim. Semantic note: `jurisdiction` is a genuine truth-partitioning dimension → it *wants* scope; `authority` is provenance → tag is its correct home regardless. **Gate before adding any second jurisdiction:** add a `create_corpus`/`declare_scope` MCP tool forwarding `scopeFields` to core `createCorpus`, then migrate the federal claims to carry `jurisdiction: federal` scope (they're currently in the `"_"` empty-scope bucket). See memory `mneme-mcp-scope-declaration-gap`.
+
+- **Jurisdiction tag** (exactly one per claim): `jur:federal` (only value in this slice).
+- **Authority tag** (`auth:<body>`): the issuing authority, e.g. `auth:DOL-WHD`.
 - **Layer tag** (exactly one per claim): `regulatory` | `operational` | `vocabulary`.
 - **Source tag** (`src:<ref>`): present iff the claim was verified against an
   authoritative source.
@@ -87,13 +93,14 @@ re-check):
 subject: term:prevailing-wage        key: definition
 value:   "The basic hourly rate + fringe benefits paid to the majority of workers in a
           given classification and locality, as determined by DOL."
-tags: [vocabulary]                   confidence: 0.9
+tags: [jur:federal, auth:DOL-WHD, vocabulary]                   confidence: 0.9
 
-subject: form:wh-347                 key: field-spec
-value:   "Column 6 (Rate of Pay) and Column 7 (Gross Amount Earned) must report the
-          prevailing rate; fringe paid in cash vs. to a plan is tracked separately in
-          the fringe statement on page 2."
-tags: [regulatory, src:DOL-WH347-instructions, certified-payroll, fringe]   confidence: 1
+subject: form:wh-347:column-6        key: field-spec
+value:   "Column 6 (Rate of Pay) shows the straight-time rate plus any cash paid in lieu
+          of fringe, e.g. '$12.25/.40'."
+tags: [jur:federal, auth:DOL-WHD, regulatory, src:DOL-WH347-instructions, certified-payroll, fringe]   confidence: 1
+# (Column 7 and the Statement of Compliance are SEPARATE claims under
+#  form:wh-347:column-7 and form:wh-347:statement-of-compliance — one fact per subject+key.)
 
 subject: pitfall:fringe-cash-vs-plan key: pitfall
 value:   "Contractors commonly misreport bona-fide fringe contributions as cash wages,
@@ -137,8 +144,12 @@ in real use (feeds the active dogfood window).
 
 ## Future expansion (out of scope here, but the schema supports it)
 
-- State laws: reuse all keys; set `scope.jurisdiction` to the state; add `src:` for state
-  determinations.
+- State laws: **blocked on the scope-declaration gate above** — first add the
+  `create_corpus`/`declare_scope` MCP tool and migrate federal claims to
+  `scope.jurisdiction = 'federal'`, then set `scope.jurisdiction` to the state and add
+  `src:` for state determinations. (Filtering federal-only data in the meantime is fine
+  via the `jur:federal` tag; the gate exists only because a second jurisdiction would
+  otherwise collide in contradiction grouping.)
 - Union/CBA: add `concept:` / `rule:` entities; topic tag `union`.
 - Product-design implications: if ever wanted, a separate corpus or a distinct
   layer tag — kept out of this domain corpus by design.
