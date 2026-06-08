@@ -167,6 +167,14 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         matchCount: r.matches.length,
         abstained: r.abstained,
         rankFn: r.rankFn,
+        // Observation-only enrichment (window-safe): all sourced from the
+        // RecallResult the handler already holds — no new computation, no
+        // effect on served results.
+        missingCount: r.coverage.missing.length,
+        missing: r.coverage.missing,
+        warningCount: r.warnings?.length ?? 0,
+        subject: a.subject,
+        key: a.key,
       });
 
       // Surface warnings to stderr (house convention: tools stay pure; server does I/O).

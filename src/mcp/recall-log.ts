@@ -9,6 +9,19 @@ export interface RecallLogEntry {
   matchCount: number;
   abstained: boolean;
   rankFn: string;
+  /** Count of question entities with no claim available to this recall
+   *  (coverage.missing.length). The first real-use distribution of the
+   *  coverage signal — observation-only, does not alter served results.
+   *  Optional so pre-enrichment log lines stay valid (additive schema). */
+  missingCount?: number;
+  /** The missing entity strings themselves (coverage.missing). */
+  missing?: string[];
+  /** Count of non-fatal warnings surfaced by the recall (warnings?.length ?? 0). */
+  warningCount?: number;
+  /** The subject filter arg the call used, when filtered. Omitted when unfiltered. */
+  subject?: string;
+  /** The key filter arg the call used, when filtered. Omitted when unfiltered. */
+  key?: string;
 }
 
 /**
