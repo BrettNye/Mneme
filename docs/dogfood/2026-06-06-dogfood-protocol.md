@@ -4,6 +4,8 @@
 **Window:** 2 weeks from merge date
 **Derived from:** `docs/superpowers/specs/2026-06-06-mcp-dogfood-upgrade-design.md` §8
 
+> **Amendment 2026-06-07 (observation-only):** the recall-log line schema was additively extended with `missingCount`, `missing` (coverage entity strings with no claim available), `warningCount`, and the `subject`/`key` filter args the call used. Logging-only — `remember`/`recall` semantics, ranking, and coverage computation are unchanged, so the Q1–Q4 measured behavior is not altered. Pre-extension lines remain valid (new fields are optional). Precedent: the corpus-model amendment below.
+
 ---
 
 ## 1. Window and scope
@@ -61,7 +63,7 @@ All four questions are pre-registered before the window opens to prevent post-ho
 **Hypothesis:** the algebra serves the right fact in cases where plain recall (no temporal resolution) would return a stale or ambiguous value.
 
 **Evidence source:**
-- `.mneme/recall-log.jsonl` — each recall line records `{ ts, corpus, about, topScore, matchCount, abstained, rankFn }`.
+- `.mneme/recall-log.jsonl` — each recall line records `{ ts, corpus, about, topScore, matchCount, abstained, rankFn }` (additively extended 2026-06-07, see amendment below).
 - `claim_events` table in `.mneme/store.db` — write-event log with timestamps; same `(subject, key)` written more than once indicates a supersession candidate.
 
 **Check procedure:**
@@ -130,7 +132,7 @@ The following artifacts accumulate passively during the window:
 
 | Artifact | Path (relative to repo root) | What it captures |
 |---|---|---|
-| Recall log | `.mneme/recall-log.jsonl` | Per-recall: ts, corpus, about, topScore, matchCount, abstained, rankFn |
+| Recall log | `.mneme/recall-log.jsonl` | Per-recall: ts, corpus, about, topScore, matchCount, abstained, rankFn, missingCount, missing, warningCount, subject, key |
 | Write-event log | `.mneme/store.db` → `claim_events` table | Every `remember` call with timestamp, subject, key, value |
 | Claim provenance | `.mneme/store.db` → `claims` table, `provenance` column | For derived claims: which source claims combined |
 | Key census | query against `.mneme/store.db` | Snapshot of distinct keys per corpus (run at midpoint + end) |
