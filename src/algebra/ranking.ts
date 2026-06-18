@@ -24,8 +24,8 @@ export interface BlendOpts {
  * to age 0 → recency 1.
  */
 export const rankBlend =
-  (simName: string, query: Value, opts: BlendOpts, t: Instant) =>
-  (c: Corpus): RankedCorpus => {
+  (simName: string, query: Value, opts: BlendOpts, t: Instant) => {
+    // Validate at construction so a reused operator fails fast on bad opts.
     if (opts.alpha < 0 || opts.alpha > 1) {
       throw new Error(`rankBlend: alpha must be in [0,1], got ${opts.alpha}`);
     }
@@ -33,13 +33,15 @@ export const rankBlend =
       throw new Error(`rankBlend: halfLifeDays must be > 0, got ${opts.halfLifeDays}`);
     }
     const fn = similarityFn(simName); // throws /no similarity fn/ for unknown names
-    const scored = c.claims.map((claim, i) => {
-      const rel = fn.scoreOne(claim.value, query); // [0,1]
-      const age = Math.max(0, t - claim.valid.from); // ≥ 0
-      const recency = multiplier({ kind: "exponential", halfLifeDays: opts.halfLifeDays }, age); // (0,1]
-      const score = opts.alpha * rel + (1 - opts.alpha) * recency;
-      return { claim, score, i };
-    });
-    scored.sort((a, b) => b.score - a.score || a.i - b.i);
-    return { scored: scored.map(({ claim, score }) => ({ claim, score })) };
+    return (c: Corpus): RankedCorpus => {
+      const scored = c.claims.map((claim, i) => {
+        const rel = fn.scoreOne(claim.value, query); // [0,1]
+        const age = Math.max(0, t - claim.valid.from); // ≥ 0
+        const recency = multiplier({ kind: "exponential", halfLifeDays: opts.halfLifeDays }, age); // (0,1]
+        const score = opts.alpha * rel + (1 - opts.alpha) * recency;
+        return { claim, score, i };
+      });
+      scored.sort((a, b) => b.score - a.score || a.i - b.i);
+      return { scored: scored.map(({ claim, score }) => ({ claim, score })) };
+    };
   };
