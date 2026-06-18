@@ -500,3 +500,20 @@ Holds the resolved survivor set fixed; re-ranks with rankBlend = α·jaccard + (
 3. So **pure recency is too aggressive.** A BLEND is the sweet spot: e.g. α=0.5/hl=90 nearly doubles KU (0.403→0.778) while keeping recall@10 at 0.792 (vs 0.611 at α=0). The α dial trades KU-vs-recall; tune it, don't go to 0.
 
 **Conclusion:** OUTCOME A confirmed — recency-aware reading lifts KU served accuracy from 0.403 toward ~0.97, deterministically, on-wedge (uses valid.from, the substrate's bitemporal signal), with NO intent classifier. Pick a blended α (≈0.25–0.5) to balance KU gain against evidence recall. Next checkpoints (spec §7): (a) REAL-answer correctness to defeat the updateCorrect session-proxy circularity; (b) then a src-promotion cycle (new metadata-aware ranking operator + rankedTailStages dial + MCP recall option). The drift/key-aliasing line is dead for KU; recency-aware ranking is the live lever.
+
+## Real-answer confirmation (2026-06-18) — oracle 199q (KU 72, TR 127), sonnet LLM judge
+
+Defeats the updateCorrect session-proxy: an LLM judge (claude-sonnet-4-6) decides whether the served top-5 context (resolveOnly + rankBlend) CONTAINS/SUPPORTS the gold answer. answerInContext per (alpha cell, category) vs the alpha=1 (jaccard) baseline; ~796 judgments cached (bench/longmemeval/manual/data/answer-judgments.jsonl).
+
+| alpha (hl=90d) | KU answerInContext | TR answerInContext | verdict |
+|---|---|---|---|
+| 1 (jaccard baseline) | 0.472 | 0.378 | — |
+| 0.5 | 0.528 (+0.056) | 0.378 (±0) | **CONFIRMED** |
+| 0.25 | 0.583 (+0.111) | 0.291 (−0.087) | REFUTED-TR |
+| 0 (pure recency) | 0.583 (+0.111) | 0.110 (−0.268) | REFUTED-TR |
+
+**CONFIRMED at alpha=0.5/90d — the recency win is REAL on actual answers, not a proxy artifact.** Moderate recency lifts KU answerInContext 0.472→0.528 (+5.6pp, +11.9% rel) with TR EXACTLY flat (48/127 both) — a Pareto-safe blend. This is the honest counterpart to the gate's updateCorrect 0.403→0.972 (the proxy over-stated the magnitude; real-answer lift is +5.6pp, but it is REAL and TR-safe).
+
+**The dial is load-bearing:** alpha=0.25 and alpha=0 push KU higher (0.583) but crater TR (−8.7pp, −26.8pp) — pure/heavy recency evicts the time-scoped evidence TR needs. So the sweet spot is alpha≈0.5, NOT pure recency (sharpens the earlier "~0.25–0.5" caveat to ~0.5).
+
+**Fork (spec §7): CONFIRMED → src-promotion cycle.** A metadata-aware ranking operator in src/algebra + a rankedTailStages dial + an MCP recall recency option, default tuned to alpha=0.5/halfLife=90d. Caveat: verdict rests on sonnet judgments; the ~50-pair human spot-check (judge-error bound) is still pending and should run before treating CONFIRMED as final.
