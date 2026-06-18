@@ -102,6 +102,12 @@ export interface RankedTailOpts {
   /** Per-entry precision floor: entries with score below this are dropped.
    *  Default 0 = off (keep all). Applied AFTER abstainBelowTop. */
   relevanceFloor?: number;
+  /** Recency blend dial. ABSENT → pure rho.by (backward-compatible, no behavior
+   *  change). PRESENT → rho.blend; omitted fields default to alpha=0.5,
+   *  halfLifeDays=90. PRECONDITION: the recency anchor is ctx.evaluationClock,
+   *  while tauValid uses canonicalReadStages' evaluationInstant opt — the caller
+   *  must pass the SAME instant to both (as the MCP recall path does). */
+  recency?: { alpha?: number; halfLifeDays?: number };
 }
 
 /**
@@ -117,9 +123,17 @@ export function rankedTailStages(
   const abstainThreshold = opts.abstainBelowTop ?? 0;
   const floorThreshold = opts.relevanceFloor ?? 0;
 
+  const rankStage =
+    opts.recency === undefined
+      ? rho.by(opts.rankFn, opts.query)
+      : rho.blend(opts.rankFn, opts.query, {
+          alpha: opts.recency.alpha ?? 0.5,
+          halfLifeDays: opts.recency.halfLifeDays ?? 90,
+        });
+
   return [
-    // 1. ρ: rank by similarity fn (records provenance versions via rho.by from mneme.js)
-    rho.by(opts.rankFn, opts.query),
+    // 1. ρ: rank by similarity (rho.by) OR recency-blended similarity (rho.blend)
+    rankStage,
 
     // 2. abstainBelowTop: if top score strictly < threshold, return empty corpus
     (r: RankedCorpus) => abstainBelowTop(abstainThreshold)(r),

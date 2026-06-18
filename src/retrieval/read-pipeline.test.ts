@@ -79,6 +79,15 @@ function applyStages<O>(stages: Array<(input: any, ctx: EvalContext) => any>, in
   return stages.reduce<any>((acc, stage) => stage(acc, stubCtx), input) as O;
 }
 
+function applyStagesWithClock<O>(
+  stages: Array<(input: any, ctx: EvalContext) => any>,
+  input: any,
+  evaluationClock: number,
+): O {
+  const ctx: EvalContext = { adapter: null as any, catalog: null as any, evaluationClock };
+  return stages.reduce<any>((acc, stage) => stage(acc, ctx), input) as O;
+}
+
 /** Helper: extract values for a given key from a Corpus. */
 function values(c: Corpus, key: string): unknown[] {
   return c.claims.filter((cl) => cl.key === key).map((cl) => cl.value);
@@ -396,6 +405,43 @@ describe("rankedTailStages", () => {
     // top score = 1.0 ≥ 0.5 → no abstain; floor=0.7 → only top survives
     expect(result.scored.length).toBe(1);
     expect(result.scored[0].claim.id).toBe("top");
+  });
+
+  it("recency absent: behaves identically to pure rho.by ordering", () => {
+    // Same as the existing 'ranks by named fn' test — recency option omitted ⇒ no change.
+    const out = applyStages<RankedCorpus>(
+      rankedTailStages({ rankFn: "jaccard", query: "the quick brown fox" }),
+      rankCorpus,
+    );
+    expect(out.scored[0].claim.id).toBe("r1"); // exact match top, unchanged
+  });
+
+  it("recency present (alpha=0): orders by valid.from recency", () => {
+    const T = 1_800_000_000_000;
+    const DAY_ = 86_400_000;
+    const recencyCorpus = corpusOf([
+      mk("rc-old", "me", "info", "alpha", T - 100 * DAY_),
+      mk("rc-new", "me", "info", "beta", T - 1 * DAY_),
+    ]);
+    const out = applyStagesWithClock<RankedCorpus>(
+      rankedTailStages({ rankFn: "jaccard", query: "irrelevant", recency: { alpha: 0, halfLifeDays: 90 } }),
+      recencyCorpus,
+      T,
+    );
+    expect(out.scored[0].claim.id).toBe("rc-new");
+  });
+
+  it("recency present with defaulted fields uses alpha=0.5 / halfLifeDays=90", () => {
+    const T = 1_800_000_000_000;
+    // With alpha=0.5 a relevant claim still beats an irrelevant newer one at moderate ages;
+    // assert the stage runs and returns a full ranking (no throw, defaults applied).
+    const out = applyStagesWithClock<RankedCorpus>(
+      rankedTailStages({ rankFn: "jaccard", query: "the quick brown fox", recency: {} }),
+      rankCorpus,
+      T,
+    );
+    expect(out.scored).toHaveLength(3);
+    expect(out.scored[0].claim.id).toBe("r1"); // exact match still wins at alpha=0.5
   });
 });
 
