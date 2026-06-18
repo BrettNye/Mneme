@@ -1545,3 +1545,84 @@ describe("rho.by", () => {
     ).toThrow(/no similarity fn/);
   });
 });
+
+// ── rho.blend — recency-aware ranking stage builder ───────────────────────────
+
+describe("rho.blend", () => {
+  const DAY = 86_400_000;
+  const mkClaimAt = (value: string, fromTs: number) => ({
+    profile: "profile-1" as any,
+    workspace: corpusDef.id as any,
+    subject: "rho-blend-subject",
+    key: "fact",
+    scope: {},
+    value,
+    confidence: { distribution: "beta" as const, parameters: { alpha: 9, beta: 1 }, raw: 0.9 },
+    valid: { from: fromTs, to: Infinity },
+    source: "manual" as const,
+    provenance: {},
+    evidence: [],
+    tags: [],
+    schema: `${corpusDef.id}@1`,
+  });
+
+  it("alpha=1 ranks identically to rho.by over the same corpus (the regression identity)", () => {
+    const adapter = createSqliteAdapter();
+    const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mkClaimAt("hello world test", 0), { writer: "w" });
+    m.commit("workspace:canopy", mkClaimAt("foo bar baz", 0), { writer: "w" });
+
+    const clock = 1_700_000_000_000;
+    const blendResult = m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.blend("jaccard", "hello world", { alpha: 1, halfLifeDays: 90 })),
+      { evaluationClock: clock }
+    );
+    const byResult = m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.by("jaccard", "hello world")),
+      { evaluationClock: clock }
+    );
+
+    expect(blendResult.scored.map((s: any) => s.claim.value)).toEqual(
+      byResult.scored.map((s: any) => s.claim.value)
+    );
+  });
+
+  it("uses ctx.evaluationClock as the recency anchor (alpha=0 → newest valid.from first)", () => {
+    const adapter = createSqliteAdapter();
+    const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    const clock = 1_700_000_000_000;
+    m.commit("workspace:canopy", mkClaimAt("old", clock - 100 * DAY), { writer: "w" });
+    m.commit("workspace:canopy", mkClaimAt("new", clock - 1 * DAY), { writer: "w" });
+
+    const result = m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.blend("jaccard", "irrelevant", { alpha: 0, halfLifeDays: 90 })),
+      { evaluationClock: clock }
+    );
+    expect(result.scored[0].claim.value).toBe("new");
+  });
+
+  it("records usedSimilarityVersions[name] = fn.version (jaccard@1 via ctx capture)", () => {
+    const adapter = createSqliteAdapter();
+    const m = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
+    m.createCorpus(corpusDef);
+    m.commit("workspace:canopy", mkClaimAt("hello world", 0), { writer: "w" });
+
+    let capturedVersions: Record<string, string> | undefined;
+    const captureCtx = (input: any, ctx: EvalContext) => {
+      capturedVersions = { ...ctx.usedSimilarityVersions };
+      return input;
+    };
+
+    m.query<any>(
+      "workspace:canopy",
+      pipe(leaf("workspace:canopy"), rho.blend("jaccard", "hello", { alpha: 0.5, halfLifeDays: 90 }), captureCtx),
+      { evaluationClock: 1_700_000_000_000 }
+    );
+    expect(capturedVersions).toEqual({ jaccard: "jaccard@1" });
+  });
+});

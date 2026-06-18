@@ -33,6 +33,7 @@ import {
 } from "./algebra/temporal.js";
 import { delta as deltaOp } from "./algebra/decay.js";
 import { rho as rhoOp, similarityFn } from "./algebra/similarity.js";
+import { rankBlend, type BlendOpts } from "./algebra/ranking.js";
 import { kappa as kappaOp, type Format } from "./algebra/composition.js";
 import type { Instant } from "./core/time.js";
 import {
@@ -116,6 +117,20 @@ export const rho = {
   jaccard: (query: Value): Stage<Corpus, RankedCorpus> => _rhoBy("jaccard", query),
   exact:   (query: Value): Stage<Corpus, RankedCorpus> => _rhoBy("exact", query),
   by: _rhoBy,
+  /** Recency-aware ranking: blends value-similarity with valid.from recency.
+   *  The evaluation instant is taken from ctx.evaluationClock (same instant the
+   *  upstream tauValid used); the underlying rankBlend stays pure. Records the
+   *  similarity fn's provenance version exactly like rho.by. */
+  blend: (simName: string, query: Value, opts: BlendOpts): Stage<Corpus, RankedCorpus> =>
+    (c, ctx) => {
+      const fn = similarityFn(simName); // throws /no similarity fn/ for unknown names
+      if (ctx.usedSimilarityVersions) ctx.usedSimilarityVersions[simName] = fn.version;
+      if (fn.embeddingVersions && ctx.usedEmbeddingModelVersions) {
+        Object.assign(ctx.usedEmbeddingModelVersions, fn.embeddingVersions);
+      }
+      const t = ctx.evaluationClock ?? Date.now();
+      return rankBlend(simName, query, opts, t)(c);
+    },
 };
 
 export const gamma = (depth: number): Stage<RankedCorpus, RankedCorpus> => gammaStage(depth);
