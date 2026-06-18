@@ -105,7 +105,8 @@ export function ensureCorpus(session: Session, corpusId: string): void {
 }
 
 /** Parse an asOf temporal scope (epoch ms number or ISO-8601 string) to epoch ms.
- *  Returns undefined when not supplied; throws on an unparseable string/number. */
+ *  Returns undefined when not supplied; throws on an unparseable string/number.
+ *  Note: 0 is a valid instant (1970-01-01), NOT "now" — omit asOf to mean now. */
 export function parseAsOf(asOf?: string | number): number | undefined {
   if (asOf === undefined) return undefined;
   const ms = typeof asOf === "number" ? asOf : Date.parse(asOf);

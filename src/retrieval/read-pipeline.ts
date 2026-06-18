@@ -112,10 +112,13 @@ export interface RankedTailOpts {
 
 /**
  * Ranking tail recipe:
- *   rho.by(rankFn, query) → abstainBelowTop → relevanceFloor
+ *   rho.by/blend(rankFn, query) → abstainBelowTop → relevanceFloor
+ *
+ * Stage 1 is rho.by by default, or rho.blend when the `recency` opt is supplied
+ * (recency-aware ranking; see RankedTailOpts.recency).
  *
  * Ordering contract: abstention is decided on the RAW ranked corpus (immediately
- * after rho), BEFORE the per-entry floor. Both knobs default to 0 (off).
+ * after the rank stage), BEFORE the per-entry floor. Both knobs default to 0 (off).
  */
 export function rankedTailStages(
   opts: RankedTailOpts,
