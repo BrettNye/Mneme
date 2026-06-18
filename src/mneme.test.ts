@@ -1603,6 +1603,7 @@ describe("rho.blend", () => {
       pipe(leaf("workspace:canopy"), rho.blend("jaccard", "irrelevant", { alpha: 0, halfLifeDays: 90 })),
       { evaluationClock: clock }
     );
+    expect(result.scored).toHaveLength(2); // prove BOTH claims reached the ranker (non-vacuous)
     expect(result.scored[0].claim.value).toBe("new");
   });
 
