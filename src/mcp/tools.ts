@@ -104,6 +104,18 @@ export function ensureCorpus(session: Session, corpusId: string): void {
   }
 }
 
+/** Parse an asOf temporal scope (epoch ms number or ISO-8601 string) to epoch ms.
+ *  Returns undefined when not supplied; throws on an unparseable string/number.
+ *  Note: 0 is a valid instant (1970-01-01), NOT "now" — omit asOf to mean now. */
+export function parseAsOf(asOf?: string | number): number | undefined {
+  if (asOf === undefined) return undefined;
+  const ms = typeof asOf === "number" ? asOf : Date.parse(asOf);
+  if (!Number.isFinite(ms)) {
+    throw new Error(`recall: asOf is not a valid date (epoch ms or ISO-8601): ${String(asOf)}`);
+  }
+  return ms;
+}
+
 export interface RememberArgs {
   subject: string;
   key: string;
@@ -172,6 +184,15 @@ export interface RecallArgs {
   /** Per-entry precision floor: entries with score below this are dropped.
    *  Default 0 = off. abstained stays false even if floor empties the result. */
   relevanceFloor?: number;
+  /** Relevance↔recency blend weight in [0,1]. Default 0.5. `1` = pure similarity
+   *  (recency off, exact current behavior); `0` = pure recency. */
+  recencyAlpha?: number;
+  /** Exponential recency half-life in days (> 0). Default 90. */
+  recencyHalfLifeDays?: number;
+  /** Temporal scope: ISO-8601 string or epoch ms. Anchors BOTH tauValid (which
+   *  claims are valid) and the recency term (age measured from this instant).
+   *  Default = now. */
+  asOf?: string | number;
 }
 export interface RecallMatch {
   subject: string;
@@ -244,7 +265,7 @@ export async function recall(
   // ── Alias map loading ────────────────────────────────────────────────────────
   // Fetch alias claims (index-backed: adapter pushdown via key predicate).
   // On failure: degrade gracefully — recall proceeds alias-less with a warning.
-  const now = Date.now();
+  const now = parseAsOf(args.asOf) ?? Date.now();
   // selfAliases is keyCensus-only; recall only needs aliasMap + warnings.
   const { aliasMap, warnings: aliasWarnings } = loadAliasContext(session, args.corpus, now, keyCardinality);
   const allWarnings: string[] = [...aliasWarnings];
@@ -303,8 +324,19 @@ export async function recall(
   }
   const sigmas = filters.map((p) => sigma(p));
 
+  // Recency-aware ranking (on by default at alpha=0.5/90d). alpha=1 ⇒ pure rho.by,
+  // byte-identical to prior behavior. `now` (asOf or Date.now) anchors both tauValid
+  // (canonicalReadStages.evaluationInstant) and the recency term (ctx.evaluationClock).
+  const ranker =
+    args.recencyAlpha === 1
+      ? rho.by(embeddings.rankFn, args.about)
+      : rho.blend(embeddings.rankFn, args.about, {
+          alpha: args.recencyAlpha ?? 0.5,
+          halfLifeDays: args.recencyHalfLifeDays ?? 90,
+        });
+
   // SINGLE query execution:
-  // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥(keyAliases) + drop) → ρ.by(rankFn, query)
+  // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥(keyAliases) + drop) → ranker
   const ranked = session.mneme.query<RankedCorpus>(
     args.corpus,
     pipe(
@@ -316,7 +348,7 @@ export async function recall(
         keyAliases: aliasMap,
         evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
       }),
-      rho.by(embeddings.rankFn, args.about),
+      ranker,
     ),
     { evaluationClock: now },
   );

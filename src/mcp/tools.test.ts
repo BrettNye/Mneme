@@ -833,3 +833,57 @@ describe("recall — coverage annotation + provenance handles", () => {
     s.close();
   });
 });
+
+describe("recall recency", () => {
+  const DAY = 86_400_000;
+  const iso = (ms: number) => new Date(ms).toISOString();
+
+  it("recencyAlpha=1 reproduces pure-similarity ordering (no recency leak)", async () => {
+    const s = freshSession();
+    const corpus = "rec-alpha1";
+    ensureCorpus(s, corpus);
+    // Older claim is the exact match; newer claim is irrelevant.
+    remember(s, { subject: "x", key: "fact", value: "the quick brown fox", corpus, validFrom: iso(Date.now() - 100 * DAY) });
+    remember(s, { subject: "x", key: "note", value: "totally unrelated", corpus });
+    const r = await recall(s, { about: "the quick brown fox", corpus, recencyAlpha: 1 }, jaccardDeps);
+    expect(r.matches[0].value).toBe("the quick brown fox");
+  });
+
+  it("default recency (alpha=0.5) still returns the exact match on top at moderate ages", async () => {
+    const s = freshSession();
+    const corpus = "rec-default";
+    ensureCorpus(s, corpus);
+    remember(s, { subject: "x", key: "fact", value: "the quick brown fox", corpus });
+    remember(s, { subject: "x", key: "note", value: "unrelated noise", corpus });
+    const r = await recall(s, { about: "the quick brown fox", corpus }, jaccardDeps);
+    expect(r.matches[0].value).toBe("the quick brown fox");
+  });
+
+  it("asOf anchors both tauValid and recency: a claim valid only in the past is surfaced as-of then", async () => {
+    const s = freshSession();
+    const corpus = "rec-asof";
+    ensureCorpus(s, corpus);
+    const past = Date.now() - 365 * DAY;
+    remember(s, { subject: "role", key: "title", value: "engineer", corpus, validFrom: iso(past) });
+    remember(s, { subject: "role", key: "title", value: "manager", corpus }); // validFrom defaults to now
+    const r = await recall(
+      s,
+      { about: "what is the title", corpus, recencyAlpha: 0, asOf: iso(past + DAY) },
+      jaccardDeps,
+    );
+    // As-of (past+1d): the "manager" claim (valid from now) is excluded by tauValid
+    // (its valid.from > asOf); only "engineer" is valid at the as-of instant.
+    expect(r.matches.map((m) => m.value)).toContain("engineer");
+    expect(r.matches.map((m) => m.value)).not.toContain("manager");
+  });
+
+  it("rejects an unparseable asOf string", async () => {
+    const s = freshSession();
+    const corpus = "rec-badasof";
+    ensureCorpus(s, corpus);
+    remember(s, { subject: "x", key: "fact", value: "v", corpus });
+    await expect(
+      recall(s, { about: "v", corpus, asOf: "not-a-date" }, jaccardDeps),
+    ).rejects.toThrow(/asOf/);
+  });
+});

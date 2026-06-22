@@ -13,6 +13,18 @@ import { initEmbeddings } from "./embeddings.js";
 import { loadMnemeConfig } from "./config.js";
 import { appendRecallLog } from "./recall-log.js";
 
+/** Write discipline surfaced to clients as MCP server instructions (loaded per session). */
+const MNEME_WRITE_SCHEMA = `Mneme stores typed claims (subject, key, value) as durable, confidence-scored memory. When writing with the remember tool:
+
+- RECALL BEFORE YOU WRITE. Run recall for the claim first. If a close match exists, raise/adjust its confidence or write a refined claim — don't mint a near-duplicate. Key proliferation is a real cost (audit with key_census).
+- subject = the entity, typed "type:name" — e.g. project:crewtracks, project:mneme, host:web-01. Reuse stable subjects.
+- key = a kebab-case predicate, 1-4 dot-separated segments, most-general first — e.g. events.durability.in-memory-only, pagination.shape, decision, status. Reuse existing keys (check key_census) rather than minting variants.
+- confidence = the default of 1 is almost always WRONG for a learned claim. Set it: ~0.7 for a fresh single observation, 0.85-0.95 when verified against code or seen repeatedly, 1.0 only for an unconditional fact. Lower it on near-misses.
+- scope = { project, context } when the claim is project- or environment-specific. tags = lowercase topical labels.
+- CAPTURE LESSONS, NOT TRANSIENTS. Store what stays true and generalizes ("specs here recurrently assume durable events — verify against the in-memory caveat"), not artifact-local findings that die on fix ("this spec's section 8 is wrong"). Test: still true and useful three artifacts from now?
+
+The corpus auto-partitions per repo (default = project dir name); pass corpus only to cross that boundary.`;
+
 export interface McpServerOptions {
   dbPath?: string;
   defaultCorpus?: string;
@@ -37,7 +49,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
   const config = loadMnemeConfig(dbPath);
 
   const session = openSession({ dbPath, writer: "mcp" });
-  const server = new McpServer({ name: "mneme", version: "0.2.0" });
+  const server = new McpServer({ name: "mneme", version: "0.2.0" }, { instructions: MNEME_WRITE_SCHEMA });
 
   server.registerTool(
     "remember",
@@ -47,9 +59,9 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         "Store a typed claim (subject, key, value) with optional confidence and tags. Use for durable facts, decisions, or context worth recalling later.",
       inputSchema: {
         subject: z.string().describe("the entity the claim is about, e.g. 'project:mneme' or 'host:web-01'"),
-        key: z.string().describe("the attribute/predicate, e.g. 'decision', 'status', 'owner'"),
+        key: z.string().describe("kebab-case predicate, 1-4 dot segments, general->specific, e.g. 'events.durability.in-memory-only', 'decision'; reuse existing keys (key_census) over minting variants"),
         value: z.string().describe("the claim value"),
-        confidence: z.number().min(0).max(1).optional().describe("0..1 certainty; defaults to 1"),
+        confidence: z.number().min(0).max(1).optional().describe("0..1 certainty. Default 1 is rarely right for a learned claim — use ~0.7 fresh, 0.85+ when verified/repeated, 1 only for unconditional facts"),
         tags: z.array(z.string()).optional(),
         corpus: z.string().optional().describe(`corpus to write to; defaults to '${defaultCorpus}'`),
         scope: z
@@ -114,6 +126,21 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           .max(1)
           .optional()
           .describe("per-entry precision floor 0..1: entries with score below this are dropped; abstained stays false even if floor empties the result (default 0 = off)"),
+        recencyAlpha: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe("relevance↔recency blend 0..1 (default 0.5). 1 = pure similarity (recency off, exact prior behavior); 0 = pure recency"),
+        recencyHalfLifeDays: z
+          .number()
+          .positive()
+          .optional()
+          .describe("exponential recency half-life in days (default 90)"),
+        asOf: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe("temporal scope: ISO-8601 string or epoch ms. Anchors BOTH which claims are valid and the recency term; default now"),
       },
       // Pure read: no state change, repeatable.
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -126,7 +153,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
             key: z.string(),
             value: z.any().describe("the claim value (any JSON)"),
             confidence: z.number().describe("point estimate of the claim's confidence, 0..1"),
-            score: z.number().describe("similarity score against the query"),
+            score: z.number().describe("blended ranking score against the query (similarity·alpha + recency·(1-alpha); pure similarity when recencyAlpha=1)"),
             id: z.string().describe("claim id — provenance handle to cite the exact claim"),
             tags: z.array(z.string()).describe("claim tags (e.g. session:...) — attribution handle"),
           }),
@@ -156,6 +183,9 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         corpus: resolvedCorpus,
         abstainBelowTop: a.abstainBelowTop,
         relevanceFloor: a.relevanceFloor,
+        recencyAlpha: a.recencyAlpha,
+        recencyHalfLifeDays: a.recencyHalfLifeDays,
+        asOf: a.asOf,
       }, { embeddings, keyCardinality: config.keyCardinality });
 
       // Append recall-log entry (best-effort, synchronous, never throws into handler).
