@@ -359,7 +359,11 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const sql = `SELECT * FROM claims ${where}`;
+    // Deterministic order: without ORDER BY, SQLite row order is unspecified (varies with
+    // index plan / VACUUM), which would make order-sensitive folds (weighted_avg,
+    // evidence_pooled — non-associative under IEEE-754) yield ULP-different confidence
+    // across reads. recorded_seq is monotonic write order; id tie-breaks for total order.
+    const sql = `SELECT * FROM claims ${where} ORDER BY recorded_seq ASC, id ASC`;
 
     const flatParams = params.flatMap((p) => (Array.isArray(p) ? p : [p]));
     const stmt = db.prepare<unknown[], ClaimRow>(sql);

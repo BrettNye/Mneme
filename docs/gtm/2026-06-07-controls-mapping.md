@@ -1,6 +1,9 @@
 # Agent memory that survives a compliance review
 
-**Mneme — controls mapping (draft for outreach · 2026-06-07 · not legal advice)**
+**Mneme — controls mapping (draft for outreach · 2026-06-07, rev. 2026-06-12 · not legal advice)**
+
+> Rev. 2026-06-12: added *A live audit, not a benchmark* — the same auditability property
+> demonstrated on a real federal certified-payroll corpus, not just the public benchmark.
 
 ---
 
@@ -54,6 +57,26 @@ On LongMemEval knowledge-update questions (oracle attribution), measured and com
 
 All artifacts (datasets, judgments with reasons, run gates) are committed and deterministic;
 a skeptical engineer can re-derive every number.
+
+## A live audit, not a benchmark
+
+The receipts above are a public benchmark. Here is the same property on a *real*
+regulated-domain corpus. We seeded Mneme with a federal **Davis-Bacon certified-payroll**
+knowledge base — exactly the kind of prevailing-wage compliance content an agent reasons over —
+and three distinct WH-347 form facts were accidentally written under one claim identity. A
+consolidating store would have silently kept the last write and lost the other two, with no
+trace. Instead:
+
+- `key_census` surfaced the loss as a **structured shortfall** — three writes, one surviving
+  claim — at audit time, with no forensic effort.
+- Because nothing was destroyed, the deprecated facts remained **recoverable**, and the corpus
+  was corrected with full lineage intact.
+
+Integrity is enforced, not asserted: across every benchmark dataset, scale, and conflict policy,
+`committed + rejected + duplicate + skipped == total` and `count == committed` hold, and the
+core algebra is exact to the float64 ulp. The silent-data-loss failure mode that a consolidating
+memory hides, Mneme made **visible and reversible** — on real compliance data, not a fixture.
+That is the audit-trail row, demonstrated.
 
 ## What Mneme is and is not
 

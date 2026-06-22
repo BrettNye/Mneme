@@ -37,8 +37,8 @@ is reconstructable — what an agent in a regulated or high-trust setting needs 
   {
     "mcpServers": {
       "mneme": {
-        "command": "npx",
-        "args": ["tsx", "bin/mneme-mcp.ts"],
+        "command": "node",
+        "args": ["--import", "tsx", "bin/mneme-mcp.ts"],
         "env": { "MNEME_DB": "${USERPROFILE}/.mneme/knowledge.db", "MNEME_CORPUS": "knowledge" }
       }
     }

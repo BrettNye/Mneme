@@ -16,3 +16,6 @@ bench/datasets/
 
 # Mneme MCP local store (per-project claims db)
 .mneme/
+
+# Local scratch/worktree dir (analysis prototypes, dogfood worktrees)
+.claire/
