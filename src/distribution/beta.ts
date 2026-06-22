@@ -71,7 +71,10 @@ export const betaBinding: DistributionProtocol<Beta> = {
       }
 
       case RULE.EVIDENCE_POOLED:
-        // Pairwise; exact by associativity. Subtracts one prior (W=2, a=0.5).
+        // Pairwise; associative & commutative in exact arithmetic, but only up to
+        // ULP-scale rounding under IEEE-754 — NOT bit-exact across fold orders.
+        // Determinism comes from combineGroup sorting claims by id. Subtracts one
+        // prior (W=2, a=0.5).
         return {
           alpha: x.alpha + y.alpha - a * W,
           beta: x.beta + y.beta - (1 - a) * W,

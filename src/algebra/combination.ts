@@ -167,7 +167,11 @@ function combineGroup(ruleId: string, claims: Claim[], params?: unknown): Claim 
   const binding = bindingFor(claims[0].confidence.distribution);
   assertSupportsRule(binding, ruleId);
 
-  // For max rules, sort by claim id lexicographically so first-arg-wins tie-break is deterministic
+  // For max rules, sort by claim id lexicographically so first-arg-wins tie-break is deterministic.
+  // Arithmetic rules (weighted_avg, evidence_pooled, dempster) deliberately preserve caller order:
+  // the dedupe path (subPartitions) pre-sorts each cluster by valid.from DESC so the LATEST claim
+  // is the fold base/representative ("keep richest"). Determinism of the *input* order is the
+  // caller's responsibility — the claims query (sqlite executeQuery) sorts by recorded_seq.
   const needsSort = ruleId === RULE.MAX_MEAN || ruleId === RULE.MAX_CONCENTRATION;
   const sorted = needsSort
     ? [...claims].sort((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0))
