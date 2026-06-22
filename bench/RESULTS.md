@@ -432,3 +432,71 @@ Pseudocount sweep {2, 5, 10}: pooled signal is identical to scalar at all three 
 ### bio-efficacy: arm D (2026-06-07)
 
 Arm D (dream-ratification baseline pin) harness motion is declared out of scope in the protocol ("Arm-D harness motion (deferred until bio attaches)"). No capstone run through bio's gateway/ledger was executed.
+
+## Drift-injection arm (2026-06-17) — oracle 229q, jaccard, oracle alias map
+
+Injects synthetic key drift into the oracle claims-file, runs arm A WITH vs WITHOUT the ground-truth (oracle) variant→canonical map. Baseline gate reproduced KU updateCorrect 0.403 ✓. Knobs off; evidencePoolingRule=MAX_MEAN (scalar-safe).
+
+| fraction | mode | aliased | updateCorrect | recall@1 | recall@3 | n |
+|---|---|---|---|---|---|---|
+| 0    | judged | off | 0.403 | 0.493 | 0.917 | 72 |
+| 0    | judged | on  | 0.403 | 0.493 | 0.917 | 72 |
+| 0.1  | judged | off | 0.403 | 0.493 | 0.917 | 72 |
+| 0.1  | judged | on  | 0.417 | 0.493 | 0.917 | 72 |
+| 0.25 | judged | off | 0.389 | 0.493 | 0.910 | 72 |
+| 0.25 | judged | on  | 0.403 | 0.493 | 0.910 | 72 |
+| 0.5  | judged | off | 0.417 | 0.493 | 0.917 | 72 |
+| 0.5  | judged | on  | 0.431 | 0.493 | 0.917 | 72 |
+| 0.75 | judged | off | 0.472 | 0.493 | 0.910 | 72 |
+| 0.75 | judged | on  | 0.486 | 0.493 | 0.910 | 72 |
+| 1    | judged | off | 0.500 | 0.493 | 0.917 | 72 |
+| 1    | judged | on  | 0.514 | 0.493 | 0.910 | 72 |
+| 0.1  | morph  | off | 0.375 | 0.493 | 0.917 | 72 |
+| 0.1  | morph  | on  | 0.389 | 0.493 | 0.917 | 72 |
+| 0.25 | morph  | off | 0.389 | 0.493 | 0.924 | 72 |
+| 0.25 | morph  | on  | 0.389 | 0.493 | 0.917 | 72 |
+| 0.5  | morph  | off | 0.361 | 0.493 | 0.931 | 72 |
+| 0.5  | morph  | on  | 0.361 | 0.493 | 0.931 | 72 |
+| 0.75 | morph  | off | 0.347 | 0.493 | 0.931 | 72 |
+| 0.75 | morph  | on  | 0.347 | 0.493 | 0.931 | 72 |
+| 1    | morph  | off | 0.347 | 0.493 | 0.931 | 72 |
+| 1    | morph  | on  | 0.347 | 0.493 | 0.931 | 72 |
+
+judged coverage: 202 of 3802 single-value keys had a judged variant (5.3%).
+
+**Result = near-null.** Aliasing benefit (on−off) ≈ +0.014 = exactly 1/72 (one KU question) in judged, 0 in morph. recall@1 flat at 0.493 everywhere. NOT the predicted "off declines, on flat at baseline" wedge.
+
+**Diagnosis (see memory drift-injection-null-result):** primarily an INSTRUMENT issue, surfacing one real substrate-surface truth.
+1. `updateCorrect` is RANKING-dominated: it reads top-1 of a jaccard-ranked list, and the claim KEY feeds the ranker. Drift mangles the ranked text, not just the ⊥ contest. The resolver still deprecates the stale claim, but the metric reads the ranked top-1 → morph (gibberish keys) shows zero lift because aliasing fixes ⊥ but not the ranking damage.
+2. The oracle map covers only INJECTED drift, not the pre-existing real drift in the baseline (which the recorded +12.5pp ratified arm DID alias) → on≈off at f=0, small delta everywhere.
+3. judged coverage only 5.3% → tiny surface.
+4. Random per-claim injection doesn't target the NEWEST claim of a lineage, so it rarely creates the "latest fragments away → stale wins" condition updateCorrect punishes → off-curve even RISES in judged.
+
+**Real substrate-surface truth exposed:** resolution wins are gated by the ranking/retrieval layer. A correctly-resolved claim under a drifted key may not rank into top-k, so key-aliasing's served-answer value is bounded by whether the resolved claim also ranks. Resolution and retrieval must both succeed.
+
+## Drift arm — resolution-vs-served (2026-06-17) — oracle 229q, jaccard
+
+Adds a ranking-free resolution view (`resolveOnly`) + KU-only metrics over the ≥2-answer-session subset (nRes=72). Key columns: staleDeprec, recencyTop1 (control), fragLineages.
+
+**fragLineages is healthy** (drift DID create the condition): judged 0→16→30→40→39→30; morph 0→25→40→52→56→57 over f={0,.1,.25,.5,.75,1}. So the f>0 region is valid.
+
+**Two findings:**
+
+1. **staleDeprec is mis-defined → uninformative (≈0.014 = 1/72 everywhere, off=on, all f).** It requires COMPLETE collapse: zero surviving claims from any non-latest answer session. But oracle KU corpora contain multiple DISTINCT attributes across sessions (employer, city, …); non-contesting older-session claims about *other* attributes legitimately survive, so "total collapse" is almost never true and aliasing can't move it. The answer-session-membership lineage proxy is too coarse — it needs the gold (subject,key) of the evolving fact, which LongMemEval doesn't provide. Lesson: don't proxy a single-fact lineage by whole-question session membership.
+
+2. **THE REAL FINDING — recencyTop1 ≈ 0.972 vs updateCorrect ≈ 0.40–0.50.** recencyTop1 (the rank-free analog of updateCorrect: is the most-recent *resolved survivor* on the latest answer session?) is ~0.97, while jaccard-ranked updateCorrect is ~0.45. Same proxy, different ordering. The gap ≈ **50 percentage points** is the ranking-method tax: **for knowledge-update queries, picking the most-recent resolved claim answers ~97% of the time; jaccard ranking of the same resolved set throws that away to ~45%.** (recencyTop1's height is partly structural — max valid.from ↔ latest-dated session — so treat it as a near-oracle upper bound, not a correctness claim; the *comparison* to updateCorrect is the valid signal.) Aliasing on−off remains ~0 (≈1 question) — confirmed, not the lever.
+
+**Conclusion:** the resolution substrate is not the bottleneck for KU; the **served read's ranking method is.** The dominant lever is recency-aware reading (or τ-aware ranking) on the resolved set, dwarfing key-aliasing (~1 question). Confirms [[mneme-open-deficiency-board]] "ranking residue = next lever" — at ~50pp, far larger than expected. The drift-injection/aliasing line of inquiry is a dead end for KU served accuracy; the ranking-method line is wide open.
+
+## Recency-aware ranking GATE (2026-06-17) — oracle 229q, α×half-life, all categories
+
+Holds the resolved survivor set fixed; re-ranks with rankBlend = α·jaccard + (1−α)·exp(−λ·age). Identity gate PASSED: α=1 KU updateCorrect 0.403, top-1 identical to arm A on all 229 questions ✓ (rig sound).
+
+**KU updateCorrect dose-response (α: 1→0):** 0.403 → 0.736/0.694/0.625 (α.75, hl 30/90/365) → 0.833/0.778/0.694 (α.5) → 0.931/0.833/0.778 (α.25) → **0.972 (α=0, pure recency).** Verdict block: **WIN in EVERY blend cell** (ΔKU>0, ΔTR=0). → OUTCOME A: recency-aware ranking is the lever, DETERMINISTIC, NO intent-routing needed.
+
+**Honest caveats (read the recall columns, not just the verdict):**
+1. **TR `temporalCorrect` is saturated at 1.0 everywhere → a USELESS guardrail.** ΔTR=0 is "no regression" only because TR's headline metric is non-discriminating on oracle (prior note). The verdict's TR check under-counts the cost.
+2. **The real cost is in recall@k, which DEGRADES with recency** (broad evidence coverage traded for single-latest-fact). recall@10: KU 0.965→0.611, TR 0.975→0.647, abstention 0.972→0.664 as α→0. Pure recency (α=0) floods top-k with newest claims, evicting older relevant evidence. recall@1 stays flat (top-1 is always SOME evidence session in oracle mode).
+3. So **pure recency is too aggressive.** A BLEND is the sweet spot: e.g. α=0.5/hl=90 nearly doubles KU (0.403→0.778) while keeping recall@10 at 0.792 (vs 0.611 at α=0). The α dial trades KU-vs-recall; tune it, don't go to 0.
+
+**Conclusion:** OUTCOME A confirmed — recency-aware reading lifts KU served accuracy from 0.403 toward ~0.97, deterministically, on-wedge (uses valid.from, the substrate's bitemporal signal), with NO intent classifier. Pick a blended α (≈0.25–0.5) to balance KU gain against evidence recall. Next checkpoints (spec §7): (a) REAL-answer correctness to defeat the updateCorrect session-proxy circularity; (b) then a src-promotion cycle (new metadata-aware ranking operator + rankedTailStages dial + MCP recall option). The drift/key-aliasing line is dead for KU; recency-aware ranking is the live lever.
