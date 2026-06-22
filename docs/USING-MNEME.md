@@ -34,8 +34,11 @@ The server is a thin stdio shell over the library. Register it in your project's
 {
   "mcpServers": {
     "mneme": {
-      "command": "npx",
-      "args": ["tsx", "C:/path/to/Mneme/bin/mneme-mcp.ts"],
+      "command": "node",
+      "args": [
+        "C:/path/to/Mneme/node_modules/tsx/dist/cli.mjs",
+        "C:/path/to/Mneme/bin/mneme-mcp.ts"
+      ],
       "env": {
         "MNEME_DB": "C:/Users/<you>/.mneme/work.db",
         "MNEME_CORPUS": "work"
@@ -45,10 +48,11 @@ The server is a thin stdio shell over the library. Register it in your project's
 }
 ```
 
-- **Use an absolute path** to `bin/mneme-mcp.ts`. A relative path only resolves when Claude Code launches the server with its working directory set to the Mneme repo; an absolute path works from any project.
+- **Don't launch via `npx`.** `npx tsx …` re-resolves the `tsx` binary on every start; from a working directory without a local `node_modules/tsx` (i.e. any project other than the Mneme repo) it falls back to a registry/cache resolve that can take **60–90 s** — well past Claude Code's 30 s MCP handshake timeout, so the server silently fails to connect. Calling `node` directly against the checked-in `node_modules/tsx/dist/cli.mjs` boots in ~1–2 s from any directory. (Inside the repo itself, project-scoped `.mcp.json` can use the shorter `"command": "node", "args": ["--import", "tsx", "bin/mneme-mcp.ts"]` form, since cwd is the repo.)
+- **Use absolute paths** to both `tsx/dist/cli.mjs` and `bin/mneme-mcp.ts` for a user-level config. Relative paths only resolve when Claude Code launches the server with its working directory set to the Mneme repo; absolute paths work from any project.
 - **`MNEME_DB`** — where the SQLite store lives (default `./.mneme/store.db`). Point work at its own file, separate from any personal store.
 - **`MNEME_CORPUS`** — the default corpus when a tool call doesn't pass `corpus` (falls back to the project-directory name if unset).
-- **Prereqs (do these before you need it, not during):** in the Mneme checkout run `npm install` — this compiles the native `better-sqlite3` module, which needs build tools and can fail on a locked-down laptop. Then confirm `npx tsx bin/mneme-mcp.ts` starts without error.
+- **Prereqs (do these before you need it, not during):** in the Mneme checkout run `npm install` — this compiles the native `better-sqlite3` module, which needs build tools and can fail on a locked-down laptop. Then confirm `node --import tsx bin/mneme-mcp.ts` starts without error (prints the `mneme MCP server on stdio …` banner).
 
 The store is a plain local SQLite file — nothing leaves the machine.
 
