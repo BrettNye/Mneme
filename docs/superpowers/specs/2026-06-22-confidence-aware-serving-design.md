@@ -58,7 +58,7 @@ score(claim) = w_sim · sim(claim.value, query)
 - **Sort:** score desc, tie-break = stable input order — identical to `src/algebra/ranking.ts`, so the identity gate holds.
 - **Operates over the resolved survivor set only** (ranking-only scope): it reorders, never changes which claim survives. recall@k moves only through top-k reordering, never through set changes.
 
-**Location: bench-only — new operator `bench/longmemeval/manual/rank-blend-conf.ts`.** Its recency term MUST mirror the **shipped** `rankBlend` in `src/algebra/ranking.ts` (`halfLifeDays`, evaluation instant `t` passed separately, anchored on `ctx.evaluationClock` exactly as `rho.blend` does), then add the `w_conf` term. **Do NOT extend the vestigial bench prototype `bench/longmemeval/manual/rank-blend.ts`** — it has an incompatible signature (`halfLifeMs`, `t` embedded in opts) and is not the function the serving path uses; matching it would make the identity gate meaningless. **No `src/` edit in this project.**
+**Location: bench-only — new operator `bench/longmemeval/manual/rank-blend-conf.ts`.** It is modeled directly on the **live bench recency operator** `bench/longmemeval/manual/rank-blend.ts` — the one `ranking-variant-sweep.ts` uses and the source of the recency real-answer numbers (0.472→0.528, jaccard sim). Same signature shape (`{ alpha, halfLifeMs, t }`) plus a `wConf` field; same `simJaccard` similarity and `exp(−ln2·age/halfLifeMs)` recency term (mathematically identical to the exponential decay in `src/algebra/ranking.ts`, just ms vs days). The confidence term is `wConf · pointEstimate(claim.confidence)`. Building on the bench operator keeps the comparison apples-to-apples with the established recency baseline. The judge-confirmation step writes a fresh cache (`conf-serving-judgments.jsonl`) keyed on the conf cell. **No `src/` edit in this project.**
 
 **Weight handling for the sweep.** The shipped recency blend fixes the sim:recency proportion (α=0.5 / half-life 90d). The sweep keeps that proportion constant and carves the confidence term out of the total: `w_sim = (1 − w_conf)·α`, `w_rec = (1 − w_conf)·(1 − α)`, `w_conf` swept over e.g. `{0, 0.1, 0.2, 0.3, 0.5}`. At `w_conf = 0` the weights reduce exactly to the shipped recency blend (the identity gate); as `w_conf` grows, sim and recency shrink proportionally so the convex sum stays 1.
 
@@ -66,7 +66,8 @@ score(claim) = w_sim · sim(claim.value, query)
 
 The instrument overwrites each claim's confidence with a synthetic value a *perfect* bio layer would have learned.
 
-- **Authoritative = high.** For KU, the authoritative claim is the one tracing to the **latest evidence session**. The scorer computes this internally as `latestEvidenceSessionId(q)` but **does not export it** (`bench/longmemeval/score.ts`) — so this slice must either re-export that helper or recompute the latest session at harness time from `q.answer_session_ids` × session dates (same logic). For TR, the right-period evidence session. `conf = HI` for authoritative-session claims, `conf = LO` otherwise. (HI/LO are fixed constants, e.g. 0.95 / 0.05; exact values fixed in the protocol.)
+- **Authoritative = high.** For KU, the authoritative claim is the one tracing to the **latest evidence session** — computed by `latestAnswerSessionId(q)` and matched via `sessionTagOf(claim)`, both **already exported** from `bench/longmemeval/manual/drift-resolution-metrics.ts` (no re-export needed). For TR, the right-period evidence session. `conf = HI` for authoritative-session claims, `conf = LO` otherwise. (HI/LO are fixed constants, e.g. 0.95 / 0.05; exact values fixed in the protocol.)
+- **Injection happens at rank time, after `resolveOnly`.** Because `resolveDeprecateOlder` keys on `valid.from` (not confidence; `conflictThreshold = 0`), overriding a survivor's confidence after resolution does **not** change the survivor set — preserving the ranking-only scope. Each survivor is mapped to a copy with the injected confidence, then ranked.
 - **By-construction upper bound.** G0 deliberately uses the label — it is a ceiling, the same character as the recency arc's near-oracle `recencyTop1 ≈ 0.972`. Its *height* is not a realistic number; the informative outputs are (a) whether it is non-flat and (b) the G1 slope.
 
 **Degradation model (G1).** Corrupt the oracle assignment with probability `1 − p`: with prob `p` a claim keeps its true HI/LO; with prob `1 − p` it draws HI/LO at random. Sweep `p ∈ {1.0, 0.9, 0.75, 0.5}`. `p = 1.0` is the ceiling; `p = 0.5` is uninformative (sanity gate b).
@@ -77,12 +78,12 @@ The instrument overwrites each claim's confidence with a synthetic value a *perf
 
 A new bench script `bench/longmemeval/manual/conf-serving-sweep.ts`, structured like `ranking-variant-sweep.ts`:
 
-1. **Shared setup:** one `EmbeddingCache` + one warm pass using a **standardized warm order** (a single shared warm helper) so the P2 embedding-batch artifact cannot reappear. Adapter/warm helpers are imported the same way the existing harnesses do (`createLocalEmbeddingAdapter`, `warmForQuestion`, `warmEmbeddings` via `../embeddings-local.js` and `src/algebra/embedding.js`, as in `ranking-variant-sweep.ts` / `pooling-efficacy.ts`). Ingest the LME oracle corpus once; arms are read-only.
+1. **Shared setup:** ingest the LME oracle corpus once; `resolveOnly` each question's survivors once; arms are read-only. Ranking similarity is **jaccard** (`simJaccard`), matching the recency real-answer baseline — there are **no embeddings**, so the P2 embedding-warm batch artifact cannot arise (a side benefit of staying on the bench recency operator).
 2. **G0:** inject oracle confidence at `p = 1.0`; sweep `w_conf`; compute metrics; check the G0 bar. **Stop if FAIL.**
 3. **G1:** at the winning `w_conf`, sweep `p ∈ {0.9, 0.75, 0.5}`; emit the degradation curve.
 4. **Confirm:** run the answer-correctness judge (`answer-correctness-judge.ts`) on the G0 winning cell only.
 
-**Inputs:** `--file longmemeval_oracle_target.json`, `--claims longmemeval-oracle-claims.jsonl`, `--ratified key-ratify-judgments-min094.jsonl` (the validated-band aliases, matching the 0.556 citable config), `--raw`.
+**Inputs:** `--file longmemeval_oracle_target.json`, `--claims longmemeval-oracle-claims.jsonl`, `--raw`. **No alias map** — the recency real-answer baseline this instrument compares against is alias-free, so `resolveOnly` runs without `keyAliases` (keeps the delta attributable to confidence, not aliasing).
 
 ## 8. Metrics
 
@@ -93,7 +94,7 @@ A new bench script `bench/longmemeval/manual/conf-serving-sweep.ts`, structured 
 
 ## 9. Identity & sanity gates (tests)
 
-- **Identity:** at `w_conf = 0` the new operator produces ranking byte-identical to the **serving baseline** — `answerArmA` with the recency dial (i.e. `rho.blend` → `src/algebra/ranking.ts` `rankBlend` at α=0.5 / half-life 90d) — over all 229 questions (top-k matched per question). At `w_conf = 0, w_rec = 0`, identical to plain `rho.by`. (The baseline is the shipped src path, NOT the vestigial bench `rank-blend.ts`.)
+- **Identity:** at `wConf = 0` the new operator produces ranking byte-identical to the bench `rankBlend` (from `rank-blend.ts`) over all 229 questions (top-k matched per question, regardless of injected confidence — the confidence term is multiplied by 0). The bench `rankBlend` is itself already gated byte-identical to arm A at `alpha = 1` (the recency arc's identity gate), so this chains to the serving baseline.
 - **Sanity b:** `p = 0.5` reproduces the recency-only baseline within noise.
 - **Determinism:** two runs of the full sweep produce identical tables (seeded corruption, standardized warm).
 - **Non-vacuity:** at least one question's top-1 actually changes between `w_conf = 0` and the ceiling cell (else the term is inert and the rig is suspect) — mirrors the `rho.blend` non-vacuous clock test.
