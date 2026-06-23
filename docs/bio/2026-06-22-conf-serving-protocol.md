@@ -1,9 +1,15 @@
 # Confidence-aware serving — efficacy protocol (pre-registered 2026-06-22)
 
-**Status:** Pre-registered before the run. Gates frozen here; measured numbers
+**Status:** RUN 2026-06-22 — **G0 FAIL** (see Verdict below). Gates frozen here; measured numbers
 live only in `bench/RESULTS.md` under `### conf-serving: <slot> (YYYY-MM-DD)`
 anchors (slots: `ceiling`, `degradation`, `judge confirm`).
 **Spec:** docs/superpowers/specs/2026-06-22-confidence-aware-serving-design.md
+
+## Verdict (run 2026-06-22)
+
+**G0 — FAIL** (per the registered rule). Oracle confidence (p=1, best wConf=0.2) lifts KU updateCorrect 0.778 → 0.972 (+0.194) but recall@10 falls 0.792 → 0.625 (−0.167), blowing the ±0.02 guardrail. Numbers: `bench/RESULTS.md#conf-serving-ceiling-2026-06-22`. Identity gate OK; baseline reproduces the recency α=0.5/90d number (0.778). G1 ran (informational): KU is nearly flat across confidence quality (p=1→0.5: 0.972→0.931), confirming recency already carries the lift. Judge NOT run (G0-gated).
+
+**Decision (per protocol):** confidence-aware serving is PARKED. The KU lift is real but not Pareto-safe (evicts top-k evidence, like pure recency) AND redundant with the shipped deterministic recency blend (oracle confidence ≈ latest valid.from on this corpus). Bio-via-confidence-serving is not justified by this measurement. Scope caveat: only the LME knowledge-update regime (newest = right answer) was tested; a regime where recency is the wrong proxy (source-trust / corroboration / recency-wrong contradictions) plus a real outcome source is where bio's serving value would have to be re-measured — RaState-gated, not on this bench.
 
 ## Fixed parameters
 

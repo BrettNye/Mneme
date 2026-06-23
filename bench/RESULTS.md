@@ -517,3 +517,16 @@ Defeats the updateCorrect session-proxy: an LLM judge (claude-sonnet-4-6) decide
 **The dial is load-bearing:** alpha=0.25 and alpha=0 push KU higher (0.583) but crater TR (−8.7pp, −26.8pp) — pure/heavy recency evicts the time-scoped evidence TR needs. So the sweet spot is alpha≈0.5, NOT pure recency (sharpens the earlier "~0.25–0.5" caveat to ~0.5).
 
 **Fork (spec §7): CONFIRMED → src-promotion cycle.** A metadata-aware ranking operator in src/algebra + a rankedTailStages dial + an MCP recall recency option, default tuned to alpha=0.5/halfLife=90d. Caveat: verdict rests on sonnet judgments; the ~50-pair human spot-check (judge-error bound) is still pending and should run before treating CONFIRMED as final.
+
+### conf-serving: ceiling (2026-06-22) — oracle 229q, jaccard, oracle confidence injection
+
+Confidence-aware serving efficacy instrument (ceiling-first). Pre-registered protocol: `docs/bio/2026-06-22-conf-serving-protocol.md`. Identity gate OK (wConf=0 byte-identical to bench rankBlend on all questions). Ranks the resolved survivor set with `wSim·jaccard + wRec·recency + wConf·conf`, oracle confidence = HI on the latest-evidence-session claim.
+
+| cell | KU updateCorrect | recall@10 | TR temporalCorrect |
+| --- | --- | --- | --- |
+| baseline (wConf=0, recency-only α=0.5/90d) | 0.778 | 0.792 | 1.0 |
+| ceiling (p=1, best wConf=0.2) | 0.972 | 0.625 | 1.0 |
+
+G0 lift: dKU **+0.194**, dRecall@10 **−0.167**, dTR 0. **G0 verdict: FAIL** — the recall@10 guardrail (±0.02) is blown by −16.7pp. G1 degradation @ wConf=0.2: p=1:0.972, p=0.9:0.958, p=0.75:0.958, p=0.5:0.931 (KU barely moves with confidence quality).
+
+**Finding:** confidence-aware ranking CAN lift KU top-1 substantially (+19.4pp with perfect confidence), so serving is NOT confidence-inert — the P2 "does bio output reach the served answer" prerequisite is answered YES for top-1. BUT it is (1) NOT Pareto-safe — boosting the confident (latest-session) claim evicts evidence from top-k, cratering recall@10, the same failure mode as pure recency; and (2) REDUNDANT with the shipped recency blend — the authoritative claim has both the latest valid.from and the high confidence, so confidence ranking reproduces recency's win and inherits its recall cost (the flat G1 curve confirms recency is already carrying it). On this corpus, confidence-aware serving adds no separable, Pareto-safe lever over deterministic recency. Confidence-aware serving (and bio-via-confidence-serving) PARKED per the pre-registered rule. Caveat: only the LME-KU regime (newest=right) was tested; bio's separable value would live where recency is the WRONG proxy (source-trust, corroboration, recency-wrong contradictions), untested here. No judge run (G0-gated; judge skipped on FAIL).
