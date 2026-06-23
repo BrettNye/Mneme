@@ -517,3 +517,28 @@ Defeats the updateCorrect session-proxy: an LLM judge (claude-sonnet-4-6) decide
 **The dial is load-bearing:** alpha=0.25 and alpha=0 push KU higher (0.583) but crater TR (−8.7pp, −26.8pp) — pure/heavy recency evicts the time-scoped evidence TR needs. So the sweet spot is alpha≈0.5, NOT pure recency (sharpens the earlier "~0.25–0.5" caveat to ~0.5).
 
 **Fork (spec §7): CONFIRMED → src-promotion cycle.** A metadata-aware ranking operator in src/algebra + a rankedTailStages dial + an MCP recall recency option, default tuned to alpha=0.5/halfLife=90d. Caveat: verdict rests on sonnet judgments; the ~50-pair human spot-check (judge-error bound) is still pending and should run before treating CONFIRMED as final.
+
+## bio-efficacy: P2 resolution (2026-06-22) — root cause = embedding warm-batch artifact, NOT promotion
+
+Addendum to **bio-efficacy: P2 headline (2026-06-07)** above. The registered P2 FAIL (KU updateCorrect 0.542 ≠ 0.556 with recall@k identical) was investigated and is a **benchmark-harness artifact, not a promotion or substrate side effect.** The registered candidate ("⊕_dedupe / confidence-threshold side effects of promotion") is REFUTED.
+
+**Isolation (3 configs on one shared embedding cache, oracle 229q):**
+
+| config | distribution | ⊥ pooling rule | KU updateCorrect | recall@3 | recall@10 |
+| --- | --- | --- | --- | --- | --- |
+| A | scalar | MAX_MEAN | 0.542 | 0.931 | 0.979 |
+| B | beta (pc=2) | MAX_MEAN | 0.542 | 0.931 | 0.979 |
+| C | beta (pc=2) | EVIDENCE_POOLED | 0.542 | 0.931 | 0.979 |
+
+All three are identical (0 per-question top-1 differences). So neither Beta promotion nor the pooling rule moves the number — `answerArmA` on the plain scalar+MAX_MEAN config already yields 0.542.
+
+**The real variable is the embedding warm pass.** The 0.542↔0.556 difference is exactly ONE KU question (`7401057b`, "how many free nights … with my accumulated points?"). Its top-2 survivors sit within **0.004 cosine**: `user|accumulated points` (older session, wrong) vs `user|Hilton Honors points` (newer session, correct). The bge model returns ~0.4% different vectors for the same text depending on how strings are batched during warming:
+
+- `pooling-efficacy.ts` / the isolation harness warm `warmEmbeddings(all keys + all questions)` in large batches → older claim scores 0.9146 > newer 0.9106 → top-1 = older → **0.542**.
+- `key-matching-sweep.ts` (which recorded 0.556) warms per-question (`warmForQuestion`) only → newer 0.9148 > older 0.9111 → top-1 = newer → **0.556**.
+
+`recorded_seq` is identical (3283/3310) in both harnesses, so the read-order fix (`6e3b46c`) is not involved; claim `id`s are random UUIDs but do not decide the order here (no score tie — the scores genuinely differ by ~0.004). **Proof:** forcing the isolation harness to warm sweep-style flips it 0.542 → 0.556 exactly.
+
+**Verdict flip:** P2 is effectively **PASS** — promoted serving is answer-neutral (decision-4 holds; lifecycle promotion is serving-invariant). This does NOT unblock the promotion slice: **P1 still fails**, and the pre-registered rule (`P0 ∧ P1 ∧ P2`) keeps the slice gated. Promotion's justification stays withdrawn pending a corpus with confidence variance + corroboration multiplicity (co-arrives with bio attach), not a reworked metric.
+
+**Methodological lesson (applies to all bench arms):** cross-harness top-1 comparisons carry ~1-question noise unless the embedding warm order is identical — standardize a single warm helper. Reinforces that `updateCorrect` top-1 is ranking-fragile to ~0.004 cosine wobble (see the recency-ranking and resolution-vs-served arms).
