@@ -34,6 +34,9 @@ import {
 } from "../types.js";
 import { EXTRACTION_MODEL, PROMPT_VERSION } from "../../convert/longmemeval.js";
 import { MANUAL_KEY_CARDINALITY } from "../run.js";
+import { CONTEXT_K, ANSWER_JUDGE_MODEL, ANSWER_JUDGE_PROMPT_VERSION,
+  renderContextClaim, judgeAnswerInContext, loadJudgeCache, appendJudgeRecord,
+  appendJudgeHeaderIfNew, judgeCacheKey, type JudgeRecord } from "./answer-correctness-judge.js";
 
 const TARGET_CATEGORIES = new Set(["knowledge-update", "temporal-reasoning", "abstention"]);
 const KS = [1, 3, 10];
@@ -162,6 +165,45 @@ function smokeQStates(): QState[] {
   ];
 }
 
+/** Render the served top-CONTEXT_K context for the winning cell (pure, no network). */
+export function buildJudgeContext(qstates: QState[], wConf: number): Array<{ q: LmeQuestionT; context: string[] }> {
+  const halfLifeMs = HALF_LIFE_DAYS * DAY_MS;
+  return qstates.map((s) => {
+    const injected = injectConfidence(s.survivors, s.q, 1); // p=1 ceiling cell
+    const ordered = rankBlendConf(injected, s.q.question, { alpha: ALPHA, halfLifeMs, wConf, t: s.t });
+    return { q: s.q, context: ordered.slice(0, CONTEXT_K).map(renderContextClaim) };
+  });
+}
+
+/** Judge the winning cell's served context vs gold answers (KU + TR; cached, resume-safe). */
+async function judgeWinningCell(qstates: QState[], wConf: number, apiKey: string, cachePath: string): Promise<void> {
+  const cell = `conf-wconf-${wConf}`;
+  const expect = { model: ANSWER_JUDGE_MODEL, promptVersion: ANSWER_JUDGE_PROMPT_VERSION, contextK: CONTEXT_K };
+  appendJudgeHeaderIfNew(cachePath, expect);
+  const cache = loadJudgeCache(cachePath, expect);
+  const built = buildJudgeContext(qstates, wConf);
+  const byCat = new Map<string, { correct: number; n: number }>();
+  for (const { q, context } of built) {
+    const cat = categoryOf(q);
+    if (cat !== "knowledge-update" && cat !== "temporal-reasoning") continue; // abstention has no gold
+    const gold = q.answer;
+    if (gold === null || gold === undefined) continue;
+    const key = judgeCacheKey(cell, q.question_id);
+    let rec = cache.get(key);
+    if (!rec) {
+      const v = await judgeAnswerInContext(apiKey, { question: q.question, gold, context });
+      rec = { cell, questionId: q.question_id, category: cat, correct: v.correct, reason: v.reason };
+      appendJudgeRecord(cachePath, rec);
+    }
+    const agg = byCat.get(cat) ?? { correct: 0, n: 0 };
+    agg.correct += rec.correct ? 1 : 0; agg.n += 1;
+    byCat.set(cat, agg);
+  }
+  for (const [cat, a] of byCat) {
+    console.log(`judge ${cat}: answerInContext ${r3(a.correct / a.n)} (${a.correct}/${a.n})`);
+  }
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
@@ -169,6 +211,8 @@ export async function main(argv: string[]): Promise<number> {
       file: { type: "string" }, claims: { type: "string" },
       raw: { type: "boolean", default: false },
       smoke: { type: "boolean", default: false },
+      judge: { type: "boolean", default: false },
+      wconf: { type: "string" },
       "append-results": { type: "string" },
     },
   });
@@ -204,6 +248,13 @@ export async function main(argv: string[]): Promise<number> {
     const report = printReport(rep);
     console.log(report);
     if (rep.identityFailed) { console.error("IDENTITY GATE FAILED — aborting"); return 1; }
+    if (values.judge) {
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) { console.error("--judge requires ANTHROPIC_API_KEY"); return 1; }
+      const wConf = values.wconf !== undefined ? parseFloat(String(values.wconf)) : rep.bestWConf;
+      const cachePath = join("bench", "longmemeval", "manual", "data", "conf-serving-judgments.jsonl");
+      await judgeWinningCell(qstates, wConf, apiKey, cachePath);
+    }
     if (values["append-results"]) {
       appendFileSync(String(values["append-results"]),
         `\n\n### conf-serving: ceiling (${new Date().toISOString().slice(0, 10)})\n\n\`\`\`\n${report}\n\`\`\`\n`, "utf-8");
