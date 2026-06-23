@@ -376,7 +376,7 @@ Mirrors `ranking-variant-sweep.ts`: single ingest â†’ `resolveOnly` survivors â†
 - Test: `bench/longmemeval/manual/conf-serving-sweep.test.ts`
 
 **Interfaces:**
-- Consumes: `resolveOnly` from `./drift-resolution-metrics.js`; `injectConfidence` from `./conf-inject.js`; `rankBlendConf` from `./rank-blend-conf.js`; `rankBlend` from `./rank-blend.js`; `ingestQuestion`, `claimsFor` from `../ingest.js`; `answerArmA`, `evaluationInstant` from `../answer.js`; `scoreQuestion`, `aggregate`, `ScoreRow`, `QuestionScore` from `../score.js`; `MANUAL_KEY_CARDINALITY` from `../run.js`; `RULE` from `src/distribution/rules.js`; loaders/types from `../types.js` and `../../convert/longmemeval.js`.
+- Consumes: `resolveOnly` from `./drift-resolution-metrics.js`; `injectConfidence` from `./conf-inject.js`; `rankBlendConf` from `./rank-blend-conf.js`; `rankBlend` from `./rank-blend.js`; `ingestQuestion`, `claimsFor` from `../ingest.js`; `evaluationInstant` from `../answer.js`; `scoreQuestion`, `aggregate`, `ScoreRow`, `QuestionScore` from `../score.js`; `MANUAL_KEY_CARDINALITY` from `../run.js`; `RULE` from `src/distribution/rules.js`; loaders/types from `../types.js` and `../../convert/longmemeval.js`.
 - Produces: `runSweep(questions, allClaims): SweepReport` (exported for the test); `main(argv): Promise<number>`; `SweepReport { ku0: number; bestWConf: number; ceilingKU: number; identityFailed: boolean; degradation: Array<{ p: number; ku: number }> }`.
 
 - [ ] **Step 1: Write the failing test**
