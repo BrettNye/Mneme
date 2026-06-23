@@ -36,7 +36,7 @@ import { EXTRACTION_MODEL, PROMPT_VERSION } from "../../convert/longmemeval.js";
 import { MANUAL_KEY_CARDINALITY } from "../run.js";
 import { CONTEXT_K, ANSWER_JUDGE_MODEL, ANSWER_JUDGE_PROMPT_VERSION,
   renderContextClaim, judgeAnswerInContext, loadJudgeCache, appendJudgeRecord,
-  appendJudgeHeaderIfNew, judgeCacheKey, type JudgeRecord } from "./answer-correctness-judge.js";
+  appendJudgeHeaderIfNew, judgeCacheKey } from "./answer-correctness-judge.js";
 
 const TARGET_CATEGORIES = new Set(["knowledge-update", "temporal-reasoning", "abstention"]);
 const KS = [1, 3, 10];
@@ -55,6 +55,7 @@ export interface QState { q: LmeQuestionT; survivors: readonly Claim[]; t: numbe
 export interface SweepReport {
   ku0: number; bestWConf: number; ceilingKU: number; recall10Base: number; recall10Ceiling: number;
   trBase: number; trCeiling: number; identityFailed: boolean; degradation: Array<{ p: number; ku: number }>;
+  g0Pass: boolean; g0Evaluable: boolean;
 }
 
 /** Rank one (p, wConf) cell over all questions and return aggregate rows. */
@@ -112,7 +113,14 @@ export function runSweep(qstates: QState[]): SweepReport {
     degradation.push({ p, ku: metric(rows, "knowledge-update", "updateCorrect") ?? NaN });
   }
 
-  return { ku0, bestWConf, ceilingKU, recall10Base, recall10Ceiling, trBase, trCeiling, identityFailed, degradation };
+  // G0 gate: require all six metrics to be non-NaN and thresholds to hold.
+  const g0Evaluable = ![ku0, recall10Base, trBase, ceilingKU, recall10Ceiling, trCeiling].some(Number.isNaN);
+  const g0Pass = g0Evaluable &&
+    (ceilingKU - ku0 >= 0.05) &&
+    (recall10Ceiling - recall10Base >= -0.02) &&
+    (trCeiling - trBase >= -0.02);
+
+  return { ku0, bestWConf, ceilingKU, recall10Base, recall10Ceiling, trBase, trCeiling, identityFailed, degradation, g0Pass, g0Evaluable };
 }
 
 /** Build QStates: ingest once, resolveOnly survivors per question. */
@@ -135,8 +143,8 @@ function printReport(rep: SweepReport): string {
   out.push(`baseline KU updateCorrect (wConf=0): ${r3(rep.ku0)} | recall@10 ${r3(rep.recall10Base)} | TR ${r3(rep.trBase)}`);
   out.push(`ceiling (p=1, best wConf=${rep.bestWConf}): KU ${r3(rep.ceilingKU)} | recall@10 ${r3(rep.recall10Ceiling)} | TR ${r3(rep.trCeiling)}`);
   out.push(`G0 lift dKU ${r3(rep.ceilingKU - rep.ku0)} | dRecall@10 ${r3(rep.recall10Ceiling - rep.recall10Base)} | dTR ${r3(rep.trCeiling - rep.trBase)}`);
-  const g0pass = rep.ceilingKU - rep.ku0 >= 0.05 && rep.recall10Ceiling - rep.recall10Base >= -0.02 && rep.trCeiling - rep.trBase >= -0.02;
-  out.push(`G0 verdict: ${g0pass ? "PASS — run G1 + judge" : "FAIL — park (ceiling flat / guardrail tripped)"}`);
+  if (!rep.g0Evaluable) out.push("G0 guardrail un-evaluable: NaN metric (corpus may lack KU/TR questions)");
+  out.push(`G0 verdict: ${rep.g0Pass ? "PASS — run G1 + judge" : "FAIL — park (ceiling flat / guardrail tripped)"}`);
   out.push(`G1 degradation @ wConf=${rep.bestWConf === 0 ? W_CONF_GRID[W_CONF_GRID.length - 1] : rep.bestWConf}: ` +
     rep.degradation.map((d) => `p=${d.p}:${r3(d.ku)}`).join("  "));
   return out.join("\n");
@@ -178,9 +186,9 @@ export function buildJudgeContext(qstates: QState[], wConf: number): Array<{ q: 
 /** Judge the winning cell's served context vs gold answers (KU + TR; cached, resume-safe). */
 async function judgeWinningCell(qstates: QState[], wConf: number, apiKey: string, cachePath: string): Promise<void> {
   const cell = `conf-wconf-${wConf}`;
-  const expect = { model: ANSWER_JUDGE_MODEL, promptVersion: ANSWER_JUDGE_PROMPT_VERSION, contextK: CONTEXT_K };
-  appendJudgeHeaderIfNew(cachePath, expect);
-  const cache = loadJudgeCache(cachePath, expect);
+  const judgeHeader = { model: ANSWER_JUDGE_MODEL, promptVersion: ANSWER_JUDGE_PROMPT_VERSION, contextK: CONTEXT_K };
+  appendJudgeHeaderIfNew(cachePath, judgeHeader);
+  const cache = loadJudgeCache(cachePath, judgeHeader);
   const built = buildJudgeContext(qstates, wConf);
   const byCat = new Map<string, { correct: number; n: number }>();
   for (const { q, context } of built) {
@@ -249,11 +257,15 @@ export async function main(argv: string[]): Promise<number> {
     console.log(report);
     if (rep.identityFailed) { console.error("IDENTITY GATE FAILED — aborting"); return 1; }
     if (values.judge) {
-      const apiKey = process.env.ANTHROPIC_API_KEY;
-      if (!apiKey) { console.error("--judge requires ANTHROPIC_API_KEY"); return 1; }
-      const wConf = values.wconf !== undefined ? parseFloat(String(values.wconf)) : rep.bestWConf;
-      const cachePath = join("bench", "longmemeval", "manual", "data", "conf-serving-judgments.jsonl");
-      await judgeWinningCell(qstates, wConf, apiKey, cachePath);
+      if (!rep.g0Pass) {
+        console.log("G0 did not pass — judge skipped (no LLM spend on FAIL)");
+      } else {
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) { console.error("--judge requires ANTHROPIC_API_KEY"); return 1; }
+        const wConf = values.wconf !== undefined ? parseFloat(String(values.wconf)) : rep.bestWConf;
+        const cachePath = join("bench", "longmemeval", "manual", "data", "conf-serving-judgments.jsonl");
+        await judgeWinningCell(qstates, wConf, apiKey, cachePath);
+      }
     }
     if (values["append-results"]) {
       appendFileSync(String(values["append-results"]),
