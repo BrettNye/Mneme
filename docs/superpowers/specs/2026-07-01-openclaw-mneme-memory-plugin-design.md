@@ -194,14 +194,15 @@ agent decides a fact is worth keeping ──▶ memory_remember(subject,key,valu
 
 ## Risks
 
-- **R1 — TS-source dependency import.** mneme's `package.json` `exports` point at
-  `./src/*.ts` (not compiled JS). OpenClaw loads the plugin's own `index.ts`, so it has
-  a TS-capable loader — but whether it transpiles a TS dependency resolved from
-  `node_modules` is unverified. **Mitigation:** implementation task 1 is a spike — a
-  minimal plugin that imports `mneme` and logs a recall. If the loader won't transpile
-  the dep, fall back to adding a `tsc` build to mneme (emit `dist/`) and repoint the
-  `openMnemeEngine` import at compiled output (or add a `mneme/engine` export mapped to
-  built JS). Design otherwise unchanged.
+- **R1 — TS-source dependency import — RESOLVED (2026-07-01).** OpenClaw (`openclaw`
+  v2026.2.25) loads plugins with `createJiti(import.meta.url, { interopDefault: true,
+  extensions: [".ts", ".tsx", ".mts", ".cts", …] })` (verified in `dist/reply-*.js`). jiti
+  transpiles every module it loads by extension, node_modules included, so `import … from
+  "mneme/mcp"` (→ `node_modules/mneme/src/mcp/index.ts` via mneme's `exports`) transpiles
+  with the whole TS tree. Confirmed empirically: a probe with that exact `createJiti` config
+  imported the real `mneme/mcp` + `mneme/surface`, loaded `better-sqlite3`, and committed
+  `remember` writes to SQLite. The `tsc`-build fallback is **not needed**; mneme keeps its
+  TS-source `exports`.
 - **R2 — native binding ABI.** `better-sqlite3` must be built for the host Node runtime.
   The big-helper Docker image already rebuilds it for Linux (`npm install --include=dev`);
   for a local host install the plugin's `npm install` must compile it there. Documented

@@ -32,14 +32,15 @@ Decomposition: three file-disjoint roots run in parallel — the one mneme-side 
 (`task-engine`), the plugin's declarative package (`task-package`), and the pure formatting
 helpers (`task-format`) — then `task-index` joins all three to build the plugin entry.
 
-**Pre-execution gate (R1 — not a DAG task).** Before executing, run a throwaway spike
-confirming OpenClaw's in-process plugin loader can import mneme's TS-source dependency
-(mneme's `exports` point at `./src/*.ts`, not compiled JS). Minimal probe: a one-file
-plugin that `import { openMnemeEngine } from "mneme/mcp"` and logs a recall, loaded via
-`openclaw plugins install --link`. vitest (used by `task-*` tests) transpiles TS natively,
-so green tests do NOT prove the OpenClaw loader works — the spike must run against the real
-Gateway. If it fails, the fallback (unchanged design otherwise) is to add a `tsc` build to
-mneme and repoint `task-engine`'s `mneme/mcp` export at compiled `dist/` output.
+**R1 — RESOLVED (2026-07-01), no DAG task needed.** OpenClaw's plugin loader is
+`createJiti(import.meta.url, { interopDefault: true, extensions: [".ts", ".tsx", ".mts",
+".cts", …] })` (verified in `openclaw` v2026.2.25 `dist/reply-*.js`). jiti transpiles every
+module it loads by extension — node_modules included — so `import … from "mneme/mcp"`
+(resolving to `node_modules/mneme/src/mcp/index.ts` via mneme's `exports`) is transpiled
+along with the whole TS tree. Confirmed empirically: a probe using that exact `createJiti`
+config imported the real `mneme/mcp` + `mneme/surface`, loaded `better-sqlite3`, and
+committed two `remember` writes to SQLite (`SPIKE_OK`). The `tsc`-build fallback is therefore
+**not needed**; `task-engine` keeps mneme's TS-source `exports` as-is.
 
 **R2 — native binding.** `better-sqlite3` must be built for the host Node ABI; documented
 as a prerequisite in the plugin README (`task-package`).
