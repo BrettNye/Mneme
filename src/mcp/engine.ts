@@ -8,7 +8,7 @@ import { basename } from "node:path";
 import { openSession } from "../surface/index.js";
 import type { Session } from "../surface/types.js";
 import { loadMnemeConfig } from "./config.js";
-import { initEmbeddings } from "./embeddings.js";
+import { initEmbeddings } from "../surface/embeddings.js";
 
 export interface OpenEngineOptions {
   dbPath?: string;

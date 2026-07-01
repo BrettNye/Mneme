@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMnemeMcpServer } from "./server.js";
-import { _resetEmbeddingsForTest, initEmbeddings } from "./embeddings.js";
+import { _resetEmbeddingsForTest, initEmbeddings } from "../surface/embeddings.js";
 
 type TextContent = { content: { type: string; text: string }[] };
 type StructuredRecall = {

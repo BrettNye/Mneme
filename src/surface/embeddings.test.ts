@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { initEmbeddings, _resetEmbeddingsForTest } from "./embeddings.js";
-import type { EmbeddingState } from "../surface/index.js";
+import type { EmbeddingState } from "./index.js";
 import type { EmbeddingAdapter } from "../algebra/embedding.js";
 import { similarityFn, registerSimilarity } from "../algebra/similarity.js";
 import { embeddingAdapter } from "../algebra/embedding.js";
@@ -247,4 +247,4 @@ describe("registerIfAbsent stale-closure (documented-intentional)", () => {
 
 // ── CI zero-network guard ─────────────────────────────────────────────────────
 // Verified statically by the acceptance criteria: grep -rn "transformers-local"
-// src/mcp/embeddings.test.ts should be empty (this file has no such import).
+// src/surface/embeddings.test.ts should be empty (this file has no such import).

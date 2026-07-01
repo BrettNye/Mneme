@@ -6,9 +6,7 @@ import { join } from "node:path";
 import { recall, keyCensus } from "./recall.js";
 import { remember, listCorpora, ensureCorpus } from "./remember.js";
 import { freshSession, jaccardDeps, makeFakeHybridDeps } from "./test-support.js";
-// NOTE (layering exception, test-only): see test-support.ts — _resetEmbeddingsForTest
-// has no surface equivalent (mcp-only singleton), same accepted exception.
-import { _resetEmbeddingsForTest } from "../mcp/embeddings.js";
+import { _resetEmbeddingsForTest } from "./embeddings.js";
 
 afterEach(() => {
   vi.restoreAllMocks();

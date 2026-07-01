@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openMnemeEngine } from "./engine.js";
 import { remember, recall } from "../surface/index.js";
-import { _resetEmbeddingsForTest, initEmbeddings } from "./embeddings.js";
+import { _resetEmbeddingsForTest, initEmbeddings } from "../surface/embeddings.js";
 
 // Prime the jaccard fallback singleton before any test triggers recall, so
 // eng.initEmbeddings() (a bare call to the shared singleton) resolves instantly

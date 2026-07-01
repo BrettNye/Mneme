@@ -3,8 +3,8 @@ import type { SimilarityFn } from "../algebra/similarity.js";
 import { EmbeddingCache, cosineOver, registerEmbeddingAdapter } from "../algebra/embedding.js";
 import { registerSimilarity, hybridMax, simJaccard, similarityFn } from "../algebra/similarity.js";
 
-import type { EmbeddingState } from "../surface/recall.js";
-export type { EmbeddingState } from "../surface/recall.js";
+import type { EmbeddingState } from "./recall.js";
+export type { EmbeddingState } from "./recall.js";
 
 // ── Singleton state ──────────────────────────────────────────────────────────
 
