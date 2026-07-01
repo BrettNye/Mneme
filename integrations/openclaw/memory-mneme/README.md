@@ -72,28 +72,34 @@ Note: better-sqlite3 is a native module and requires Node.js and Python developm
 
 ## API
 
+Each tool takes a single arguments object and returns a text result. Recall
+returns mneme's resolved, token-bounded context (latest-per-`(subject,key)`).
+
 ### memory_recall
 
-Retrieve relevant memories based on a query.
+Retrieve relevant resolved memories for a query.
 
 ```typescript
-memory_recall(query: string, limit?: number): Memory[]
+memory_recall({ about: string, limit?: number, relevanceFloor?: number })
 ```
 
 ### memory_remember
 
-Store a new memory or update an existing one.
+Store a typed claim `(subject, key, value)`. Explicit-write only — no auto-capture.
 
 ```typescript
-memory_remember(subject: string, key: string, value: unknown, confidence?: number): void
+memory_remember({
+  subject: string, key: string, value: string,
+  confidence?: number, tags?: string[], scope?: Record<string, string>,
+})
 ```
 
 ### memory_key_census
 
-Analyze memory structure and key distribution.
+Census the distinct keys in the corpus and surface alias candidates.
 
 ```typescript
-memory_key_census(): KeyCensus
+memory_key_census({ limit?: number })
 ```
 
 ### memory_corpora
@@ -101,7 +107,7 @@ memory_key_census(): KeyCensus
 List available memory corpora.
 
 ```typescript
-memory_corpora(): string[]
+memory_corpora({})
 ```
 
 ## Architecture

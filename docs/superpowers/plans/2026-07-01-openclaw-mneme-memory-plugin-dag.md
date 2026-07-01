@@ -5,10 +5,10 @@ created: 2026-07-01
 
 ```mermaid
 flowchart TD
-    task-engine["task-engine: expose mneme/mcp surface<br/>files: src/mcp/engine.ts +3 more"]
-    task-package["task-package: plugin package scaffold<br/>files: integrations/openclaw/memory-mneme/openclaw.plugin.json +3 more"]
-    task-format["task-format: format helpers<br/>files: integrations/openclaw/memory-mneme/format.ts +1 more"]
-    task-index["task-index: plugin entry<br/>files: integrations/openclaw/memory-mneme/index.ts +1 more"]
+    task-engine["task-engine: expose mneme/mcp surface<br/>files: src/mcp/engine.ts +3 more"]:::done
+    task-package["task-package: plugin package scaffold<br/>files: integrations/openclaw/memory-mneme/openclaw.plugin.json +3 more"]:::done
+    task-format["task-format: format helpers<br/>files: integrations/openclaw/memory-mneme/format.ts +1 more"]:::done
+    task-index["task-index: plugin entry<br/>files: integrations/openclaw/memory-mneme/index.ts +1 more"]:::done
     task-engine --> task-index
     task-package --> task-index
     task-format --> task-index
@@ -62,7 +62,7 @@ files:
   - src/mcp/engine.test.ts
   - src/mcp/index.ts
   - src/mcp/server.ts
-status: pending
+status: done
 ```
 
 Extract the engine bootstrap the plugin (and the MCP server) both need into a single
@@ -154,7 +154,7 @@ files:
   - integrations/openclaw/memory-mneme/package.json
   - integrations/openclaw/memory-mneme/README.md
   - integrations/openclaw/memory-mneme/manifest.test.ts
-status: pending
+status: done
 is_wiring_task: true
 model_hint: cheap
 review_mode: merged
@@ -203,7 +203,7 @@ depends_on: []
 files:
   - integrations/openclaw/memory-mneme/format.ts
   - integrations/openclaw/memory-mneme/format.test.ts
-status: pending
+status: done
 ```
 
 Two pure helpers the plugin entry consumes, kept separate so they are testable without a
@@ -266,7 +266,7 @@ depends_on: [task-engine, task-package, task-format]
 files:
   - integrations/openclaw/memory-mneme/index.ts
   - integrations/openclaw/memory-mneme/index.test.ts
-status: pending
+status: done
 ```
 
 The plugin default export and its `register(api)` wiring: resolve config, open the mneme
