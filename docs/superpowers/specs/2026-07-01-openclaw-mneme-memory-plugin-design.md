@@ -61,22 +61,47 @@ Mneme already exposes everything needed as a library:
   `src/mcp/tools.ts` but is not yet re-exported from `mneme/mcp` — the plugin needs it
   exported; fold this into the same one-line export change as `openMnemeEngine`.)
 
-`recall()` returns resolved matches — `RecallMatch { subject, key, value, confidence,
-score, id, tags }` — already collapsed to latest-per-`(subject,key)` by the algebra
-(served health, not the raw accreting leaf). `remember(session, args)` takes
-`RememberArgs { subject, key, value, corpus, confidence?, tags?, scope?, validFrom? }`
-and returns `{ id, status, corpus }`.
+`recall()` returns both a token-bounded **`content` string** (a `ComposedContext` built
+precisely for injecting memory into an agent's context) and resolved `matches`
+(`RecallMatch { subject, key, value, confidence, score, id, tags }`), already collapsed
+to latest-per-`(subject,key)` by the algebra (served health, not the raw accreting leaf).
+It also applies `relevanceFloor` / `abstainBelowTop` **server-side**. `remember(session,
+args)` takes `RememberArgs { subject, key, value, corpus, confidence?, tags?, scope?,
+validFrom? }` and returns `{ id, status, corpus }`.
 
-### One mneme-side addition
+**Reuse, don't re-render (DRY).** The plugin consumes `recall().content` and passes
+`relevanceFloor` into `recall` — it does NOT hand-roll a match-line formatter or filter
+matches client-side. Both already exist in the engine (`content` = ComposedContext;
+server.ts renders inline match lines; filtering is a recall arg).
 
-Add a small convenience export so the plugin depends on an intentional surface, not
-internals: **`openMnemeEngine({ dbPath, corpus })` → `{ session, deps }`** where
-`deps = { embeddings, keyCardinality }` (the `RecallDeps` shape). It wraps the three
-bootstrap steps `src/mcp/server.ts` already performs. One new file
-(`src/mcp/engine.ts` or `src/surface/engine.ts`), re-exported from `mneme/mcp` (or a
-new `mneme/engine` export). Also export `initEmbeddings` if not already reachable.
+### One mneme-side addition — a shared engine bootstrap
 
-This is the only change inside the mneme package proper.
+Add **`openMnemeEngine({ dbPath, corpus })`** at `src/mcp/engine.ts`, re-exported from
+`mneme/mcp`, returning a stable facade:
+`{ session, defaultCorpus, keyCardinality, initEmbeddings }` (where `initEmbeddings` is
+the memoized lazy loader; `keyCardinality` comes from `loadMnemeConfig`). A recall/census
+call builds its `RecallDeps` as `{ embeddings: await initEmbeddings(), keyCardinality }`
+— identical to what server.ts does today.
+
+This must be a **genuine extraction, not a parallel bootstrap (DRY):** the same
+`loadMnemeConfig` + `openSession` sequence currently inlined in `createMnemeMcpServer`
+moves into `openMnemeEngine`, and `createMnemeMcpServer` is refactored to consume it.
+Constraints:
+
+- **Preserve lazy embeddings.** `openMnemeEngine` must NOT eagerly load the embedding
+  model — it returns the memoized `initEmbeddings` so the first recall pays the cost and
+  `register()` / Gateway boot stays instant (matches the server's existing pattern).
+- Also re-export **`keyCensus`** from `mneme/mcp` (it exists in `src/mcp/tools.ts` and is
+  used by server.ts, but is not currently on the `mneme/mcp` index) for the
+  `memory_key_census` tool.
+
+**SoC win:** the plugin then imports *only* `openMnemeEngine` plus the tool fns
+(`remember`, `recall`, `listCorpora`, `keyCensus`) from `mneme/mcp` — it never reaches
+into `surface` / `config` / `embeddings` internals.
+
+These are the only changes inside the mneme package proper. Trade-off noted: this touches
+the battle-tested `createMnemeMcpServer`; it is covered by the existing
+`server.test.ts` / `server.integration.test.ts` suites, which must stay green.
 
 ## Plugin architecture
 
@@ -84,14 +109,18 @@ This is the only change inside the mneme package proper.
 integrations/openclaw/memory-mneme/
   openclaw.plugin.json   # manifest: id, kind:memory, configSchema, tools, cliCommands
   package.json           # type:module, openclaw.extensions:["./index.ts"], dep: mneme (file:)
-  index.ts               # default export + register(api)
-  format.ts              # pure: RecallResult -> prependContext block; match -> line
+  index.ts               # default export + register(api) — wiring + I/O only
+  format.ts              # pure: wrap recall().content in <relevant-memories> envelope
   README.md              # install + config + slot selection
   index.test.ts          # unit + register() smoke test
 ```
 
-Keep `index.ts` thin (wiring). Pure formatting/mapping lives in `format.ts` so it is
-testable without a live `api`.
+Keep `index.ts` thin (wiring + logging). Pure logic lives in `format.ts` so it is
+testable without a live `api`. Per house convention ("servers/adapters do I/O, pure
+helpers stay pure"), all logging (`[memory-mneme] …` to stderr) lives in `index.ts`;
+`format.ts` is pure. `format.ts` is deliberately tiny — it wraps `recall().content` in
+the `<relevant-memories>` envelope and guards the empty case; it does NOT re-render
+matches (see F1/DRY).
 
 ### Config schema
 
@@ -110,9 +139,9 @@ env (`MNEME_DB`, `MNEME_CORPUS`) → defaults.
 ### Tools (agent-facing)
 
 1. **`memory_recall`** — params `{ about: string, limit?: number, relevanceFloor?: number }`.
-   Calls `recall(session, { about, corpus, limit, relevanceFloor }, deps)`. Returns the
-   formatted match list (value, confidence, and claim `id` for citation). Empty → a clear
-   "no relevant memories" message.
+   Calls `recall(session, { about, corpus, limit, relevanceFloor }, { embeddings, keyCardinality })`.
+   Returns `recall().content` (mneme's own ComposedContext) as the tool text. Empty →
+   a clear "no relevant memories" message. Does not re-render matches client-side (F1).
 
 2. **`memory_remember`** — params `{ subject: string, key: string, value: string,
    confidence?: number, scope?: object, tags?: string[] }`. Calls
@@ -136,9 +165,11 @@ Mirror the tools for host-side use: `mneme recall <about>`, `mneme remember <sub
 ### Lifecycle hooks
 
 - **`before_agent_start`** (registered iff `autoRecall`): read `event.prompt`; skip if
-  empty. `recall()` with `recallLimit` + `relevanceFloor`. If no matches, return nothing.
-  Otherwise return `{ prependContext: "<relevant-memories>\n" + formatted + "\n</relevant-memories>" }`.
-  Each line: `- <subject> <key>: <value> (confidence X.XX) [id]`.
+  empty. `recall()` with `recallLimit` + `relevanceFloor` (filtering happens server-side
+  inside recall). If `recall().content` is empty, return nothing. Otherwise return
+  `{ prependContext: format.wrapMemories(recall().content) }`, where `wrapMemories` is the
+  pure `format.ts` helper that wraps the ComposedContext in `<relevant-memories>…
+  </relevant-memories>`. No client-side match rendering or filtering (F1).
 - **`agent_end`**: intentionally not registered. Explicit-write only.
 
 ## Data flow
@@ -178,12 +209,31 @@ agent decides a fact is worth keeping ──▶ memory_remember(subject,key,valu
 
 ## Testing
 
-- `format.ts`: unit tests — `RecallResult` → prependContext block (empty, single, multi,
-  floor-filtered); `RememberArgs` mapping incl. `defaultScope` merge.
+- `format.ts`: unit tests — `wrapMemories` (empty content → no envelope; non-empty →
+  wrapped once); any `defaultScope` merge helper used by `memory_remember`.
 - `index.ts`: smoke test — call `register(stubApi)` against a temp SQLite DB; assert the
   four tools + the `before_agent_start` hook (when `autoRecall`) are registered, and that
   a `memory_remember` → `memory_recall` round-trip returns the written claim.
+- `openMnemeEngine`: the existing `server.test.ts` / `server.integration.test.ts` must
+  stay green after `createMnemeMcpServer` is refactored to consume it (proves the
+  extraction preserved behaviour, incl. lazy embeddings).
 - Reuse mneme's existing temp-DB test helpers.
+
+## Audit conformance (repo patterns / DRY / SRP / SoC)
+
+- **DRY** — no re-rendering: recall content + match rendering + relevance filtering all
+  come from the engine (F1). `openMnemeEngine` extracts the bootstrap rather than forking
+  it, and `createMnemeMcpServer` consumes the extraction (F2).
+- **SRP** — `format.ts` pure formatting; `index.ts` wiring + I/O; `engine.ts` bootstrap;
+  each unit does one thing.
+- **SoC** — the plugin talks to mneme through one intentional facade (`openMnemeEngine` +
+  the four tool fns), never reaching into `surface`/`config`/`embeddings` internals (F3).
+- **House conventions matched** — `format.ts` module name (mirrors `surface/format.ts`),
+  `opts ?? env ?? default` config resolution, pure-helpers/IO-at-edges split, and a
+  `[memory-mneme]` stderr log prefix (mirrors `[mneme/recall]`) (F4).
+- **Deferred for consistency** — server.ts writes best-effort `appendRecallLog` telemetry
+  per recall; the plugin omits it in v1 to avoid coupling to MCP-specific telemetry, noted
+  as optional future for unified dogfood observability (F5).
 
 ## Out of scope / future
 
