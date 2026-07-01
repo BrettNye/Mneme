@@ -1,0 +1,56 @@
+{
+  "id": "memory-mneme",
+  "name": "Mneme Memory",
+  "kind": "memory",
+  "configSchema": {
+    "dbPath": {
+      "type": "string",
+      "description": "Path to the SQLite database file"
+    },
+    "corpus": {
+      "type": "string",
+      "default": "openclaw",
+      "description": "Corpus identifier for memory partitioning"
+    },
+    "autoRecall": {
+      "type": "boolean",
+      "default": true,
+      "description": "Automatically recall relevant memories during operations"
+    },
+    "recallLimit": {
+      "type": "number",
+      "default": 10,
+      "description": "Maximum number of memories to recall per query"
+    },
+    "relevanceFloor": {
+      "type": "number",
+      "default": 0.5,
+      "description": "Minimum relevance score (0-1) for recalled memories"
+    },
+    "defaultScope": {
+      "type": "object",
+      "default": {
+        "project": "openclaw"
+      },
+      "description": "Default scope for memory queries and writes"
+    }
+  },
+  "tools": [
+    {
+      "name": "memory_recall",
+      "description": "Retrieve relevant memories based on a query"
+    },
+    {
+      "name": "memory_remember",
+      "description": "Store a new memory or update an existing one"
+    },
+    {
+      "name": "memory_key_census",
+      "description": "Analyze memory structure and key distribution"
+    },
+    {
+      "name": "memory_corpora",
+      "description": "List available memory corpora"
+    }
+  ]
+}

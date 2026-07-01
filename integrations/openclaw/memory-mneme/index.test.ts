@@ -1,0 +1,391 @@
+import { describe, it, expect, beforeAll, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
+import { join } from "node:path";
+import { openMnemeEngine } from "mneme/mcp";
+import plugin, { resolveConfig } from "./index.js";
+
+// Prime the jaccard-fallback embedding singleton (see src/mcp/engine.test.ts) so the
+// first recall in these tests is fast/deterministic instead of loading a real model.
+// `initEmbeddings` is a module-level singleton shared by every engine instance, so
+// priming it once here — via the publicly exported openMnemeEngine — is enough for
+// every plugin.register() call in this file to reuse the cached jaccard fallback.
+beforeAll(async () => {
+  const primingDbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-priming-")), "store.db");
+  const primingEngine = openMnemeEngine({ dbPath: primingDbPath, corpus: "priming" });
+  await primingEngine.initEmbeddings(async () => {
+    throw new Error("no model in CI");
+  });
+});
+
+function makeApi(pluginConfig: any) {
+  const tools: Record<string, any> = {};
+  const handlers: { event: string; handler: any }[] = [];
+  const api = {
+    pluginConfig,
+    registerTool(def: any, _meta?: any) {
+      tools[def.name] = def;
+    },
+    registerCli() {},
+    on(event: string, handler: any) {
+      handlers.push({ event, handler });
+    },
+  };
+  return { api, tools, handlers };
+}
+
+describe("resolveConfig", () => {
+  it("expands the default dbPath to a path under the home directory (not a literal '~')", () => {
+    const prevDb = process.env.MNEME_DB;
+    delete process.env.MNEME_DB;
+    try {
+      const cfg = resolveConfig({});
+      expect(cfg.dbPath.startsWith(homedir())).toBe(true);
+      expect(cfg.dbPath).not.toContain("~");
+    } finally {
+      if (prevDb === undefined) delete process.env.MNEME_DB;
+      else process.env.MNEME_DB = prevDb;
+    }
+  });
+});
+
+describe("memory-mneme plugin", () => {
+  it("registers the four memory tools and one before_agent_start handler, never agent_end", () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+    const { api, tools, handlers } = makeApi({ dbPath, corpus: "test" });
+    plugin.register(api);
+
+    expect(Object.keys(tools).sort()).toEqual(
+      ["memory_corpora", "memory_key_census", "memory_recall", "memory_remember"].sort(),
+    );
+    expect(handlers.filter((h) => h.event === "before_agent_start")).toHaveLength(1);
+    expect(handlers.some((h) => h.event === "agent_end")).toBe(false);
+  });
+
+  it("does not register a before_agent_start handler when autoRecall is false", () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+    const { api, handlers } = makeApi({ dbPath, corpus: "test", autoRecall: false });
+    plugin.register(api);
+
+    expect(handlers.filter((h) => h.event === "before_agent_start")).toHaveLength(0);
+    expect(handlers.some((h) => h.event === "agent_end")).toBe(false);
+  });
+
+  it("remember then recall round-trips through the mneme engine", async () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+    const { api, tools } = makeApi({ dbPath, corpus: "test" });
+    plugin.register(api);
+
+    await tools["memory_remember"].execute("1", {
+      subject: "project:mneme",
+      key: "status",
+      value: "green",
+      confidence: 0.8,
+    });
+    const out = await tools["memory_recall"].execute("2", { about: "mneme status" });
+    expect(out.content[0].text).toContain("green");
+  });
+
+  it("memory_corpora lists the configured corpus after a write", async () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+    const { api, tools } = makeApi({ dbPath, corpus: "test" });
+    plugin.register(api);
+
+    await tools["memory_remember"].execute("1", { subject: "s", key: "k", value: "v" });
+    const out = await tools["memory_corpora"].execute("2", {});
+    expect(out.content[0].text).toContain("test");
+  });
+
+  it("memory_key_census reports the written key", async () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+    const { api, tools } = makeApi({ dbPath, corpus: "test" });
+    plugin.register(api);
+
+    await tools["memory_remember"].execute("1", { subject: "s", key: "some-key", value: "v" });
+    const out = await tools["memory_key_census"].execute("2", {});
+    expect(out.content[0].text).toContain("some-key");
+  });
+
+  it("passes mergeScope(defaultScope, params.scope) as the claim scope (write keys win)", async () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+    const { api, tools } = makeApi({
+      dbPath,
+      corpus: "test",
+      defaultScope: { project: "mneme", context: "default-ctx" },
+    });
+    plugin.register(api);
+
+    await tools["memory_remember"].execute("1", {
+      subject: "scope:subject",
+      key: "scope-key",
+      value: "v",
+      scope: { context: "write-ctx" },
+    });
+
+    const eng = openMnemeEngine({ dbPath, corpus: "test" });
+    const claims = eng.session.mneme.read("test", {
+      corpusId: "test",
+      subject: "scope:subject",
+      key: "scope-key",
+    });
+    expect(claims).toHaveLength(1);
+    expect(claims[0].scope).toEqual({ project: "mneme", context: "write-ctx" });
+  });
+
+  describe("memory_recall subject/key filtering", () => {
+    it("filters recall to the given subject when subject/key params are supplied", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "project:alpha",
+        key: "status",
+        value: "alpha-green",
+      });
+      await tools["memory_remember"].execute("2", {
+        subject: "project:beta",
+        key: "status",
+        value: "beta-red",
+      });
+
+      const out = await tools["memory_recall"].execute("3", {
+        about: "status",
+        subject: "project:alpha",
+        key: "status",
+      });
+      expect(out.content[0].text).toContain("alpha-green");
+      expect(out.content[0].text).not.toContain("beta-red");
+    });
+  });
+
+  describe("memory_recall provenance + coverage annotations", () => {
+    it("includes a claim id in the recall output for a matched claim", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "user",
+        key: "accommodation",
+        value: "Airbnb",
+      });
+      const rememberOut = await tools["memory_remember"].execute("2", {
+        subject: "user2",
+        key: "accommodation",
+        value: "Hotel",
+      });
+      const out = await tools["memory_recall"].execute("3", { about: "Where did I stay?" });
+      // At least one recalled claim id should be cited in the sources footer.
+      expect(out.content[0].text).toMatch(/sources:/);
+      expect(out.content[0].text).toContain("accommodation");
+    });
+
+    it("appends a coverage note when the query names an entity with no supporting claim", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "user",
+        key: "accommodation",
+        value: "Airbnb",
+      });
+
+      const out = await tools["memory_recall"].execute("2", {
+        about: "When did I book the Airbnb in Sacramento?",
+      });
+      expect(out.content[0].text).toContain("Sacramento");
+      expect(out.content[0].text).toContain("No stored claims mention");
+    });
+  });
+
+  describe("memory_remember validFrom", () => {
+    it("backdates the claim's valid.from to the supplied ISO date", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      const validFrom = "2020-01-01T00:00:00.000Z";
+      await tools["memory_remember"].execute("1", {
+        subject: "project:mneme",
+        key: "history-fact",
+        value: "backdated-value",
+        validFrom,
+      });
+
+      const eng = openMnemeEngine({ dbPath, corpus: "test" });
+      const claims = eng.session.mneme.read("test", {
+        corpusId: "test",
+        subject: "project:mneme",
+        key: "history-fact",
+      });
+      expect(claims).toHaveLength(1);
+      expect(claims[0].valid.from).toBe(Date.parse(validFrom));
+    });
+
+    it("a validFrom write is superseded by a later no-validFrom write on the same subject/key", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "project:mneme",
+        key: "current-status",
+        value: "old-backdated-status",
+        validFrom: "2020-01-01T00:00:00.000Z",
+      });
+      await tools["memory_remember"].execute("2", {
+        subject: "project:mneme",
+        key: "current-status",
+        value: "new-live-status",
+      });
+
+      const out = await tools["memory_recall"].execute("3", { about: "project mneme current status" });
+      expect(out.content[0].text).toContain("new-live-status");
+      expect(out.content[0].text).not.toContain("old-backdated-status");
+    });
+  });
+
+  describe("before_agent_start auto-recall hook", () => {
+    it("returns undefined when recall content is blank", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, handlers } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      const hook = handlers.find((h) => h.event === "before_agent_start")!.handler;
+      const result = await hook({ prompt: "nothing has ever been recorded about this" });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined for a blank prompt", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, handlers } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      const hook = handlers.find((h) => h.event === "before_agent_start")!.handler;
+      const result = await hook({ prompt: "   " });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns { prependContext } wrapping recall content via wrapMemories when non-empty", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools, handlers } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "project:mneme",
+        key: "status",
+        value: "green",
+        confidence: 0.8,
+      });
+
+      const hook = handlers.find((h) => h.event === "before_agent_start")!.handler;
+      const result = await hook({ prompt: "what is the mneme status" });
+      expect(result).toBeDefined();
+      expect(result.prependContext.startsWith("<relevant-memories>")).toBe(true);
+      expect(result.prependContext.trim().endsWith("</relevant-memories>")).toBe(true);
+      expect(result.prependContext).toContain("green");
+    });
+
+    it("appends a coverage note when the recalled block is non-empty and the prompt names an uncovered entity", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools, handlers } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "user",
+        key: "accommodation",
+        value: "Airbnb",
+      });
+
+      const hook = handlers.find((h) => h.event === "before_agent_start")!.handler;
+      const result = await hook({ prompt: "When did I book the Airbnb in Sacramento?" });
+      expect(result).toBeDefined();
+      expect(result.prependContext).toContain("Sacramento");
+      expect(result.prependContext).toContain("No stored claims mention");
+    });
+
+    it("does not emit a coverage note when recall content is blank (still returns undefined)", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, handlers } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      const hook = handlers.find((h) => h.event === "before_agent_start")!.handler;
+      const result = await hook({ prompt: "Tell me about Sacramento, nothing has ever been recorded" });
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("non-fatal warnings are surfaced to stderr", () => {
+    it("memory_recall logs recall warnings to stderr with the [memory-mneme] prefix", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "user",
+        key: "accommodation",
+        value: "Airbnb",
+      });
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        errorSpy.mockClear();
+        await tools["memory_recall"].execute("2", { about: "When did I book the Airbnb in Sacramento?" });
+        expect(errorSpy.mock.calls.some((c) => String(c[0]).includes("[memory-mneme]"))).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    it("memory_key_census logs census warnings to stderr with the [memory-mneme] prefix", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      // Alias cycle (alpha -> beta, beta -> alpha) makes aliasMapOf emit a warning.
+      await tools["memory_remember"].execute("1", {
+        subject: "key:alpha",
+        key: "alias-of",
+        value: "beta",
+      });
+      await tools["memory_remember"].execute("2", {
+        subject: "key:beta",
+        key: "alias-of",
+        value: "alpha",
+      });
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        errorSpy.mockClear();
+        await tools["memory_key_census"].execute("3", {});
+        expect(errorSpy.mock.calls.some((c) => String(c[0]).includes("[memory-mneme]"))).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    it("before_agent_start hook logs recall warnings to stderr with the [memory-mneme] prefix", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools, handlers } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "user",
+        key: "accommodation",
+        value: "Airbnb",
+      });
+
+      const hook = handlers.find((h) => h.event === "before_agent_start")!.handler;
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        errorSpy.mockClear();
+        await hook({ prompt: "When did I book the Airbnb in Sacramento?" });
+        expect(errorSpy.mock.calls.some((c) => String(c[0]).includes("[memory-mneme]"))).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+  });
+});
