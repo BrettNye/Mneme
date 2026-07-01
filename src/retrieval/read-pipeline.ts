@@ -17,6 +17,10 @@ import { abstainBelowTop, relevanceFloor } from "../algebra/similarity.js";
 import { rho } from "../mneme.js";
 import { isKeyAliasShaped } from "./key-alias.js";
 
+/** Default ⊕_dedupe config used by the canonical read core. Exported so re-derivers
+ *  (explainRecall) run the identical dedupe rather than re-hardcoding constants. */
+export const DEDUPE_DEFAULTS = { rule: "rule_weighted_avg", fn: "jaccard", cutoff: 0.5 } as const;
+
 // ── canonicalReadStages ───────────────────────────────────────────────────────
 
 export interface ReadPipelineOpts {
@@ -59,9 +63,9 @@ export interface ReadPipelineOpts {
 export function canonicalReadStages(opts: ReadPipelineOpts): Stage<Corpus, Corpus>[] {
   const t = opts.evaluationInstant;
   const threshold = opts.conflictThreshold ?? 0;
-  const dedupeFn = opts.dedupe?.fn ?? "jaccard";
-  const dedupeCutoff = opts.dedupe?.cutoff ?? 0.5;
-  const dedupeRule = opts.dedupe?.rule ?? "rule_weighted_avg";
+  const dedupeFn = opts.dedupe?.fn ?? DEDUPE_DEFAULTS.fn;
+  const dedupeCutoff = opts.dedupe?.cutoff ?? DEDUPE_DEFAULTS.cutoff;
+  const dedupeRule = opts.dedupe?.rule ?? DEDUPE_DEFAULTS.rule;
 
   return [
     // 1. τ_valid: exclude claims whose valid interval does not cover t

@@ -11,6 +11,8 @@
 import type { Predicate, RankedCorpus } from "../index.js";
 import { pipe, leaf, sigma, rho } from "../mneme.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
+import type { Stage } from "../algebra/expression.js";
+import type { Corpus } from "../algebra/types.js";
 import type { Session } from "./types.js";
 import { pointEstimate } from "../core/confidence.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
@@ -25,7 +27,7 @@ import { RULE } from "../distribution/rules.js";
  * scalar choice: agreement never decreases confidence, never invents evidence.
  * Discovered by the key-matching oracle sweep, 2026-06-06.
  */
-const MCP_EVIDENCE_POOLING_RULE = RULE.MAX_MEAN;
+export const MCP_EVIDENCE_POOLING_RULE = RULE.MAX_MEAN;
 import { abstainBelowTop, relevanceFloor, similarityFn } from "../algebra/similarity.js";
 import { warmValues } from "../algebra/embedding.js";
 import type { EmbeddingAdapter, EmbeddingCache } from "../algebra/embedding.js";
@@ -50,7 +52,7 @@ export interface RecallDeps {
 
 // ── Shared private helper: alias-load + variant-cardinality warnings ──────────
 
-interface AliasLoadContext {
+export interface AliasLoadContext {
   aliasMap: KeyAliasMap;
   selfAliases: string[];
   warnings: string[];
@@ -61,7 +63,7 @@ interface AliasLoadContext {
  * On failure: degrades gracefully — returns empty alias map with a warning.
  * Shared by both recall() and keyCensus() to avoid duplication.
  */
-function loadAliasContext(
+export function loadAliasContext(
   session: Session,
   corpus: string,
   now: number,
@@ -167,6 +169,46 @@ export interface RecallResult {
   coverage: CoverageReport;
 }
 
+/** σ filter stages for recall: subject eq + key family (keyIn) / single key eq.
+ *  Mirrors the family-vs-single logic used by both recall() and explainRecall(). */
+export function buildFilterSigmas(args: RecallArgs, family?: string[]): Stage<Corpus, Corpus>[] {
+  const filters: Predicate[] = [];
+  if (args.subject) filters.push({ op: "subjectEq", value: args.subject });
+  if (family && family.length > 1) filters.push({ op: "keyIn", values: family });
+  else if (args.key) filters.push({ op: "keyEq", value: args.key });
+  return filters.map((p) => sigma(p));
+}
+
+/** The recall ranker: pure rho.by when recencyAlpha===1, else rho.blend (default alpha .5 / 90d). */
+export function buildRecallRanker(args: RecallArgs, rankFn: string): Stage<Corpus, RankedCorpus> {
+  return args.recencyAlpha === 1
+    ? rho.by(rankFn, args.about)
+    : rho.blend(rankFn, args.about, {
+        alpha: args.recencyAlpha ?? 0.5,
+        halfLifeDays: args.recencyHalfLifeDays ?? 90,
+      });
+}
+
+/** Warm embedding values for the σ-scoped claims (family-expanded), so hybrid scoring
+ *  uses cosine not jaccard-fallback. No-op unless hybrid + adapter + cache present. */
+export async function warmRecallValues(
+  session: Session, args: RecallArgs, embeddings: EmbeddingState, family?: string[],
+): Promise<void> {
+  if (embeddings.rankFn === "jaccard" || !embeddings.adapter || !embeddings.cache) return;
+  const seenIds = new Set<string>();
+  const rawClaims: import("../core/claim.js").Claim[] = [];
+  if (family && family.length > 1) {
+    for (const k of family) {
+      for (const c of session.mneme.read(args.corpus, { corpusId: args.corpus, subject: args.subject, key: k })) {
+        if (!seenIds.has(c.id)) { seenIds.add(c.id); rawClaims.push(c); }
+      }
+    }
+  } else {
+    rawClaims.push(...session.mneme.read(args.corpus, { corpusId: args.corpus, subject: args.subject, key: args.key }));
+  }
+  await warmValues(embeddings.adapter, embeddings.cache, rawClaims.map((c) => c.value), [args.about]);
+}
+
 export async function recall(
   session: Session,
   args: RecallArgs,
@@ -219,61 +261,17 @@ export async function recall(
   // Warm claim values scoped to the same subject/key predicates as the σ stages,
   // using the FAMILY-expanded key set so variant-key claims are cosine-scored, not
   // jaccard-fallback (which would happen if they were not in the warm-up cache).
-  if (embeddings.rankFn !== "jaccard" && embeddings.adapter && embeddings.cache) {
-    // ExecutionPlan only has key?: string (singular), so for a multi-key family we
-    // issue one read per family member and deduplicate by claim id, mirroring the
-    // σ keyIn semantics. Single-key and no-key paths issue a single read as before.
-    const seenIds = new Set<string>();
-    const rawClaims: import("../core/claim.js").Claim[] = [];
-    if (family && family.length > 1) {
-      for (const k of family) {
-        for (const c of session.mneme.read(args.corpus, {
-          corpusId: args.corpus,
-          subject: args.subject,
-          key: k,
-        })) {
-          if (!seenIds.has(c.id)) {
-            seenIds.add(c.id);
-            rawClaims.push(c);
-          }
-        }
-      }
-    } else {
-      // Single key or no key: one read (key may be undefined → no key filter).
-      rawClaims.push(
-        ...session.mneme.read(args.corpus, {
-          corpusId: args.corpus,
-          subject: args.subject,
-          key: args.key,
-        }),
-      );
-    }
-    const claimValues = rawClaims.map((c) => c.value);
-    await warmValues(embeddings.adapter, embeddings.cache, claimValues, [args.about]);
-  }
+  await warmRecallValues(session, args, embeddings, family);
 
   // ── σ filter stages ──────────────────────────────────────────────────────────
   // Build filter predicates. When the key has a multi-key alias family, use keyIn
   // so all family members (canonical + variants) are included in a single pass.
-  const filters: Predicate[] = [];
-  if (args.subject) filters.push({ op: "subjectEq", value: args.subject });
-  if (family && family.length > 1) {
-    filters.push({ op: "keyIn", values: family });
-  } else if (args.key) {
-    filters.push({ op: "keyEq", value: args.key });
-  }
-  const sigmas = filters.map((p) => sigma(p));
+  const sigmas = buildFilterSigmas(args, family);
 
   // Recency-aware ranking (on by default at alpha=0.5/90d). alpha=1 ⇒ pure rho.by,
   // byte-identical to prior behavior. `now` (asOf or Date.now) anchors both tauValid
   // (canonicalReadStages.evaluationInstant) and the recency term (ctx.evaluationClock).
-  const ranker =
-    args.recencyAlpha === 1
-      ? rho.by(embeddings.rankFn, args.about)
-      : rho.blend(embeddings.rankFn, args.about, {
-          alpha: args.recencyAlpha ?? 0.5,
-          halfLifeDays: args.recencyHalfLifeDays ?? 90,
-        });
+  const ranker = buildRecallRanker(args, embeddings.rankFn);
 
   // SINGLE query execution:
   // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥(keyAliases) + drop) → ranker
