@@ -6,11 +6,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { basename } from "node:path";
-import { openSession } from "../surface/index.js";
 import { remember, recall, listCorpora, keyCensus } from "./tools.js";
-import { initEmbeddings } from "./embeddings.js";
-import { loadMnemeConfig } from "./config.js";
+import { openMnemeEngine } from "./engine.js";
 import { appendRecallLog } from "./recall-log.js";
 
 /** Write discipline surfaced to clients as MCP server instructions (loaded per session). */
@@ -36,19 +33,13 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
   defaultCorpus: string;
   dbPath: string;
 } {
-  const dbPath = opts.dbPath ?? process.env.MNEME_DB ?? "./.mneme/store.db";
-  // Per-repo corpus: prefer Claude Code's CLAUDE_PROJECT_DIR (the stable project
-  // root it sets on spawned MCP servers) over raw cwd, so one user-scoped server
-  // partitions claims by repo automatically. MNEME_CORPUS overrides per repo.
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const defaultCorpus =
-    opts.defaultCorpus ?? process.env.MNEME_CORPUS ?? (basename(projectDir) || "default");
-
-  // Config at startup: bad config prevents the server from reaching ready state.
-  // loadMnemeConfig throws on invalid config — intentionally NOT wrapped in try/catch.
-  const config = loadMnemeConfig(dbPath);
-
-  const session = openSession({ dbPath, writer: "mcp" });
+  // Single bootstrap path shared with any embedding plugin: db path resolution,
+  // per-repo corpus default, and config loading (throws on bad config at startup —
+  // intentionally NOT wrapped in try/catch) all live in openMnemeEngine.
+  const { session, dbPath, defaultCorpus, keyCardinality, initEmbeddings } = openMnemeEngine({
+    dbPath: opts.dbPath,
+    corpus: opts.defaultCorpus,
+  });
   const server = new McpServer({ name: "mneme", version: "0.2.0" }, { instructions: MNEME_WRITE_SCHEMA });
 
   server.registerTool(
@@ -186,7 +177,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         recencyAlpha: a.recencyAlpha,
         recencyHalfLifeDays: a.recencyHalfLifeDays,
         asOf: a.asOf,
-      }, { embeddings, keyCardinality: config.keyCardinality });
+      }, { embeddings, keyCardinality });
 
       // Append recall-log entry (best-effort, synchronous, never throws into handler).
       appendRecallLog(dbPath, {
@@ -283,7 +274,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
       const r = await keyCensus(session, {
         corpus: resolvedCorpus,
         limit: a.limit,
-      }, { embeddings, keyCardinality: config.keyCardinality });
+      }, { embeddings, keyCardinality });
 
       // Surface warnings to stderr (house convention: tools stay pure; server does I/O).
       if (r.warnings.length > 0) {
