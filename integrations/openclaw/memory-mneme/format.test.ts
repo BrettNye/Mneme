@@ -20,6 +20,13 @@ describe("wrapMemories", () => {
     expect(openCount).toBe(1);
     expect(closeCount).toBe(1);
   });
+
+  it("wraps content directly with no injected narration", () => {
+    const out = wrapMemories("project:mneme status = green");
+    expect(out).toBe(
+      "<relevant-memories>\nproject:mneme status = green\n</relevant-memories>",
+    );
+  });
 });
 
 describe("mergeScope", () => {

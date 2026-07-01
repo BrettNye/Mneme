@@ -5,7 +5,7 @@ const CLOSE = "</relevant-memories>";
 export function wrapMemories(content: string): string {
   const trimmed = content.trim();
   if (!trimmed) return "";
-  return `${OPEN}\nRelevant facts from long-term memory:\n${trimmed}\n${CLOSE}`;
+  return `${OPEN}\n${trimmed}\n${CLOSE}`;
 }
 
 /** Overlay a per-write scope on the configured default (write keys win). */
