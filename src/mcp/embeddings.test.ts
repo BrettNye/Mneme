@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { initEmbeddings, _resetEmbeddingsForTest } from "./embeddings.js";
-import type { EmbeddingState } from "./embeddings.js";
+import type { EmbeddingState } from "../surface/index.js";
 import type { EmbeddingAdapter } from "../algebra/embedding.js";
 import { similarityFn, registerSimilarity } from "../algebra/similarity.js";
 import { embeddingAdapter } from "../algebra/embedding.js";

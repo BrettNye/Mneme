@@ -6,7 +6,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { remember, recall, listCorpora, keyCensus } from "./tools.js";
+import { remember, recall, listCorpora, keyCensus } from "../surface/index.js";
 import { openMnemeEngine } from "./engine.js";
 import { appendRecallLog } from "./recall-log.js";
 

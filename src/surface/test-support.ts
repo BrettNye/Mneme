@@ -26,10 +26,14 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openSession } from "../surface/index.js";
-import type { Session } from "../surface/index.js";
-import type { RecallDeps } from "./tools.js";
-import { initEmbeddings } from "./embeddings.js";
+import { openSession } from "./session.js";
+import type { Session } from "./types.js";
+import type { RecallDeps } from "./recall.js";
+// NOTE (layering exception, test-only): initEmbeddings does real adapter
+// bootstrapping (dynamic import of transformers-local) and has no surface
+// equivalent — it intentionally stays in src/mcp/embeddings.ts. This is the
+// one place src/surface/ imports from src/mcp/, scoped to a test fixture.
+import { initEmbeddings } from "../mcp/embeddings.js";
 import type { EmbeddingAdapter } from "../algebra/embedding.js";
 
 export function freshSession(): Session {

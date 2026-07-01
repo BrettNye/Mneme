@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openMnemeEngine } from "./engine.js";
-import { remember, recall } from "./tools.js";
+import { remember, recall } from "../surface/index.js";
 import { _resetEmbeddingsForTest, initEmbeddings } from "./embeddings.js";
 
 // Prime the jaccard fallback singleton before any test triggers recall, so

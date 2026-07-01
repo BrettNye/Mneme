@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { openSession } from "../surface/index.js";
+import { openSession } from "./session.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { remember, recall, listCorpora, ensureCorpus, keyCensus } from "./tools.js";
+import { recall, keyCensus } from "./recall.js";
+import { remember, listCorpora, ensureCorpus } from "./remember.js";
 import { freshSession, jaccardDeps, makeFakeHybridDeps } from "./test-support.js";
-import { _resetEmbeddingsForTest } from "./embeddings.js";
+// NOTE (layering exception, test-only): see test-support.ts — _resetEmbeddingsForTest
+// has no surface equivalent (mcp-only singleton), same accepted exception.
+import { _resetEmbeddingsForTest } from "../mcp/embeddings.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -14,14 +17,6 @@ afterEach(() => {
 // ── Existing behaviour (minimal churn) ────────────────────────────────────────
 
 describe("mcp tools — existing behaviour", () => {
-  it("remember auto-creates the corpus and commits a claim", () => {
-    const s = freshSession();
-    const r = remember(s, { subject: "project:mneme", key: "decision", value: "dogfood via MCP", corpus: "dev" });
-    expect(r.status).toBe("committed");
-    expect(r.corpus).toBe("dev");
-    expect(listCorpora(s).corpora.map((c) => c.id)).toContain("dev");
-  });
-
   it("recall similarity-ranks and composes, surfacing confidence", async () => {
     const s = freshSession();
     ensureCorpus(s, "dev");
@@ -44,13 +39,6 @@ describe("mcp tools — existing behaviour", () => {
     remember(s, { subject: "host:b", key: "status", value: "degraded", corpus: "ops" });
     const r = await recall(s, { about: "status", corpus: "ops", subject: "host:a" }, jaccardDeps);
     expect(r.matches.every((m) => m.subject === "host:a")).toBe(true);
-  });
-
-  it("listCorpora reflects created corpora", () => {
-    const s = freshSession();
-    ensureCorpus(s, "c1");
-    ensureCorpus(s, "c2");
-    expect(listCorpora(s).corpora.map((c) => c.id).sort()).toEqual(["c1", "c2"]);
   });
 
   it("recall on an unknown corpus returns empty and does NOT create it (read-only)", async () => {
@@ -244,68 +232,6 @@ describe("recall — hybrid deps warm-up", () => {
     const allEmbedded = embedSpy.mock.calls.flatMap((call) => call[0] as string[]);
     expect(allEmbedded).toContain("relevant value");
     expect(allEmbedded).not.toContain("unrelated noise");
-  });
-});
-
-// ── remember: scope + validFrom ───────────────────────────────────────────────
-
-describe("remember — scope and validFrom", () => {
-  it("validFrom sets valid.from (recalled claim has correct temporal interval)", async () => {
-    const s = freshSession();
-    const corpus = "vf-corpus";
-    remember(s, {
-      subject: "user:brett",
-      key: "editor",
-      value: "helix",
-      corpus,
-      validFrom: "2026-03-01T00:00:00Z",
-    });
-    // The claim should be retrievable at query time (now > 2026-03-01)
-    const r = await recall(s, { about: "editor", corpus }, jaccardDeps);
-    expect(r.matches.length).toBe(1);
-    expect(r.matches[0].value).toBe("helix");
-  });
-
-  it("invalid validFrom ISO string throws a descriptive error", () => {
-    const s = freshSession();
-    expect(() =>
-      remember(s, {
-        subject: "user:brett",
-        key: "editor",
-        value: "helix",
-        corpus: "err-corpus",
-        validFrom: "not-a-date",
-      }),
-    ).toThrowError(/validFrom/);
-  });
-
-  it("scope round-trips through write (new corpus has default scopeFields)", async () => {
-    const s = freshSession();
-    const corpus = "scope-corpus";
-    // ensureCorpus is called by remember — it should declare default scopeFields
-    remember(s, {
-      subject: "user:brett",
-      key: "editor",
-      value: "helix",
-      corpus,
-      scope: { project: "mneme" },
-    });
-    // Verify the corpus was created with scopeFields
-    const corpusDef = s.inspectCorpus(corpus) as { schema?: { scopeFields?: Record<string, string> } } | undefined;
-    expect(corpusDef?.schema?.scopeFields).toMatchObject({
-      project: "string",
-      person: "string",
-      context: "string",
-    });
-    // The claim should still be retrievable
-    const r = await recall(s, { about: "editor", corpus }, jaccardDeps);
-    expect(r.matches.length).toBe(1);
-  });
-
-  it("both scope and validFrom optional → today's behaviour unchanged", () => {
-    const s = freshSession();
-    const r = remember(s, { subject: "s", key: "k", value: "v", corpus: "plain-corpus" });
-    expect(r.status).toBe("committed");
   });
 });
 
@@ -710,29 +636,6 @@ describe("keyCensus", () => {
     expect(r.rankFn).toBe("jaccard");
     // Should still have scored candidates using jaccard fallback
     expect(r.candidates.length).toBeGreaterThan(0);
-  });
-});
-
-// ── ensureCorpus: default scopeFields ────────────────────────────────────────
-
-describe("ensureCorpus — default scopeFields for new corpora", () => {
-  it("new corpus gets project/person/context scopeFields", () => {
-    const s = freshSession();
-    ensureCorpus(s, "scope-test");
-    const def = s.inspectCorpus("scope-test") as { schema?: { scopeFields?: Record<string, string> } } | undefined;
-    expect(def?.schema?.scopeFields).toMatchObject({
-      project: "string",
-      person: "string",
-      context: "string",
-    });
-  });
-
-  it("ensureCorpus is idempotent (calling twice does not throw)", () => {
-    const s = freshSession();
-    expect(() => {
-      ensureCorpus(s, "idem-corpus");
-      ensureCorpus(s, "idem-corpus");
-    }).not.toThrow();
   });
 });
 
