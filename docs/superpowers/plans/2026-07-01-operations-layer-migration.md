@@ -120,9 +120,12 @@ git commit -m "refactor(mcp): repoint importers + barrel to surface; move ops te
 
 ---
 
-### Task 3: Delete the shim; lock with back-compat + layering tests
+### Task 3: Move embeddings loader to surface; delete the shim; lock with back-compat + layering tests
+
+**SPEC AMENDMENT (during execution):** the spec said `initEmbeddings` stays in `src/mcp/embeddings.ts`, but `surface`'s `recall` + its test helpers depend on it — so `embeddings.ts` moves to `src/surface` too, completing the consolidation and resolving the temporary surface→mcp exception introduced in Task 2. See `.superpowers/sdd/task-3-brief.md` for the expanded, authoritative step list.
 
 **Files:**
+- Move: `src/mcp/embeddings.ts` → `src/surface/embeddings.ts` (+ its test); repoint `server.ts`/`engine.ts`/`test-support.ts`/`recall.test.ts` embeddings imports.
 - Delete: `src/mcp/tools.ts`
 - Create: `src/mcp/backcompat.test.ts`, `src/surface/layering.test.ts`
 
