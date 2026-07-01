@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { wrapMemories, mergeScope } from "./format.js";
+import { wrapMemories, mergeScope, coverageNote, provenanceFooter } from "./format.js";
 
 describe("wrapMemories", () => {
   it("emits no envelope for blank content", () => {
@@ -51,5 +51,56 @@ describe("mergeScope", () => {
 
   it("returns write scope when default scope is undefined", () => {
     expect(mergeScope(undefined, { context: "y" })).toEqual({ context: "y" });
+  });
+});
+
+describe("coverageNote", () => {
+  it("returns empty string for undefined missing", () => {
+    expect(coverageNote(undefined)).toBe("");
+  });
+
+  it("returns empty string for an empty missing array", () => {
+    expect(coverageNote([])).toBe("");
+  });
+
+  it("includes the missing entities when non-empty", () => {
+    const note = coverageNote(["Sacramento", "Denver"]);
+    expect(note).toContain("Sacramento");
+    expect(note).toContain("Denver");
+  });
+
+  it("caps the shown list at max and appends a '+N more' suffix", () => {
+    const missing = ["a", "b", "c", "d", "e", "f", "g"];
+    const note = coverageNote(missing);
+    expect(note).toContain("a, b, c, d, e");
+    expect(note).not.toContain(", f");
+    expect(note).toContain("(+2 more)");
+  });
+
+  it("respects a custom max", () => {
+    const note = coverageNote(["a", "b", "c"], 2);
+    expect(note).toContain("a, b");
+    expect(note).toContain("(+1 more)");
+  });
+});
+
+describe("provenanceFooter", () => {
+  it("returns empty string for undefined matches", () => {
+    expect(provenanceFooter(undefined)).toBe("");
+  });
+
+  it("returns empty string for an empty matches array", () => {
+    expect(provenanceFooter([])).toBe("");
+  });
+
+  it("lists each claim id, subject, and key", () => {
+    const footer = provenanceFooter([
+      { id: "claim-1", subject: "project:mneme", key: "status" },
+      { id: "claim-2", subject: "user", key: "accommodation" },
+    ]);
+    expect(footer).toContain("claim-1");
+    expect(footer).toContain("project:mneme status");
+    expect(footer).toContain("claim-2");
+    expect(footer).toContain("user accommodation");
   });
 });

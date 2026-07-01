@@ -10,7 +10,7 @@ import { Type } from "@sinclair/typebox";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { openMnemeEngine, remember, recall, listCorpora, keyCensus } from "mneme/mcp";
-import { wrapMemories, mergeScope } from "./format.js";
+import { wrapMemories, mergeScope, coverageNote, provenanceFooter } from "./format.js";
 
 const LOG_PREFIX = "[memory-mneme]";
 
@@ -62,6 +62,8 @@ export default {
         name: "memory_recall",
         parameters: Type.Object({
           about: Type.String(),
+          subject: Type.Optional(Type.String()),
+          key: Type.Optional(Type.String()),
           limit: Type.Optional(Type.Number()),
           relevanceFloor: Type.Optional(Type.Number()),
         }),
@@ -71,14 +73,18 @@ export default {
             {
               about: p.about,
               corpus: cfg.corpus,
+              subject: p.subject,
+              key: p.key,
               limit: p.limit ?? cfg.recallLimit,
               relevanceFloor: p.relevanceFloor ?? cfg.relevanceFloor,
             },
             await deps(),
           );
           logWarnings(r.warnings);
+          const base = r.content || `No relevant memories for "${p.about}"`;
+          const text = `${base}${provenanceFooter(r.matches)}${coverageNote(r.coverage?.missing)}`;
           return {
-            content: [{ type: "text" as const, text: r.content || `No relevant memories for "${p.about}"` }],
+            content: [{ type: "text" as const, text }],
           };
         },
       },
@@ -95,6 +101,7 @@ export default {
           confidence: Type.Optional(Type.Number()),
           tags: Type.Optional(Type.Array(Type.String())),
           scope: Type.Optional(Type.Record(Type.String(), Type.String())),
+          validFrom: Type.Optional(Type.String()),
         }),
         async execute(_id: string, p: any) {
           const r = remember(engine.session, {
@@ -105,6 +112,7 @@ export default {
             confidence: p.confidence,
             tags: p.tags,
             scope: mergeScope(cfg.defaultScope, p.scope),
+            validFrom: p.validFrom,
           });
           return { content: [{ type: "text" as const, text: `${r.status} ${r.id}` }] };
         },
@@ -158,7 +166,7 @@ export default {
         logWarnings(r.warnings);
         const block = wrapMemories(r.content);
         if (!block) return;
-        return { prependContext: block };
+        return { prependContext: `${block}${coverageNote(r.coverage?.missing)}` };
       });
     }
 
