@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { openMnemeEngine } from "mneme/mcp";
-import plugin from "./index.js";
+import plugin, { resolveConfig } from "./index.js";
 
 // Prime the jaccard-fallback embedding singleton (see src/mcp/engine.test.ts) so the
 // first recall in these tests is fast/deterministic instead of loading a real model.
@@ -33,6 +33,21 @@ function makeApi(pluginConfig: any) {
   };
   return { api, tools, handlers };
 }
+
+describe("resolveConfig", () => {
+  it("expands the default dbPath to a path under the home directory (not a literal '~')", () => {
+    const prevDb = process.env.MNEME_DB;
+    delete process.env.MNEME_DB;
+    try {
+      const cfg = resolveConfig({});
+      expect(cfg.dbPath.startsWith(homedir())).toBe(true);
+      expect(cfg.dbPath).not.toContain("~");
+    } finally {
+      if (prevDb === undefined) delete process.env.MNEME_DB;
+      else process.env.MNEME_DB = prevDb;
+    }
+  });
+});
 
 describe("memory-mneme plugin", () => {
   it("registers the four memory tools and one before_agent_start handler, never agent_end", () => {
@@ -128,7 +143,7 @@ describe("memory-mneme plugin", () => {
       expect(result).toBeUndefined();
     });
 
-    it("returns undefined for a blank prompt without querying recall", async () => {
+    it("returns undefined for a blank prompt", async () => {
       const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
       const { api, handlers } = makeApi({ dbPath, corpus: "test" });
       plugin.register(api);
@@ -156,6 +171,78 @@ describe("memory-mneme plugin", () => {
       expect(result.prependContext.startsWith("<relevant-memories>")).toBe(true);
       expect(result.prependContext.trim().endsWith("</relevant-memories>")).toBe(true);
       expect(result.prependContext).toContain("green");
+    });
+  });
+
+  describe("non-fatal warnings are surfaced to stderr", () => {
+    it("memory_recall logs recall warnings to stderr with the [memory-mneme] prefix", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "user",
+        key: "accommodation",
+        value: "Airbnb",
+      });
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        errorSpy.mockClear();
+        await tools["memory_recall"].execute("2", { about: "When did I book the Airbnb in Sacramento?" });
+        expect(errorSpy.mock.calls.some((c) => String(c[0]).includes("[memory-mneme]"))).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    it("memory_key_census logs census warnings to stderr with the [memory-mneme] prefix", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      // Alias cycle (alpha -> beta, beta -> alpha) makes aliasMapOf emit a warning.
+      await tools["memory_remember"].execute("1", {
+        subject: "key:alpha",
+        key: "alias-of",
+        value: "beta",
+      });
+      await tools["memory_remember"].execute("2", {
+        subject: "key:beta",
+        key: "alias-of",
+        value: "alpha",
+      });
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        errorSpy.mockClear();
+        await tools["memory_key_census"].execute("3", {});
+        expect(errorSpy.mock.calls.some((c) => String(c[0]).includes("[memory-mneme]"))).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    it("before_agent_start hook logs recall warnings to stderr with the [memory-mneme] prefix", async () => {
+      const dbPath = join(mkdtempSync(join(tmpdir(), "memory-mneme-")), "store.db");
+      const { api, tools, handlers } = makeApi({ dbPath, corpus: "test" });
+      plugin.register(api);
+
+      await tools["memory_remember"].execute("1", {
+        subject: "user",
+        key: "accommodation",
+        value: "Airbnb",
+      });
+
+      const hook = handlers.find((h) => h.event === "before_agent_start")!.handler;
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        errorSpy.mockClear();
+        await hook({ prompt: "When did I book the Airbnb in Sacramento?" });
+        expect(errorSpy.mock.calls.some((c) => String(c[0]).includes("[memory-mneme]"))).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+      }
     });
   });
 });

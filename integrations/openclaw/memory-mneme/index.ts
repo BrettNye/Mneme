@@ -7,6 +7,8 @@
  * there is no agent_end hook here.
  */
 import { Type } from "@sinclair/typebox";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { openMnemeEngine, remember, recall, listCorpora, keyCensus } from "mneme/mcp";
 import { wrapMemories, mergeScope } from "./format.js";
 
@@ -21,16 +23,25 @@ interface MnemeMemoryConfig {
   defaultScope?: Record<string, string>;
 }
 
-function resolveConfig(raw: any): MnemeMemoryConfig {
+export function resolveConfig(raw: any): MnemeMemoryConfig {
   const v = raw ?? {};
   return {
-    dbPath: v.dbPath ?? process.env.MNEME_DB ?? "~/.mneme/knowledge.db",
+    dbPath: v.dbPath ?? process.env.MNEME_DB ?? join(homedir(), ".mneme/knowledge.db"),
     corpus: v.corpus ?? process.env.MNEME_CORPUS ?? "openclaw",
     autoRecall: v.autoRecall !== false,
     recallLimit: v.recallLimit ?? 5,
     relevanceFloor: v.relevanceFloor ?? 0,
     defaultScope: v.defaultScope,
   };
+}
+
+/** House convention (src/mcp/server.ts): tools stay pure, the caller does I/O — log
+ *  each non-fatal recall/keyCensus warning to stderr, prefixed like the registration line. */
+function logWarnings(warnings?: string[]): void {
+  if (!warnings?.length) return;
+  for (const w of warnings) {
+    console.error(`${LOG_PREFIX} ${w}`);
+  }
 }
 
 export default {
@@ -65,6 +76,7 @@ export default {
             },
             await deps(),
           );
+          logWarnings(r.warnings);
           return {
             content: [{ type: "text" as const, text: r.content || `No relevant memories for "${p.about}"` }],
           };
@@ -106,6 +118,7 @@ export default {
         parameters: Type.Object({ limit: Type.Optional(Type.Number()) }),
         async execute(_id: string, p: any) {
           const r = await keyCensus(engine.session, { corpus: cfg.corpus, limit: p.limit }, await deps());
+          logWarnings(r.warnings);
           return {
             content: [
               { type: "text" as const, text: r.content || `No keys recorded yet in corpus "${cfg.corpus}"` },
@@ -142,6 +155,7 @@ export default {
           { about: prompt, corpus: cfg.corpus, limit: cfg.recallLimit, relevanceFloor: cfg.relevanceFloor },
           await deps(),
         );
+        logWarnings(r.warnings);
         const block = wrapMemories(r.content);
         if (!block) return;
         return { prependContext: block };
