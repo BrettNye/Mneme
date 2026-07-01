@@ -108,3 +108,5 @@ export type {
   RecallDeps, RecallArgs, RecallMatch, RecallResult, CensusArgs, CensusResult, EmbeddingState,
 } from "./surface/recall.js";
 export type { RememberArgs, RememberResult, ListResult } from "./surface/remember.js";
+export { explainRecall } from "./surface/explain.js";
+export type { RecallTrace, ClaimDisposition, DispositionReason } from "./surface/explain.js";

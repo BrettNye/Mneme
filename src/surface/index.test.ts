@@ -15,4 +15,9 @@ describe("surface barrel", () => {
     expect((surface as Record<string, unknown>).loadCorpora).toBeUndefined();
     expect((surface as Record<string, unknown>).saveCorpora).toBeUndefined();
   });
+
+  it("exports explainRecall from the surface barrel", async () => {
+    const mod = await import("./index.js");
+    expect(typeof mod.explainRecall).toBe("function");
+  });
 });
