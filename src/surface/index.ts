@@ -15,3 +15,9 @@ export type {
   CorpusSpec,
   QueryResult,
 } from "./types.js";
+export { recall, keyCensus, parseAsOf } from "./recall.js";
+export type {
+  EmbeddingState, RecallDeps, RecallArgs, RecallMatch, RecallResult, CensusArgs, CensusResult,
+} from "./recall.js";
+export { remember, ensureCorpus, listCorpora } from "./remember.js";
+export type { RememberArgs, RememberResult, ListResult } from "./remember.js";
