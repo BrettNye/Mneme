@@ -524,6 +524,36 @@ describe("mneme MCP server (key_census wiring)", () => {
     }
   });
 
+  it("recall with explain:true returns a trace; without it, no trace", async () => {
+    const { client } = await connected("explain-test");
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "project:mneme", key: "deploy.target", value: "us-east prod cluster", corpus: "explain-test" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "project:mneme", key: "deploy.cadence", value: "weekly on Tuesdays", corpus: "explain-test" },
+    });
+
+    const withoutExplain = (await client.callTool({
+      name: "recall",
+      arguments: { about: "deploy", corpus: "explain-test" },
+    })) as { structuredContent?: { trace?: unknown; matches: { id: string }[] } };
+    expect(withoutExplain.structuredContent?.trace).toBeUndefined();
+
+    const withExplain = (await client.callTool({
+      name: "recall",
+      arguments: { about: "deploy", corpus: "explain-test", explain: true },
+    })) as { structuredContent?: { trace?: { stageCounts?: unknown }; matches: { id: string }[] } };
+    expect(withExplain.structuredContent?.trace).toBeDefined();
+    expect(withExplain.structuredContent?.trace?.stageCounts).toBeDefined();
+    // explain never changes the served result:
+    expect(withExplain.structuredContent?.matches.map((m) => m.id))
+      .toEqual(withoutExplain.structuredContent?.matches.map((m) => m.id));
+
+    await client.close();
+  });
+
   it("recall structuredContent carries coverage and match provenance handles", async () => {
     const { client } = await connected("covsrv");
     await client.callTool({

@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { remember, recall, listCorpora, keyCensus } from "../surface/index.js";
+import { remember, recall, listCorpora, keyCensus, explainRecall, type RecallTrace } from "../surface/index.js";
 import { openMnemeEngine } from "./engine.js";
 import { appendRecallLog } from "./recall-log.js";
 
@@ -133,6 +133,10 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           .union([z.string(), z.number()])
           .optional()
           .describe("temporal scope: ISO-8601 string or epoch ms. Anchors BOTH which claims are valid and the recency term; default now"),
+        explain: z
+          .boolean()
+          .optional()
+          .describe("when true, also return a RecallTrace explaining why each candidate claim was served/merged/deprecated/dropped; best-effort, never changes the served result (default false)"),
       },
       // Pure read: no state change, repeatable.
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -158,6 +162,10 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           entities: z.array(z.object({ text: z.string(), supported: z.boolean() })),
           missing: z.array(z.string()),
         }).describe("entity-coverage facts over the pre-knob survivors; agents decide refusal"),
+        trace: z
+          .any()
+          .optional()
+          .describe("RecallTrace: per-stage counts + per-claim dispositions; present only when explain=true and re-derivation succeeded"),
       },
     },
     async (a) => {
@@ -179,6 +187,21 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         recencyHalfLifeDays: a.recencyHalfLifeDays,
         asOf: a.asOf,
       }, { embeddings, keyCardinality });
+
+      let trace: RecallTrace | undefined;
+      if (a.explain) {
+        try {
+          trace = await explainRecall(session, {
+            about: a.about, subject: a.subject, key: a.key, maxTokens: a.maxTokens,
+            limit: a.limit, corpus: resolvedCorpus, abstainBelowTop: a.abstainBelowTop,
+            relevanceFloor: a.relevanceFloor, recencyAlpha: a.recencyAlpha,
+            recencyHalfLifeDays: a.recencyHalfLifeDays, asOf: a.asOf,
+          }, { embeddings, keyCardinality });
+        } catch (err) {
+          // Best-effort: an explain failure never fails the recall.
+          console.error(`[mneme/recall] explain failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
 
       // Append recall-log entry (best-effort, synchronous, never throws into handler).
       appendRecallLog(dbPath, {
@@ -221,6 +244,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           rankFn: r.rankFn,
           coverage: r.coverage,
           warnings: r.warnings,
+          trace,
         },
       };
     },
