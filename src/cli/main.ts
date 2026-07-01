@@ -1,8 +1,9 @@
 import { parseArgs } from "node:util";
-import { openSession, importFile, formatQueryResult } from "../surface/index.js";
+import { openSession, importFile, formatQueryResult, explainRecall } from "../surface/index.js";
+import { initEmbeddings } from "../surface/embeddings.js";
 
 const USAGE = `usage: mneme <command> [options]
-  corpus create|ls|inspect, commit, query, inspect, replay, import`;
+  corpus create|ls|inspect, commit, query, inspect, replay, import, explain <about> [--subject --key --corpus]`;
 
 /** Parse argv, dispatch a subcommand, return a process exit code. */
 export async function run(argv: string[]): Promise<number> {
@@ -20,6 +21,7 @@ export async function run(argv: string[]): Promise<number> {
       as:         { type: "string" },
       batch:      { type: "string" },
       subjects:   { type: "string" },
+      corpus:     { type: "string" },
       help:       { type: "boolean" },
     },
   });
@@ -32,7 +34,7 @@ export async function run(argv: string[]): Promise<number> {
     return 1;
   }
 
-  const knownCommands = ["query", "import", "corpus", "commit", "inspect", "replay"];
+  const knownCommands = ["query", "import", "corpus", "commit", "inspect", "replay", "explain"];
   if (!knownCommands.includes(cmd)) {
     console.error(`unknown command: ${cmd}\n${USAGE}`);
     return 1;
@@ -67,6 +69,11 @@ export async function run(argv: string[]): Promise<number> {
 
   if (cmd === "replay" && (!sub || !rest[0])) {
     console.error("replay requires <corpusId> <claimId>");
+    return 1;
+  }
+
+  if (cmd === "explain" && !sub) {
+    console.error("explain requires <about> (free-text query)");
     return 1;
   }
 
@@ -123,6 +130,29 @@ export async function run(argv: string[]): Promise<number> {
       case "replay": {
         const result = session.replay(sub, rest[0]);
         console.log(result.status);
+        return 0;
+      }
+
+      case "explain": {
+        // sub = about; rest joins any trailing tokens into the free-text query.
+        const about = [sub, ...rest].join(" ");
+        const embeddings = await initEmbeddings();
+        const corpus = typeof values.corpus === "string" ? values.corpus : session.listCorpora()[0]?.id;
+        if (!corpus) { console.error("no corpus available; pass --corpus <id>"); return 1; }
+        const trace = await explainRecall(
+          session,
+          { about, corpus, subject: values.subject as string | undefined, key: values.key as string | undefined },
+          { embeddings },
+        );
+        if (values.json) { console.log(JSON.stringify(trace)); return 0; }
+        const sc = trace.stageCounts;
+        console.log(`corpus ${trace.corpus} — ${trace.candidateCount} candidates`);
+        console.log(`stages: τ=${sc.afterTau} dedupe=${sc.afterDedupe} ⊥=${sc.afterContradiction} ranked=${sc.ranked} knobs=${sc.afterKnobs} served=${sc.served}`);
+        for (const d of trace.claims) {
+          const why = d.reason.kind + ("targetId" in d.reason ? `→${d.reason.targetId}` : "byId" in d.reason ? `←${d.reason.byId}` : "");
+          console.log(`  [${d.disposition}] ${d.subject} ${d.key} — ${why}${d.score !== undefined ? ` (score ${d.score.toFixed(2)})` : ""}`);
+        }
+        if (trace.warnings) for (const w of trace.warnings) console.error(`warning: ${w}`);
         return 0;
       }
 
