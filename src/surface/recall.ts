@@ -1,5 +1,15 @@
+/**
+ * recall / keyCensus — pure operations over the `Session` facade.
+ *
+ * Invariant: these functions perform NO filesystem side effects (no recall-log
+ * writes, no file I/O). `recall` is `async` solely so it can `await` embedding
+ * warm-up (`warmValues`) before scoring; it does not await anything else.
+ * Logging (e.g. appending to the recall-log) is the server's responsibility,
+ * not this module's — keep it that way so these ops stay testable in isolation
+ * and reusable outside the MCP transport.
+ */
 import type { Predicate, RankedCorpus } from "../index.js";
-import { pipe, leaf, sigma, rho } from "../index.js";
+import { pipe, leaf, sigma, rho } from "../mneme.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Session } from "./types.js";
 import { pointEstimate } from "../core/confidence.js";

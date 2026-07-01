@@ -1,7 +1,8 @@
 /**
  * Mneme MCP server — a thin stdio shell over the `Session` facade exposing
  * remember / recall / list_corpora tools. The agent gets a frictionless,
- * algebra-backed memory; the heavy lifting lives in ./tools.ts and the surface.
+ * algebra-backed memory; the heavy lifting lives in the surface
+ * (`../surface/recall.ts`, `../surface/remember.ts`).
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";

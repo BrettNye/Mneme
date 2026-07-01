@@ -97,3 +97,14 @@ export type { ReplayStatus, ReplayResult } from "./write/replay.js";
 
 // Surface layer default constants
 export { DEFAULT_SCALAR_PSEUDOCOUNT } from "./surface/types.js";
+
+// Surface layer operations — recall / remember / keyCensus / corpus ops.
+// Imported from their defining modules directly (not ./surface/index.js) to
+// avoid an index → surface/index → index cycle: surface/index.ts itself
+// value-imports pipe/leaf/sigma/rho/kappa from this file.
+export { recall, keyCensus } from "./surface/recall.js";
+export { remember, ensureCorpus, listCorpora } from "./surface/remember.js";
+export type {
+  RecallDeps, RecallArgs, RecallMatch, RecallResult, CensusArgs, CensusResult, EmbeddingState,
+} from "./surface/recall.js";
+export type { RememberArgs, RememberResult, ListResult } from "./surface/remember.js";
