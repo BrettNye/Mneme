@@ -6,6 +6,14 @@
 Fireflies-dogfood roadmap (stoa: `rastate/synthesis-fireflies-dogfood-synthesis-ingestion`;
 mneme claim `de70ba90`). Defines the reason-vocabulary contract that Clusters B/C inherit.
 
+> **Revision 2026-07-01 (post ops-layer migration).** The operations layer
+> (`recall`/`remember`/`keyCensus` + `EmbeddingState`/`RecallDeps`/`RecallArgs` + corpus
+> ops) moved from `src/mcp` to `src/surface` (main @ `3b640fe`); MCP is now thin transport.
+> `explainRecall` and the `RecallTrace`/`ClaimDisposition`/`DispositionReason` types
+> therefore land in **`src/surface`**, next to the migrated `recall` — not `src/retrieval`
+> as originally drafted. The reason-vocabulary contract below is unchanged; only the module
+> home, the layering rationale, and the export surface changed. See **Layering** below.
+
 ## Goal
 
 Make a `recall` **explainable**: for a given query, produce a per-claim trace stating
@@ -30,25 +38,42 @@ cannot show the mechanism.
   (`createDreamPass`/`createConsolidatePass`): a `RecallTrace` is read-provenance, not a
   `CycleReport` change-log.
 - **Does not instrument the algebra operators** — the layering contract (algebra never
-  imports retrieval; operators stay pure `Corpus → Corpus`) is preserved.
+  imports retrieval or surface; operators stay pure `Corpus → Corpus`) is preserved.
 - **Not** the cardinality warning (Cluster C) or the dedupe-count product surfacing
   (Fix #5). This spec *defines* the reason vocabulary those consume; they are separate
   deliverables.
 
 ## Context
 
-The canonical read stages live in `src/retrieval/read-pipeline.ts` (`canonicalReadStages`
-+ `rankedTailStages`) and compose pure algebra operators from `src/algebra/*`. The
-`→id` attributions we need ("merged into X", "deprecated by Y") live *inside*
-`oplusDedupe`'s grouping and `pairsOf`'s contradiction pairs — which the operators
-currently discard. `pairsOf` is already exported; the dedupe grouping is not.
+The canonical read core lives in `src/retrieval/read-pipeline.ts` (`canonicalReadStages`;
+`rankedTailStages` is a sibling recipe). The migrated `recall` in `src/surface/recall.ts`
+composes it directly:
+
+```
+leaf → σ(subject?, keyIn family) → canonicalReadStages(τ_valid → ⊕_dedupe → ⊥/resolve → drop)
+     → ranker (rho.by | rho.blend, inline — NOT rankedTailStages) → abstain/floor knobs (in-memory) → limit slice
+```
+
+Crucially, **`src/surface` already imports both `src/retrieval` and `src/algebra`**:
+`recall.ts` imports `canonicalReadStages` from `../retrieval/read-pipeline.js`,
+`aliasMapOf`/`keyFamilyOf` from `../retrieval/key-alias.js`, `coverageOf` from
+`../retrieval/coverage.js`, and algebra ops (`sigma`, `rho`, `oplusDedupe`'s siblings,
+`abstainBelowTop`, `relevanceFloor`) directly. So the original reason for placing the
+explainer in `src/retrieval` (it needs algebra + pipeline access) is satisfied *equally*
+from `src/surface` — and co-locating with `recall` keeps the consistency invariant (below)
+a same-file guarantee.
+
+The `→id` attributions we need ("merged into X", "deprecated by Y") live *inside*
+`oplusDedupe`'s grouping (`src/algebra/combination.ts`) and `pairsOf`'s contradiction pairs
+(`src/algebra/contradiction.ts`) — which the operators currently discard. `pairsOf` is
+already exported; the dedupe grouping is not.
 
 ## The reason vocabulary — the contract surface
 
 This union is the **shared contract** the transparency + cardinality program is built on:
 Cluster C reads the `deprecated-by … via: "single-cardinality"` variant; Fix #5 reads the
 `merged-into` variant. When those clusters are planned together, this is the contract a
-charter would own.
+charter would own. **Unchanged by the migration.**
 
 ```ts
 interface RecallTrace {
@@ -63,6 +88,7 @@ interface RecallTrace {
     served: number;                  // after the limit slice
   };
   claims: ClaimDisposition[];        // one entry per candidate claim
+  warnings?: string[];               // best-effort re-derive failures (never throws)
 }
 
 interface ClaimDisposition {
@@ -91,10 +117,14 @@ breaking change.
 
 ## Architecture
 
-New module `src/retrieval/explain.ts` (retrieval layer — permitted to import algebra and
-reuse the read-pipeline stages). One entry point:
+New module `src/surface/explain.ts` (surface layer — permitted to import algebra and the
+retrieval read-pipeline stages, exactly as its neighbor `recall.ts` does). One entry point,
+signature-aligned with the migrated `recall`:
 
 ```ts
+import type { Session } from "./types.js";
+import type { RecallArgs, RecallDeps } from "./recall.js";
+
 export function explainRecall(
   session: Session,
   args: RecallArgs,
@@ -108,32 +138,56 @@ hot-path cost** when not explaining. `explainRecall` is invoked only on the opt-
 
 ## Mechanism — re-derive (not instrument)
 
-1. **Candidates:** `leaf(corpus) → σ(subject?, key?)` → record candidate ids and their
-   subject/key. (Claims filtered by σ never entered the read and are not traced.)
-2. **`tau-invalid`:** run `tauValid(now)`; candidates present before but absent after →
-   `tau-invalid`.
-3. **`merged-into`:** **small DRY refactor** — extract `oplusDedupe`'s grouping into a pure
-   exported helper (e.g. `dedupeGroups(rule, opts)(corpus) → { survivors, mergedInto: Map<lostId, survivorId> }`)
+Mirror `recall`'s exact composition (including σ subject filter + alias key-family
+expansion, and the *inline* ranker/knobs — **not** `rankedTailStages`, so the re-derivation
+tracks the real served path):
+
+1. **Candidates:** `leaf(corpus) → σ(subject?, keyIn family)` — using the SAME alias map /
+   key-family expansion `recall` builds via `loadAliasContext` + `keyFamilyOf` — then record
+   candidate ids and their subject/key. (Claims filtered by σ never entered the read and are
+   not traced. `candidateCount` = survivors of σ.)
+2. **`tau-invalid`:** run `tauValid(now)` with the same `now = parseAsOf(args.asOf) ?? Date.now()`
+   recall uses; candidates present before but absent after → `tau-invalid`.
+3. **`merged-into`:** **small DRY refactor** — extract `oplusDedupe`'s grouping
+   (`src/algebra/combination.ts`) into a pure exported helper (e.g.
+   `dedupeGroups(rule, opts)(corpus) → { survivors, mergedInto: Map<lostId, survivorId> }`)
    that *both* `oplusDedupe` and the explainer call. The explainer reads `mergedInto` to
-   attribute each merged-away claim. (Stays within algebra — no layering violation, and it
-   is DRY, not a reimplementation.)
-4. **`deprecated-by`:** call `pairsOf(corpus, threshold, { keyCardinality, keyAliases, … })`
-   (already exported) with the SAME opts recall uses; for each claim `resolveDeprecateOlder`
-   deprecated, find the pair it lost and record `byId` + `via: "single-cardinality"`.
-5. **`alias-or-flag`:** claims removed by the drop stage that are alias-shaped or the
-   contradiction flag key.
-6. **rank / knobs / limit:** run the ranker; `below-floor` / `abstained` from the knob
-   stages; `over-limit` from the slice (record `rank`). Remainder → `served` with `score`.
+   attribute each merged-away claim. (Stays within algebra — no layering violation, DRY not
+   a reimplementation.)
+4. **`deprecated-by`:** call `pairsOf(corpus, threshold, { keyCardinality, keyAliases, evidencePoolingRule })`
+   (already exported) with the SAME opts recall passes into `canonicalReadStages`; for each
+   claim `resolveDeprecateOlder` deprecated, find the pair it lost and record `byId` +
+   `via: "single-cardinality"`.
+5. **`alias-or-flag`:** claims removed by the drop stage that are alias-shaped
+   (`isKeyAliasShaped`) or carry the contradiction flag key (`CONTRADICTION_FLAG_KEY`).
+6. **rank / knobs / limit:** run the same ranker recall builds (`rho.by` when
+   `recencyAlpha === 1`, else `rho.blend` with `alpha`/`halfLifeDays`); `below-floor` /
+   `abstained` from the `relevanceFloor` / `abstainBelowTop` knob stages; `over-limit` from
+   the `limit` slice (record `rank`). Remainder → `served` with `score`.
 
 ## Surface (both consumers, one object)
 
-- **Library:** `explainRecall(...)` re-exported from `mneme/retrieval` (and the root
-  barrel), returning `RecallTrace`.
-- **MCP:** an opt-in `explain?: boolean` on the `recall` tool. When `true`, the result
-  includes `trace: RecallTrace` (computed via the explainer path; the fast path is
-  unchanged when `explain` is absent/false).
+- **Library:** `explainRecall(...)` + the `RecallTrace`/`ClaimDisposition`/`DispositionReason`
+  types re-exported from **`src/surface/index.ts`** (the `mneme/surface` entry), and from the
+  **root barrel `src/index.ts`** (the `mneme` entry) — mirroring how `recall` is exported
+  today. Returns `RecallTrace`.
+- **MCP:** an opt-in `explain?: boolean` on the `recall` tool in `src/mcp/server.ts`. When
+  `true`, the handler calls `explainRecall` (imported from `../surface/index.js`, same as it
+  imports `recall`) and includes `trace: RecallTrace` in `structuredContent`. The fast path
+  is unchanged when `explain` is absent/false — `recall` is called exactly as now.
 - **CLI:** a `mneme explain <about> [--subject --key --corpus]` command that pretty-prints
   the trace (per-stage counts + a table of dispositions).
+
+## Layering
+
+- `explainRecall` lives in `src/surface`; it imports from `src/retrieval` and `src/algebra`
+  (permitted — `recall.ts` already does). It **must not** import from `src/mcp` — enforced by
+  `src/surface/layering.test.ts` ("no file under src/surface or src/retrieval imports from
+  src/mcp").
+- The `dedupeGroups` helper stays in `src/algebra/combination.ts`. Algebra never imports
+  retrieval or surface; operators stay pure `Corpus → Corpus`.
+- MCP depends inward on surface (`src/mcp/server.ts` imports `explainRecall` from
+  `../surface/index.js`), never the reverse.
 
 ## Error handling
 
@@ -144,6 +198,9 @@ is returned with the trace omitted and a warning.
 
 ## Testing
 
+Test file: `src/surface/explain.test.ts` (unit + reproductions + the consistency test,
+co-located with the explainer).
+
 - **Dogfood reproductions** (the cases we hit live):
   - 3 distinct-value claims on one `single`-cardinality `(subject, key)`, increasing
     `valid.from` → trace shows 2× `deprecated-by … single-cardinality` + 1 `served`.
@@ -152,17 +209,17 @@ is returned with the trace omitted and a warning.
   - A future-dated claim → `tau-invalid`.
   - Scores below `relevanceFloor` → `below-floor`; candidates past `limit` → `over-limit`.
 - **Consistency invariant (the drift guardrail):** for the same query and deps,
-  `explainRecall(...).claims.filter(d => d.disposition === "served").map(id)` **must equal**
-  `recall(...).matches.map(id)` (as sets). If the re-derived explainer ever diverges from
-  the real pipeline, this test fails loudly. This is the load-bearing test for the
-  re-derive approach.
-
-Test files: `src/retrieval/explain.test.ts` (unit + reproductions),
-and a consistency test co-located there.
+  `explainRecall(...).claims.filter(d => d.disposition === "served").map(d => d.id)` **must
+  equal** `recall(...).matches.map(m => m.id)` (as sets). Now a *same-directory* guarantee —
+  both live in `src/surface`. If the re-derived explainer ever diverges from the real
+  pipeline, this test fails loudly. This is the load-bearing test for the re-derive approach.
+- **Layering:** `src/surface/layering.test.ts` continues to pass (explain.ts imports no mcp).
+- **Back-compat:** `src/mcp/backcompat.test.ts` — the `recall` tool without `explain` returns
+  the identical shape it does today.
 
 ## Scope / future
 
-- v1: `recall` explain only, disposition-granularity, re-derive mechanism.
+- v1: `recall` explain only, disposition-granularity, re-derive mechanism, in `src/surface`.
 - Later (separate specs): Cluster C consumes `deprecated-by` to warn on mass same-key
   deprecation; Fix #5 consumes `merged-into` to surface "N merged as restatements" in the
   normal recall result; possible `key_census` / bio-retrieval explain.
