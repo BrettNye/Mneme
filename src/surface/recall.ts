@@ -17,6 +17,7 @@ import type { Session, ReadDeps } from "./types.js";
 import { pointEstimate } from "../core/confidence.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
 import { RULE } from "../distribution/rules.js";
+import { resolveKeyCardinality, cardinalitySafetyWarnings } from "./cardinality.js";
 
 /**
  * MCP corpora carry SCALAR confidences (remember writes scalarConfidence), and
@@ -210,7 +211,7 @@ export async function recall(
   deps: RecallDeps,
 ): Promise<RecallResult> {
   const embeddings: EmbeddingState = deps.embeddings;
-  const keyCardinality = deps.keyCardinality;
+  const keyCardinality = resolveKeyCardinality(session, args.corpus, deps.keyCardinality);
 
   const maxTokens = args.maxTokens ?? 2000;
   const limit = args.limit ?? 5;
@@ -268,6 +269,15 @@ export async function recall(
   // (canonicalReadStages.evaluationInstant) and the recency term (ctx.evaluationClock).
   const ranker = buildRecallRanker(args, embeddings.rankFn);
 
+  // canon = [τ_valid, ⊕_dedupe, ⊥/resolve, drop] — captured so the τ_valid+dedupe prefix
+  // (canon[0], canon[1]) can be reused by the cardinality safety check below.
+  const canon = canonicalReadStages({
+    evaluationInstant: now,
+    keyCardinality,
+    keyAliases: aliasMap,
+    evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
+  });
+
   // SINGLE query execution:
   // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥(keyAliases) + drop) → ranker
   const ranked = session.mneme.query<RankedCorpus>(
@@ -275,12 +285,7 @@ export async function recall(
     pipe(
       leaf(args.corpus),
       ...sigmas,
-      ...canonicalReadStages({
-        evaluationInstant: now,
-        keyCardinality,
-        keyAliases: aliasMap,
-        evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
-      }),
+      ...canon,
       ranker,
     ),
     { evaluationClock: now },
@@ -294,6 +299,21 @@ export async function recall(
   const coverage = coverageOf(entities, ranked.scored.map((s) => s.claim));
   if (coverage.missing.length > 0) {
     allWarnings.push(coverageWarning(coverage.missing));
+  }
+
+  // ── Cardinality safety check (best-effort; never throws into recall) ────────
+  // One extra lightweight query over the pre-⊥ (τ_valid + ⊕_dedupe) corpus — no
+  // ranking/warm-up — so a single-cardinality key holding ≥2 distinct values is
+  // surfaced as a mass-deprecation safety warning before ⊥ silently drops one.
+  try {
+    const preContra = session.mneme.query<Corpus>(
+      args.corpus,
+      pipe(leaf(args.corpus), ...sigmas, canon[0], canon[1]),
+      { evaluationClock: now },
+    );
+    allWarnings.push(...cardinalitySafetyWarnings(preContra, keyCardinality, aliasMap));
+  } catch (e) {
+    allWarnings.push(`cardinality-safety check failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   // In-memory knobs (pure RankedCorpus fns — NO second query):
