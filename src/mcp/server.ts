@@ -76,6 +76,15 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         id: z.string().describe("the committed claim's id"),
         status: z.string().describe("committed | rejected | duplicate"),
         corpus: z.string().describe("the corpus the claim was written to"),
+        supersession: z
+          .object({
+            action: z.string().describe("committed | superseded | merged | duplicate"),
+            deprecatedIds: z.array(z.string()).describe("live claims this write deprecated (action=superseded)"),
+            mergedInto: z.string().optional().describe("action=merged/duplicate: the surviving claim it was absorbed into"),
+            reason: z.any().optional().describe("vocabulary-aligned disposition reason"),
+          })
+          .optional()
+          .describe("best-effort attribution of what this write did to its (subject,key) group"),
       },
     },
     async (a) => {
@@ -89,9 +98,20 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         scope: a.scope,
         validFrom: a.validFrom,
       });
-      const structuredContent = { id: r.id, status: r.status, corpus: r.corpus };
+      const structuredContent = { id: r.id, status: r.status, corpus: r.corpus, supersession: r.supersession };
+      let text = `${r.status} ${r.id} in corpus '${r.corpus}'`;
+      if (r.supersession && r.supersession.action !== "committed") {
+        if (r.supersession.action === "superseded") {
+          const n = r.supersession.deprecatedIds.length;
+          text += ` (superseded ${n} earlier claim${n === 1 ? "" : "s"})`;
+        } else if (r.supersession.action === "merged" && r.supersession.mergedInto) {
+          text += ` (merged into ${r.supersession.mergedInto})`;
+        } else if (r.supersession.action === "duplicate" && r.supersession.mergedInto) {
+          text += ` (duplicate of ${r.supersession.mergedInto})`;
+        }
+      }
       return {
-        content: [{ type: "text" as const, text: `${r.status} ${r.id} in corpus '${r.corpus}'` }],
+        content: [{ type: "text" as const, text }],
         structuredContent,
       };
     },

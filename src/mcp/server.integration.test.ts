@@ -826,3 +826,43 @@ describe("mneme MCP server (declare_cardinality wiring)", () => {
     await client.close();
   });
 });
+
+// ── remember supersession wiring tests ──────────────────────────────────────────
+
+describe("mneme MCP server (remember supersession wiring)", () => {
+  it("remember outputSchema advertises an optional supersession field", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const rememberTool = tools.find((t) => t.name === "remember");
+    expect(rememberTool?.outputSchema).toBeDefined();
+    const schema = rememberTool!.outputSchema as { properties?: Record<string, unknown> };
+    expect("supersession" in (schema.properties ?? {})).toBe(true);
+    await client.close();
+  });
+
+  it("a distinct value under a single-cardinality key returns supersession.action=superseded with deprecatedIds", async () => {
+    const { client } = await connected("supersession-test");
+
+    const first = (await client.callTool({
+      name: "remember",
+      arguments: { subject: "proj:x", key: "plan", value: "alpha", corpus: "supersession-test" },
+    })) as { structuredContent?: { id: string; supersession?: { action: string; deprecatedIds: string[] } } };
+    expect(first.structuredContent?.supersession?.action).toBe("committed");
+    const firstId = first.structuredContent?.id;
+
+    const second = (await client.callTool({
+      name: "remember",
+      arguments: { subject: "proj:x", key: "plan", value: "bravo", corpus: "supersession-test" },
+    })) as {
+      structuredContent?: { id: string; supersession?: { action: string; deprecatedIds: string[] } };
+      content: { type: string; text: string }[];
+    };
+
+    expect(second.structuredContent?.supersession?.action).toBe("superseded");
+    expect(second.structuredContent?.supersession?.deprecatedIds).toContain(firstId);
+    expect(second.structuredContent?.supersession?.deprecatedIds.length).toBeGreaterThan(0);
+    expect(second.content[0].text).toMatch(/superseded 1 earlier claim/);
+
+    await client.close();
+  });
+});
