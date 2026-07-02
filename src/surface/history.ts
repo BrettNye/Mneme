@@ -42,10 +42,10 @@ export function lineageOf(
   session: Session,
   args: { corpus: string; subject: string; key: string; asOf?: string | number },
 ): LineageResult {
-  const empty: LineageResult = { corpus: args.corpus, subject: args.subject, key: args.key, asOf: 0, entries: [], content: "" };
+  const now = parseAsOf(args.asOf) ?? Date.now();
+  const empty: LineageResult = { corpus: args.corpus, subject: args.subject, key: args.key, asOf: now, entries: [], content: "" };
   if (!session.listCorpora().some((c) => c.id === args.corpus)) return empty;
 
-  const now = parseAsOf(args.asOf) ?? Date.now();
   const keyCardinality = resolveKeyCardinality(session, args.corpus, undefined);
   const { aliasMap } = loadAliasContext(session, args.corpus, now, keyCardinality);
   const family = keyFamilyOf(args.key, aliasMap);
@@ -65,6 +65,9 @@ export function lineageOf(
 
   const entries: LineageEntry[] = claims
     .map((c) => {
+      // groupDispositions returns a disposition for EVERY input claim, so this fallback is
+      // unreachable today; it is the spec's best-effort degrade (lineageOf is read-only /
+      // best-effort per spec — do NOT change this to throw).
       const d = disp.get(c.id) ?? { disposition: "served" as GroupDisposition, reason: { kind: "served" as const } };
       return {
         id: c.id,
@@ -80,7 +83,11 @@ export function lineageOf(
     .sort((a, b) => a.valid.from - b.valid.from || a.recordedSeq - b.recordedSeq);
 
   const content = entries
-    .map((e) => `- ${new Date(e.valid.from).toISOString()} [${e.disposition}] ${JSON.stringify(e.value)}`)
+    .map((e) => {
+      const detail =
+        e.reason.kind === "deprecated-by" ? ` by ${e.reason.byId}` : e.reason.kind === "merged-into" ? ` into ${e.reason.targetId}` : "";
+      return `- ${new Date(e.valid.from).toISOString()} [${e.disposition}] ${JSON.stringify(e.value)}${detail}`;
+    })
     .join("\n");
 
   return { corpus: args.corpus, subject: args.subject, key: args.key, asOf: now, entries, content };

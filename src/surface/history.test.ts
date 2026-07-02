@@ -28,6 +28,16 @@ describe("lineageOf", () => {
     s.close();
   });
 
+  it("breaks valid.from ties by recordedSeq (write order)", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { tag: "multi" } });
+    s.write("c", { subject: "p", key: "tag", value: "alpha", valid: { from: 5, to: Infinity } });
+    s.write("c", { subject: "p", key: "tag", value: "bravo", valid: { from: 5, to: Infinity } });
+    const r = lineageOf(s, { corpus: "c", subject: "p", key: "tag" });
+    expect(r.entries.map((e) => e.value)).toEqual(["alpha", "bravo"]);
+    s.close();
+  });
+
   it("attributes token-similar restatements as merged", () => {
     const s = freshSession();
     s.createCorpus({ id: "c", keyCardinality: { note: "single" } });
@@ -79,6 +89,34 @@ describe("lineageOf", () => {
     expect(r.content.length).toBeGreaterThan(0);
     expect(r.content).toContain("served");
     expect(r.content).toContain("deprecated");
+    s.close();
+  });
+
+  it("enriches the content timeline with the deprecating claim's id", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    s.write("c", { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    s.write("c", { subject: "p", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const r = lineageOf(s, { corpus: "c", subject: "p", key: "plan" });
+    const deprecated = r.entries.find((e) => e.disposition === "deprecated")!;
+    expect(deprecated.reason.kind).toBe("deprecated-by");
+    const byId = (deprecated.reason as { kind: "deprecated-by"; byId: string }).byId;
+    const line = r.content.split("\n").find((l) => l.includes(JSON.stringify("alpha")))!;
+    expect(line).toContain(`by ${byId}`);
+    s.close();
+  });
+
+  it("enriches the content timeline with the merge target's id", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { note: "single" } });
+    s.write("c", { subject: "p", key: "note", value: "deploy the api now", valid: { from: 2, to: Infinity } });
+    s.write("c", { subject: "p", key: "note", value: "deploy the api", valid: { from: 1, to: Infinity } });
+    const r = lineageOf(s, { corpus: "c", subject: "p", key: "note" });
+    const merged = r.entries.find((e) => e.disposition === "merged")!;
+    expect(merged.reason.kind).toBe("merged-into");
+    const targetId = (merged.reason as { kind: "merged-into"; targetId: string }).targetId;
+    const line = r.content.split("\n").find((l) => l.includes(JSON.stringify("deploy the api")) && !l.includes("now"))!;
+    expect(line).toContain(`into ${targetId}`);
     s.close();
   });
 });
