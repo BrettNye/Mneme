@@ -9,9 +9,9 @@ default_review_mode: split
 
 ```mermaid
 flowchart TD
-    task-validator["task-validator: validateKeyCardinality<br/>files: src/catalog/schema.ts +1 more"]
-    task-declare["task-declare: session.declareCardinality<br/>files: src/surface/session.ts +2 more"]
-    task-mcp["task-mcp: declare_cardinality tool + guidance<br/>files: src/mcp/server.ts +1 more"]
+    task-validator["task-validator: validateKeyCardinality<br/>files: src/catalog/schema.ts +1 more"]:::done
+    task-declare["task-declare: session.declareCardinality<br/>files: src/surface/session.ts +2 more"]:::done
+    task-mcp["task-mcp: declare_cardinality tool + guidance<br/>files: src/mcp/server.ts +1 more"]:::done
 
     task-validator --> task-declare
     task-declare --> task-mcp
@@ -43,7 +43,7 @@ depends_on: []
 files:
   - src/catalog/schema.ts
   - src/catalog/schema.test.ts
-status: pending
+status: done
 ```
 
 Extract the per-key cardinality validation into a shared, reusable validator in the
@@ -91,7 +91,7 @@ files:
   - src/surface/session.ts
   - src/surface/types.ts
   - src/surface/session.test.ts
-status: pending
+status: done
 quality_reviewer_hint: opus
 ```
 
@@ -181,7 +181,7 @@ depends_on: [task-declare]
 files:
   - src/mcp/server.ts
   - src/mcp/server.integration.test.ts
-status: pending
+status: done
 ```
 
 Register the `declare_cardinality` tool, and update the session instructions / `remember`
