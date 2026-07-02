@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { freshSession } from "./test-support.js";
-import { supersessionOutcome } from "./belief-change.js";
+import { supersessionOutcome, groupDispositions } from "./belief-change.js";
 
 describe("supersessionOutcome", () => {
   it("reports superseded on a single-cardinality distinct-value write", () => {
@@ -87,6 +87,20 @@ describe("supersessionOutcome", () => {
     const out = supersessionOutcome(s, "c", "nonexistent-id");
     expect(out.action).toBe("committed");
     expect(out.deprecatedIds).toEqual([]);
+    s.close();
+  });
+});
+
+describe("groupDispositions", () => {
+  it("attributes every claim in a group", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    const a = s.write("c", { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    const b = s.write("c", { subject: "p", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const claims = s.mneme.read("c", { corpusId: "c", subject: "p", key: "plan" });
+    const disp = groupDispositions(claims, { plan: "single" }, {}, Date.now());
+    expect(disp.get(b.id)!.disposition).toBe("served");
+    expect(disp.get(a.id)!.disposition).toBe("deprecated");
     s.close();
   });
 });
