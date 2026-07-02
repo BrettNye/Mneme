@@ -174,7 +174,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
       // Embeddings lazy: first recall pays the init cost; boot stays instant.
       // RecallDeps includes keyCardinality from config loaded at startup.
       const embeddings = await initEmbeddings();
-      const r = await recall(session, {
+      const recallArgs = {
         about: a.about,
         subject: a.subject,
         key: a.key,
@@ -186,17 +186,13 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         recencyAlpha: a.recencyAlpha,
         recencyHalfLifeDays: a.recencyHalfLifeDays,
         asOf: a.asOf,
-      }, { embeddings, keyCardinality });
+      };
+      const r = await recall(session, recallArgs, { embeddings, keyCardinality });
 
       let trace: RecallTrace | undefined;
       if (a.explain) {
         try {
-          trace = await explainRecall(session, {
-            about: a.about, subject: a.subject, key: a.key, maxTokens: a.maxTokens,
-            limit: a.limit, corpus: resolvedCorpus, abstainBelowTop: a.abstainBelowTop,
-            relevanceFloor: a.relevanceFloor, recencyAlpha: a.recencyAlpha,
-            recencyHalfLifeDays: a.recencyHalfLifeDays, asOf: a.asOf,
-          }, { embeddings, keyCardinality });
+          trace = await explainRecall(session, recallArgs, { embeddings, keyCardinality });
         } catch (err) {
           // Best-effort: an explain failure never fails the recall.
           console.error(`[mneme/recall] explain failed: ${err instanceof Error ? err.message : String(err)}`);

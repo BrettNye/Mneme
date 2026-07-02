@@ -63,11 +63,6 @@ export const dedupeGroups =
     return { survivors: corpusOf(out), mergedInto };
   };
 
-/**
- * Fold a group's claims through the pairwise combine(). For weighted_avg, thread the accumulated
- * source-weight so the fold equals the full normalized weighted average; max rules pre-sort by
- * claim id so the first-arg-wins tie-break is lexicographic; evidence_pooled folds exactly.
- */
 export const oplusDedupe =
   (ruleId: string, params?: unknown, opts?: DedupeOptions) =>
   (c: Corpus): Corpus =>
@@ -180,6 +175,11 @@ export const oplusSynthesizeAs =
     } as unknown as Claim;
   };
 
+/**
+ * Fold a group's claims through the pairwise combine(). For weighted_avg, thread the accumulated
+ * source-weight so the fold equals the full normalized weighted average; max rules pre-sort by
+ * claim id so the first-arg-wins tie-break is lexicographic; evidence_pooled folds exactly.
+ */
 function combineGroup(ruleId: string, claims: Claim[], params?: unknown): Claim {
   if (claims.length === 0) {
     throw new Error("combineGroup called with empty group");

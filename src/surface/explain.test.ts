@@ -26,6 +26,28 @@ describe("explainRecall — consistency invariant", () => {
     const served = t.claims.filter((d) => d.disposition === "served").map((d) => d.id);
     expect(new Set(served)).toEqual(new Set(r.matches.map((m) => m.id)));
   });
+
+  it("served dispositions === recall().matches with a knob active (relevanceFloor)", async () => {
+    const s = freshSession();
+    const corpus = "c";
+
+    // A merge pair: two token-similar restatements on the same (subject,key).
+    remember(s, { subject: "project:mneme", key: "fact", value: "Mneme is the memory layer for RaState", corpus });
+    remember(s, { subject: "project:mneme", key: "fact", value: "Mneme serves as the memory layer for RaState", corpus });
+
+    // A single-cardinality supersession: two distinct values, increasing validFrom.
+    remember(s, { subject: "user:brett", key: "editor", value: "vim", corpus, validFrom: "2026-01-01T00:00:00Z" });
+    remember(s, { subject: "user:brett", key: "editor", value: "helix", corpus, validFrom: "2026-03-01T00:00:00Z" });
+
+    // A plain served claim relevant to the query.
+    remember(s, { subject: "project:mneme", key: "decision", value: "dogfood Mneme via an MCP server for deploy tracking", corpus });
+
+    const args = { about: "deploy", corpus: "c", limit: 5, relevanceFloor: 0.01 } as const;
+    const r = await recall(s, args, jaccardDeps);
+    const t = await explainRecall(s, args, jaccardDeps);
+    const served = t.claims.filter((d) => d.disposition === "served").map((d) => d.id);
+    expect(new Set(served)).toEqual(new Set(r.matches.map((m) => m.id)));
+  });
 });
 
 // ── Reproduction tests: the disposition cases we hit live ─────────────────────

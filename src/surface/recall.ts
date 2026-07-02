@@ -12,7 +12,7 @@ import type { Predicate, RankedCorpus } from "../index.js";
 import { pipe, leaf, sigma, rho } from "../mneme.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Stage } from "../algebra/expression.js";
-import type { Corpus } from "../algebra/types.js";
+import type { Corpus, Corpus as AlgebraCorpus } from "../algebra/types.js";
 import type { Session } from "./types.js";
 import { pointEstimate } from "../core/confidence.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
@@ -35,7 +35,6 @@ import { KEY_ALIAS_KEY, aliasMapOf, keyFamilyOf } from "../retrieval/key-alias.j
 import type { KeyAliasMap } from "../retrieval/key-alias.js";
 import { entityTokensOf, coverageOf } from "../retrieval/coverage.js";
 import type { CoverageReport } from "../retrieval/coverage.js";
-import type { Corpus as AlgebraCorpus } from "../algebra/types.js";
 import type { EvalContext } from "../algebra/expression.js";
 
 export interface EmbeddingState {
