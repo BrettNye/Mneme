@@ -63,10 +63,12 @@ export function groupDispositions(
   // deprecated-by.byId reports the NEWEST deprecator (the ultimate survivor), not the first pair
   // seen — meaningful for lineage and required so a full deprecatedIds chain can be recovered by
   // scanning for the survivor's id (see supersessionOutcome).
-  const byId = new Map<string, Claim>();
-  for (const c of survivors.claims) byId.set(c.id, c);
+  const survivorById = new Map<string, Claim>();
+  for (const c of survivors.claims) survivorById.set(c.id, c);
   const deprecatedBy = new Map<string, string>();
   for (const p of pairs) {
+    // valid.from ties are NOT broken by recordedSeq here (unlike recall's served set): a tie means
+    // resolveDeprecateOlder deprecates neither, so both stay served — skip the pair.
     if (p.left.valid.from === p.right.valid.from) continue;
     const [older, newer] = p.left.valid.from < p.right.valid.from ? [p.left, p.right] : [p.right, p.left];
     const cur = deprecatedBy.get(older.id);
@@ -74,7 +76,7 @@ export function groupDispositions(
       deprecatedBy.set(older.id, newer.id);
       continue;
     }
-    const curClaim = byId.get(cur);
+    const curClaim = survivorById.get(cur);
     const curFrom = curClaim ? curClaim.valid.from : -Infinity;
     if (newer.valid.from > curFrom || (newer.valid.from === curFrom && newer.id < cur)) deprecatedBy.set(older.id, newer.id);
   }
