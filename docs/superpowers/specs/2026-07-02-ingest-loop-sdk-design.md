@@ -158,6 +158,22 @@ Non-destructive ordering note: because writes only *deprecate at serve time* (cl
 declaring `multi` *after* a write cleanly un-deprecates — so proposing cardinality post-write is
 safe (this is exactly validated effect A: single→1 warned, declare multi→both served).
 
+### Validated limitation — the guard does NOT catch extractor-side over-anchoring (real-LLM A/B, 2026-07-02)
+
+A real-transcript A/B (`scripts/ab-ingest.ts`) exposed a sharp limitation. When the injected
+`extract` is an LLM told to *"prefer existing subjects,"* it over-folds at extraction: 17 genuinely
+distinct entities (two people, two clients, nine features, several projects) collapsed into **2**
+canonical subjects — merging different people and dropping distinct clients. Step-4's reconcile guard
+**did not fire**, because it only scores subjects the LLM emits as *new*; when the LLM returns an
+already-canonical subject (disposition `reuse`/exact), reconcile never sees the distinct entity to
+protect it. **The guard protects the reconcile step, not the extractor.** Two consequences for
+consumers: (1) the injected extractor's prompt MUST say *"reuse only for the SAME entity, mint anything
+genuinely new"* — never *"prefer existing"*; the SDK's `canonPrompt` should carry that framing.
+(2) "fewer subjects" is a misleading success metric — evaluate reuse-when-same / mint-when-new at the
+entity level, not by subject count. A future enhancement: provide canon as *candidates to match* and
+run reconcile in the reverse direction (are two canon subjects actually distinct?) so over-folding is
+detectable, not just under-folding.
+
 ## 5. Invariants (inherit the belief-change charter)
 
 - **I1 non-destructive** — every write is supersession-aware; nothing deleted.
