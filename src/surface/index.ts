@@ -28,3 +28,5 @@ export { remember, ensureCorpus, listCorpora } from "./remember.js";
 export type { RememberArgs, RememberResult, ListResult } from "./remember.js";
 export { explainRecall } from "./explain.js";
 export type { RecallTrace, ClaimDisposition, DispositionReason } from "./explain.js";
+export { ingest } from "./ingest.js";
+export type { IngestArgs, IngestContext, CandidateClaim, IngestedClaim, IngestReport } from "./ingest.js";
