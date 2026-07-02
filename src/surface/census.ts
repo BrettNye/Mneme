@@ -1,0 +1,164 @@
+/**
+ * census.ts — keyCensus + the shared enumerate+score core.
+ *
+ * `censusCore` is the axis-generic enumerate+score primitive (built on
+ * `distinctEntities` + `entityScorer` from entities.ts). `keyCensus` delegates
+ * its enumerate+score work to `censusCore("key", …)` and layers its own
+ * key-specific alias report (aliases / unratified / ratification content) on
+ * top — behavior and signature unchanged from the pre-move implementation
+ * that lived in recall.ts.
+ */
+import { distinctEntities, entityScorer, type EntityAxis } from "./entities.js";
+import { loadAliasContext, type EmbeddingState } from "./recall.js"; // hoisted fn; runtime-only call → cycle-safe
+import type { Session, ReadDeps } from "./types.js";
+
+export interface CensusArgs {
+  corpus?: string;
+  limit?: number;
+  // corpus defaults at server layer
+}
+
+export interface CensusResult {
+  corpus: string;
+  keys: { key: string; claims: number }[];
+  candidates: { a: string; b: string; score: number }[]; // sorted desc, truncated to limit
+  aliases: Record<string, string>;
+  unratified: string[];
+  warnings: string[];
+  rankFn: string;
+  content: string; // composed text incl. remember-shape ratification affordance
+}
+
+/**
+ * Enumerate + score the axis; returns the shared census core + the single alias load.
+ * Loads alias context exactly ONCE (shared `now`), enumerates live distinct entities
+ * on `axis`, then scores all O(n²) pairs, sorted desc, truncated to `limit`.
+ */
+export async function censusCore(
+  axis: EntityAxis,
+  session: Session,
+  corpus: string,
+  deps: ReadDeps,
+  limit: number,
+) {
+  const now = Date.now(); // ONE instant, shared by alias load + enumeration (matches keyCensus)
+  const aliasContext = loadAliasContext(session, corpus, now, deps.keyCardinality);
+  const entities = distinctEntities(session, corpus, axis, deps, aliasContext.aliasMap, now);
+  const { rankFn, warnings, scoreOne } = await entityScorer(entities.map((e) => e.value), deps);
+
+  const pairs: { a: string; b: string; score: number }[] = [];
+  for (let i = 0; i < entities.length; i++) {
+    for (let j = i + 1; j < entities.length; j++) {
+      pairs.push({ a: entities[i].value, b: entities[j].value, score: scoreOne(entities[i].value, entities[j].value) });
+    }
+  }
+  // Sort descending by score; tiebreaker by entity names for full determinism.
+  pairs.sort((x, y) => y.score - x.score || x.a.localeCompare(y.a) || x.b.localeCompare(y.b));
+
+  return {
+    entities,
+    candidates: pairs.slice(0, limit),
+    rankFn,
+    warnings: [...aliasContext.warnings, ...warnings],
+    aliasContext,
+  };
+}
+
+/**
+ * Read-only census over the corpus. Returns:
+ *  - Distinct keys + per-key claim counts (non-deprecated, valid at evaluationInstant;
+ *    alias-shaped claims and flag artifacts excluded).
+ *  - All key pairs scored by the registered rank fn, sorted desc, truncated to limit.
+ *  - Resolved alias map, un-ratified self-aliases, and warnings.
+ *  - Composed content with ready-to-paste remember ratification shape.
+ *
+ * Census never writes and never logs to the recall-log.
+ */
+export async function keyCensus(
+  session: Session,
+  args: CensusArgs & { corpus: string },
+  deps: ReadDeps,
+): Promise<CensusResult> {
+  const corpus = args.corpus;
+  const limit = args.limit ?? 20;
+  const embeddings: EmbeddingState = deps.embeddings;
+
+  const emptyResult: CensusResult = {
+    corpus,
+    keys: [],
+    candidates: [],
+    aliases: {},
+    unratified: [],
+    warnings: [],
+    rankFn: embeddings.rankFn,
+    content: "",
+  };
+
+  // Read-only: unknown corpus → empty report, no corpus created
+  if (!session.listCorpora().some((c) => c.id === corpus)) {
+    return emptyResult;
+  }
+
+  // ── Enumerate + score (shared core: single alias load, single now) ────────────
+  const { entities, candidates, rankFn: effectiveRankFn, warnings, aliasContext } = await censusCore(
+    "key",
+    session,
+    corpus,
+    deps,
+    limit,
+  );
+  const { aliasMap, selfAliases } = aliasContext;
+
+  const keys = entities.map(({ value, claims }) => ({ key: value, claims }));
+
+  // ── Composed content ──────────────────────────────────────────────────────────
+  const lines: string[] = [
+    `## Key Census: corpus "${corpus}"`,
+    "",
+    `**Keys (${keys.length}):**`,
+  ];
+
+  for (const { key, claims } of keys) {
+    lines.push(`- \`${key}\`: ${claims} claim${claims !== 1 ? "s" : ""}`);
+  }
+
+  if (candidates.length > 0) {
+    lines.push("", `**Top key-pair candidates (${candidates.length}):**`);
+    for (const { a, b, score } of candidates) {
+      lines.push(`- \`${a}\` ↔ \`${b}\`: ${score.toFixed(3)}`);
+    }
+  }
+
+  if (Object.keys(aliasMap).length > 0) {
+    lines.push("", "**Resolved aliases:**");
+    for (const [variant, canonical] of Object.entries(aliasMap)) {
+      lines.push(`- \`${variant}\` → \`${canonical}\``);
+    }
+  }
+
+  if (selfAliases.length > 0) {
+    lines.push("", `**Un-ratified self-aliases (${selfAliases.length}):** ${selfAliases.map((s) => `\`${s}\``).join(", ")}`);
+  }
+
+  // Ratification shape: paste-ready remember calls for top candidates
+  if (candidates.length > 0) {
+    lines.push("", "**Ratification shape** (paste into `remember` to confirm an alias):");
+    const topCandidates = candidates.slice(0, 3);
+    for (const { a, b } of topCandidates) {
+      lines.push(`\`remember({ subject: "key:${a}", key: "alias-of", value: "${b}", corpus: "${corpus}" })\``);
+    }
+  }
+
+  const content = lines.join("\n");
+
+  return {
+    corpus,
+    keys,
+    candidates,
+    aliases: aliasMap,
+    unratified: selfAliases,
+    warnings,
+    rankFn: effectiveRankFn,
+    content,
+  };
+}
