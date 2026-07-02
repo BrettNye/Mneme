@@ -9,13 +9,13 @@ default_review_mode: split
 
 ```mermaid
 flowchart TD
-    task-read-deps["task-read-deps: read-deps type<br/>files: src/surface/types.ts +2 more"]
-    task-entities["task-entities: entity primitives<br/>files: src/surface/entities.ts +1 more"]
-    task-census["task-census: factor census out<br/>files: src/surface/census.ts +3 more"]
-    task-subject-census["task-subject-census: subjectCensus<br/>files: src/surface/census.ts +1 more"]
-    task-reconcile["task-reconcile: reconcile<br/>files: src/surface/reconcile.ts +1 more"]
-    task-barrels["task-barrels: barrel exports<br/>files: src/surface/index.ts +3 more"]
-    task-mcp["task-mcp: MCP tools<br/>files: src/mcp/server.ts +1 more"]
+    task-read-deps["task-read-deps: read-deps type<br/>files: src/surface/types.ts +2 more"]:::done
+    task-entities["task-entities: entity primitives<br/>files: src/surface/entities.ts +1 more"]:::done
+    task-census["task-census: factor census out<br/>files: src/surface/census.ts +3 more"]:::done
+    task-subject-census["task-subject-census: subjectCensus<br/>files: src/surface/census.ts +1 more"]:::done
+    task-reconcile["task-reconcile: reconcile<br/>files: src/surface/reconcile.ts +1 more"]:::done
+    task-barrels["task-barrels: barrel exports<br/>files: src/surface/index.ts +3 more"]:::done
+    task-mcp["task-mcp: MCP tools<br/>files: src/mcp/server.ts +1 more"]:::done
 
     task-read-deps --> task-entities
     task-read-deps --> task-census
@@ -71,7 +71,7 @@ files:
   - src/surface/types.ts
   - src/surface/recall.ts
   - src/surface/types.test.ts
-status: pending
+status: done
 model_hint: cheap
 ```
 
@@ -130,7 +130,7 @@ depends_on: [task-read-deps]
 files:
   - src/surface/entities.ts
   - src/surface/entities.test.ts
-status: pending
+status: done
 ```
 
 The shared read primitive consumed by both census and reconcile (DRY): enumerate the
@@ -237,7 +237,7 @@ files:
   - src/surface/census.test.ts
   - src/surface/recall.ts
   - src/surface/recall.test.ts
-status: pending
+status: done
 quality_reviewer_hint: opus
 ```
 
@@ -332,7 +332,7 @@ depends_on: [task-census]
 files:
   - src/surface/census.ts
   - src/surface/census.test.ts
-status: pending
+status: done
 ```
 
 Add `subjectCensus` on the subject axis via `censusCore("subject", …)` — symmetric to
@@ -395,7 +395,7 @@ depends_on: [task-read-deps, task-entities]
 files:
   - src/surface/reconcile.ts
   - src/surface/reconcile.test.ts
-status: pending
+status: done
 ```
 
 The recall-before-write primitive (the differentiated slice): score candidate subjects/keys
@@ -491,7 +491,7 @@ files:
   - src/index.ts
   - src/surface/recall.ts
   - src/surface/index.test.ts
-status: pending
+status: done
 model_hint: cheap
 review_mode: merged
 is_wiring_task: true
@@ -525,7 +525,7 @@ depends_on: [task-barrels]
 files:
   - src/mcp/server.ts
   - src/mcp/server.integration.test.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
