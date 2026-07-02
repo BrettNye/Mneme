@@ -9,11 +9,11 @@ default_review_mode: split
 
 ```mermaid
 flowchart TD
-    task-corpusspec["task-corpusspec: CorpusSpec.keyCardinality<br/>files: src/surface/types.ts +2 more"]
-    task-cardinality["task-cardinality: cardinality.ts<br/>files: src/surface/cardinality.ts +1 more"]
-    task-recall["task-recall: recall integration<br/>files: src/surface/recall.ts +1 more"]
-    task-census["task-census: census integration<br/>files: src/surface/census.ts +1 more"]
-    task-reconcile["task-reconcile: reconcile integration<br/>files: src/surface/reconcile.ts +1 more"]
+    task-corpusspec["task-corpusspec: CorpusSpec.keyCardinality<br/>files: src/surface/types.ts +2 more"]:::done
+    task-cardinality["task-cardinality: cardinality.ts<br/>files: src/surface/cardinality.ts +1 more"]:::done
+    task-recall["task-recall: recall integration<br/>files: src/surface/recall.ts +1 more"]:::done
+    task-census["task-census: census integration<br/>files: src/surface/census.ts +1 more"]:::done
+    task-reconcile["task-reconcile: reconcile integration<br/>files: src/surface/reconcile.ts +1 more"]:::done
 
     task-corpusspec --> task-cardinality
     task-cardinality --> task-recall
@@ -68,7 +68,7 @@ files:
   - src/surface/types.ts
   - src/surface/session.ts
   - src/surface/session.test.ts
-status: pending
+status: done
 ```
 
 Expose `keyCardinality` on the ergonomic `CorpusSpec` and have `createCorpus` validate it
@@ -135,7 +135,7 @@ depends_on: [task-corpusspec]
 files:
   - src/surface/cardinality.ts
   - src/surface/cardinality.test.ts
-status: pending
+status: done
 ```
 
 The shared cardinality module (SRP): resolve effective per-corpus cardinality (declaration over
@@ -228,7 +228,7 @@ depends_on: [task-cardinality]
 files:
   - src/surface/recall.ts
   - src/surface/recall.test.ts
-status: pending
+status: done
 quality_reviewer_hint: opus
 ```
 
@@ -308,7 +308,7 @@ depends_on: [task-cardinality, task-recall]
 files:
   - src/surface/census.ts
   - src/surface/census.test.ts
-status: pending
+status: done
 ```
 
 `censusCore` resolves effective cardinality (so all census axes honor per-corpus declarations),
@@ -374,7 +374,7 @@ depends_on: [task-cardinality, task-recall]
 files:
   - src/surface/reconcile.ts
   - src/surface/reconcile.test.ts
-status: pending
+status: done
 ```
 
 `reconcile` resolves effective cardinality so its live-entity enumeration honors per-corpus
