@@ -108,7 +108,11 @@ function remapAxis(
 ): { final: string; disposition: ReconcileDisposition; remappedFrom?: string } {
   const disposition = match?.disposition ?? "new";
   if (disposition === "reuse" && match) {
-    return { final: match.suggestions[0].existing, disposition, remappedFrom: raw };
+    const existing = match.suggestions[0].existing;
+    // Only record remappedFrom when the matched existing value actually differs from the
+    // raw candidate — the common case is the extractor reusing the exact canonical spelling
+    // (from IngestContext), where remappedFrom === final would be misleading "X -> X" noise.
+    return { final: existing, disposition, remappedFrom: existing !== raw ? raw : undefined };
   }
   // "uncertain" and "new" both mint as-is — uncertain is surfaced (via counts.uncertain /
   // the disposition itself) but NEVER auto-folded (the over-anchoring guard).
@@ -157,8 +161,6 @@ function renderContent(
  */
 export async function ingest(session: Session, args: IngestArgs, deps: ReadDeps): Promise<IngestReport> {
   const corpus = args.corpus;
-  const reuseThreshold = args.reuseThreshold ?? 0.9;
-  const newThreshold = args.newThreshold ?? 0.5;
   const autoDeclareCardinality = args.autoDeclareCardinality ?? false;
   const dryRun = args.dryRun ?? false;
 
@@ -181,7 +183,13 @@ export async function ingest(session: Session, args: IngestArgs, deps: ReadDeps)
   const distinctKeys = [...new Set(candidates.map((c) => c.key))];
   const reconcileResult = await reconcile(
     session,
-    { corpus, subjects: distinctSubjects, keys: distinctKeys, reuseThreshold, newThreshold },
+    {
+      corpus,
+      subjects: distinctSubjects,
+      keys: distinctKeys,
+      reuseThreshold: args.reuseThreshold,
+      newThreshold: args.newThreshold,
+    },
     deps,
   );
   const subjectByCandidate = new Map(reconcileResult.subjects.map((m) => [m.candidate, m]));

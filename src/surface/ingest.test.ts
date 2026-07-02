@@ -26,6 +26,34 @@ describe("ingest", () => {
     const claim = report.claims[0];
     expect(claim.subject.final).toBe("project:crewtracks");
     expect(claim.subject.disposition).toBe("reuse");
+    // Exact-spelling reuse (the common case: extractor reuses the canonical spelling
+    // verbatim from IngestContext) must NOT set remappedFrom — remappedFrom === final
+    // would be misleading "X -> X" noise.
+    expect(claim.subject.remappedFrom).toBeUndefined();
+    s.close();
+  });
+
+  it("records remappedFrom for a genuine spelling variant that still scores reuse", async () => {
+    const s = openSession({ dbPath: tmpDb(), writer: "t" });
+    s.createCorpus({ id: "c" });
+    s.write("c", {
+      subject: "project:crewtracks", key: "status", value: "active",
+      valid: { from: 1, to: Infinity }, source: "llm", confidence: 0.8,
+    });
+    const report = await ingest(s, {
+      corpus: "c",
+      // Differs only in case from the canonical spelling — jaccard tokenizes
+      // case-insensitively, so this still scores a full-confidence "reuse" match,
+      // but the raw candidate bytes genuinely differ from the matched existing value.
+      extract: () => [{
+        subject: "Project:CrewTracks", key: "status", value: "shipping",
+        validFrom: "2026-02-01T00:00:00Z",
+      }],
+    }, deps);
+    const claim = report.claims[0];
+    expect(claim.subject.disposition).toBe("reuse");
+    expect(claim.subject.final).toBe("project:crewtracks");
+    expect(claim.subject.remappedFrom).toBe("Project:CrewTracks");
     s.close();
   });
 
