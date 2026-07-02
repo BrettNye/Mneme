@@ -318,7 +318,9 @@ describe("mneme MCP server (key_census wiring)", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toContain("key_census");
-    expect(names).toEqual(["key_census", "list_corpora", "reconcile", "recall", "remember", "subject_census"].sort());
+    expect(names).toEqual(
+      ["declare_cardinality", "key_census", "list_corpora", "reconcile", "recall", "remember", "subject_census"].sort(),
+    );
     await client.close();
   });
 
@@ -776,6 +778,50 @@ describe("mneme MCP server (reconcile wiring)", () => {
     const countAfter = censusAfter.structuredContent?.matches.length ?? 0;
 
     expect(countAfter).toBe(countBefore);
+
+    await client.close();
+  });
+});
+
+// ── declare_cardinality wiring tests ────────────────────────────────────────────
+
+describe("mneme MCP server (declare_cardinality wiring)", () => {
+  it("advertises declare_cardinality as a write, idempotent, closed-world tool", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.declare_cardinality).toBeDefined();
+    expect(byName.declare_cardinality.annotations?.readOnlyHint).toBe(false);
+    expect(byName.declare_cardinality.annotations?.idempotentHint).toBe(true);
+    expect(byName.declare_cardinality.annotations?.openWorldHint).toBe(false);
+    expect(byName.declare_cardinality.outputSchema).toBeDefined();
+    await client.close();
+  });
+
+  it("declare_cardinality makes a single-cardinality key coexist and clears the warning", async () => {
+    const { client } = await connected();
+
+    async function callTool(name: string, args: Record<string, unknown>) {
+      return (await client.callTool({ name, arguments: args })) as {
+        structuredContent?: Record<string, unknown>;
+      };
+    }
+
+    await callTool("remember", { subject: "proj", key: "plan", value: "alpha", corpus: "cc" });
+    await callTool("remember", { subject: "proj", key: "plan", value: "bravo", corpus: "cc" });
+    const before = await callTool("recall", { about: "plan", subject: "proj", key: "plan", corpus: "cc" });
+    expect(
+      (before.structuredContent?.warnings as string[] | undefined)?.some((w) => /single-cardinality/.test(w)),
+    ).toBe(true);
+
+    const decl = await callTool("declare_cardinality", { corpus: "cc", cardinality: { plan: "multi" } });
+    expect(decl.structuredContent?.keyCardinality).toMatchObject({ plan: "multi" });
+
+    const after = await callTool("recall", { about: "plan", subject: "proj", key: "plan", corpus: "cc" });
+    expect((after.structuredContent?.matches as unknown[]).length).toBe(2); // both coexist
+    expect(
+      (after.structuredContent?.warnings as string[] | undefined)?.some((w) => /single-cardinality/.test(w)),
+    ).toBeFalsy();
 
     await client.close();
   });
