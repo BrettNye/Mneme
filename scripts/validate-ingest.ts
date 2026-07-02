@@ -46,11 +46,11 @@ const check = (effect: string, ok: boolean, detail: string) => {
   s.write("c", { subject: "client:liner-division", key: "status", value: "active",
     valid: { from: 1, to: Infinity }, source: "llm", confidence: 0.8 });
   const r = await ingest(s, { corpus: "c",
-    extract: () => [{ subject: "division:traffic-control", key: "status", value: "active",
+    extract: () => [{ subject: "host:web-01", key: "status", value: "active",
       validFrom: "2026-02-01T00:00:00Z" }] }, deps);
   const c0 = r.claims[0];
   check("over-anchoring guard — distinct subject NOT folded",
-    c0.subject.final === "division:traffic-control" && c0.subject.disposition !== "reuse",
+    c0.subject.final === "host:web-01" && c0.subject.disposition !== "reuse",
     `final=${c0.subject.final}, disposition=${c0.subject.disposition}`);
   s.close();
 }
