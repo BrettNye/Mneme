@@ -27,6 +27,24 @@ describe("explainRecall — consistency invariant", () => {
     expect(new Set(served)).toEqual(new Set(r.matches.map((m) => m.id)));
   });
 
+  it("honors SCHEMA-declared keyCardinality: served set === recall matches on a declared-multi key", async () => {
+    // Regression guard (surfaced by the dogfood validation): recall resolves per-corpus
+    // schema.keyCardinality (Cluster C), so explainRecall must too — else its served set
+    // diverges from recall's on a schema-declared-multi key, breaking the invariant.
+    const s = freshSession();
+    const corpus = "c";
+    s.createCorpus({ id: corpus, keyCardinality: { editor: "multi" } });
+    remember(s, { subject: "user:brett", key: "editor", value: "vim", corpus, validFrom: "2026-01-01T00:00:00Z" });
+    remember(s, { subject: "user:brett", key: "editor", value: "helix", corpus, validFrom: "2026-03-01T00:00:00Z" });
+
+    const args = { about: "editor", corpus, subject: "user:brett", key: "editor", limit: 10 } as const;
+    const r = await recall(s, args, jaccardDeps);
+    const t = await explainRecall(s, args, jaccardDeps);
+    const served = t.claims.filter((d) => d.disposition === "served").map((d) => d.id);
+    expect(r.matches.length).toBe(2); // multi honored via schema → both coexist
+    expect(new Set(served)).toEqual(new Set(r.matches.map((m) => m.id)));
+  });
+
   it("served dispositions === recall().matches with a knob active (relevanceFloor)", async () => {
     const s = freshSession();
     const corpus = "c";

@@ -18,6 +18,7 @@ import {
   type RecallArgs,
   type RecallDeps,
 } from "./recall.js";
+import { resolveKeyCardinality } from "./cardinality.js";
 import { keyFamilyOf, isKeyAliasShaped } from "../retrieval/key-alias.js";
 import { canonicalReadStages, DEDUPE_DEFAULTS } from "../retrieval/read-pipeline.js";
 import { dedupeGroups } from "../algebra/combination.js";
@@ -68,7 +69,10 @@ export async function explainRecall(
 ): Promise<RecallTrace> {
   const warnings: string[] = [];
   const embeddings = deps.embeddings;
-  const keyCardinality = deps.keyCardinality;
+  // Resolve per-corpus effective cardinality (schema declaration over deps), exactly as
+  // recall/census/reconcile do — otherwise explain's served set diverges from recall's on a
+  // schema-declared key, breaking the consistency invariant. Safe on unknown corpus (returns deps map).
+  const keyCardinality = resolveKeyCardinality(session, args.corpus, deps.keyCardinality);
   const limit = args.limit ?? 5;
 
   const empty: RecallTrace = {
