@@ -9,6 +9,7 @@
 import { distinctEntities, entityScorer, type EntityAxis } from "./entities.js";
 import { loadAliasContext } from "./recall.js";
 import type { Session, ReadDeps } from "./types.js";
+import type { KeyAliasMap } from "../retrieval/key-alias.js";
 
 export interface ReconcileArgs {
   corpus: string;
@@ -43,25 +44,44 @@ export interface ReconcileResult {
   content: string;
 }
 
-/** Score `candidates` against the corpus's live distinct entities on `axis`. Read-only. */
+interface MatchAxisThresholds {
+  limit: number;
+  reuseAt: number;
+  newAt: number;
+}
+
+/**
+ * Score `candidates` against the corpus's live distinct entities on `axis`. Read-only.
+ *
+ * `ran` reports whether entityScorer actually executed on this axis (i.e. the axis had
+ * candidates AND the corpus is known) — used by the caller to decide which axis's rankFn
+ * is meaningful when reducing to a single top-level ReconcileResult.rankFn (an axis that
+ * short-circuited never touched the embeddings/jaccard path, so its rankFn is a default,
+ * not a fact about what ran).
+ */
 async function matchAxis(
   session: Session,
   args: ReconcileArgs,
   axis: EntityAxis,
   candidates: string[] | undefined,
   known: boolean,
-  aliasMap: import("../retrieval/key-alias.js").KeyAliasMap,
+  aliasMap: KeyAliasMap,
   now: number,
   deps: ReadDeps,
-  limit: number,
-  reuseAt: number,
-  newAt: number,
+  thresholds: MatchAxisThresholds,
   warnings: string[],
-): Promise<{ matches: ReconcileMatch[]; rankFn: string }> {
-  if (!candidates?.length) return { matches: [], rankFn: deps.embeddings.rankFn };
-  const existing = known
-    ? distinctEntities(session, args.corpus, axis, deps, aliasMap, now).map((e) => e.value)
-    : [];
+): Promise<{ matches: ReconcileMatch[]; rankFn: string; ran: boolean }> {
+  if (!candidates?.length) return { matches: [], rankFn: deps.embeddings.rankFn, ran: false };
+  if (!known) {
+    // Unknown corpus: existing is always empty, so every disposition is "new" regardless
+    // of score — skip the entityScorer warm-up entirely rather than wasting embedding work.
+    const matches: ReconcileMatch[] = candidates.map((candidate) => ({
+      candidate, suggestions: [], disposition: "new" as const,
+    }));
+    return { matches, rankFn: deps.embeddings.rankFn, ran: false };
+  }
+  const { limit, reuseAt, newAt } = thresholds;
+  const existing = distinctEntities(session, args.corpus, axis, deps, aliasMap, now).map((e) => e.value);
   const { rankFn, warnings: w, scoreOne } = await entityScorer([...candidates, ...existing], deps);
   warnings.push(...w);
   const matches: ReconcileMatch[] = candidates.map((candidate) => {
@@ -73,7 +93,7 @@ async function matchAxis(
     const disposition: ReconcileDisposition = top >= reuseAt ? "reuse" : top <= newAt ? "new" : "uncertain";
     return { candidate, suggestions, disposition };
   });
-  return { matches, rankFn };
+  return { matches, rankFn, ran: true };
 }
 
 function renderContent(corpus: string, subjects: ReconcileMatch[], keys: ReconcileMatch[]): string {
@@ -112,20 +132,34 @@ export async function reconcile(
   const known = session.listCorpora().some((c) => c.id === args.corpus);
   const warnings: string[] = [];
   const now = Date.now(); // ONE instant, shared by alias load + both axis enumerations
-  const aliasMap = known ? loadAliasContext(session, args.corpus, now, deps.keyCardinality).aliasMap : {};
+  const aliasContext = known
+    ? loadAliasContext(session, args.corpus, now, deps.keyCardinality)
+    : { aliasMap: {}, selfAliases: [], warnings: [] };
+  warnings.push(...aliasContext.warnings);
+  const aliasMap = aliasContext.aliasMap;
 
-  const s = await matchAxis(session, args, "subject", args.subjects, known, aliasMap, now, deps, limit, reuseAt, newAt, warnings);
-  const k = await matchAxis(session, args, "key", args.keys, known, aliasMap, now, deps, limit, reuseAt, newAt, warnings);
+  const thresholds: MatchAxisThresholds = { limit, reuseAt, newAt };
+  const s = await matchAxis(session, args, "subject", args.subjects, known, aliasMap, now, deps, thresholds, warnings);
+  const k = await matchAxis(session, args, "key", args.keys, known, aliasMap, now, deps, thresholds, warnings);
 
   if (!known) warnings.push(`corpus "${args.corpus}" does not exist — all candidates are new`);
 
   const content = renderContent(args.corpus, s.matches, k.matches);
 
+  // Reduce two per-axis rankFns to one: only axes that actually ran entityScorer are
+  // meaningful; a jaccard fallback on EITHER of them must be reflected, since a
+  // short-circuited axis (empty candidates, or unknown corpus) never touched the
+  // embeddings/jaccard path and its rankFn is just a default, not a fact about what ran.
+  const ranAxes = [s, k].filter((axisResult) => axisResult.ran);
+  const rankFn = ranAxes.some((axisResult) => axisResult.rankFn === "jaccard")
+    ? "jaccard"
+    : (ranAxes[0]?.rankFn ?? deps.embeddings.rankFn);
+
   return {
     corpus: args.corpus,
     subjects: s.matches,
     keys: k.matches,
-    rankFn: s.rankFn,
+    rankFn,
     warnings,
     content,
   };

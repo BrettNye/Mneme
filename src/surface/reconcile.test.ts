@@ -1,8 +1,44 @@
-import { describe, it, expect } from "vitest";
-import { freshSession, jaccardDeps } from "./test-support.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { freshSession, jaccardDeps, makeFakeHybridDeps } from "./test-support.js";
+import { _resetEmbeddingsForTest } from "./embeddings.js";
 import { reconcile } from "./reconcile.js";
 
 describe("reconcile", () => {
+  afterEach(() => {
+    _resetEmbeddingsForTest();
+  });
+
+  it("propagates alias-load warnings (variant cardinality shadow) into ReconcileResult.warnings", async () => {
+    const session = freshSession();
+    session.createCorpus({ id: "c" });
+    session.write("c", { subject: "user:brett", key: "editor", value: "vim" });
+    session.write("c", { subject: "user:brett", key: "preferred_editor", value: "emacs" });
+    session.write("c", { subject: "key:editor", key: "alias-of", value: "preferred_editor" });
+
+    // keyCardinality has "editor" marked as multi — but there's an alias for it,
+    // which loadAliasContext should flag as a cardinality/variant-shadow warning.
+    const deps = { ...jaccardDeps, keyCardinality: { editor: "multi" as const } };
+    const r = await reconcile(session, { corpus: "c", subjects: ["user:brett"] }, deps);
+
+    expect(r.warnings.some((w) => /cardinality|variant/.test(w))).toBe(true);
+  });
+
+  it("rankFn reflects a jaccard fallback on the keys axis even when subjects is empty (short-circuited)", async () => {
+    const session = freshSession();
+    session.createCorpus({ id: "c" });
+    session.write("c", { subject: "project:alpha", key: "status", value: "active" });
+
+    const deps = await makeFakeHybridDeps();
+    // Force warmValues to throw so the keys-axis entityScorer falls back to jaccard.
+    vi.spyOn(deps.embeddings.adapter!, "embed").mockRejectedValue(new Error("dim mismatch"));
+
+    // subjects omitted entirely → matchAxis short-circuits without calling entityScorer.
+    const r = await reconcile(session, { corpus: "c", keys: ["status"] }, deps);
+
+    expect(r.rankFn).toBe("jaccard");
+    expect(r.warnings.some((w) => w.includes("warm-up failed"))).toBe(true);
+  });
+
   it("reuses a near-duplicate subject and mints a genuinely-new one", async () => {
     const session = freshSession();
     session.createCorpus({ id: "c" });
