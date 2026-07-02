@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { remember, listCorpora } from "./remember.js";
 import { freshSession, jaccardDeps, makeFakeHybridDeps } from "./test-support.js";
 import { _resetEmbeddingsForTest } from "./embeddings.js";
-import { keyCensus } from "./census.js";
+import { keyCensus, subjectCensus } from "./census.js";
 
 // ── keyCensus ─────────────────────────────────────────────────────────────────
 
@@ -211,6 +211,59 @@ describe("keyCensus", () => {
     expect(r.rankFn).toBe("jaccard");
     // Should still have scored candidates using jaccard fallback
     expect(r.candidates.length).toBeGreaterThan(0);
+  });
+});
+
+// ── subjectCensus ────────────────────────────────────────────────────────────
+
+describe("subjectCensus", () => {
+  afterEach(() => {
+    _resetEmbeddingsForTest();
+  });
+
+  it("subjectCensus scores fragmented subjects and stays advisory", async () => {
+    const s = freshSession();
+    const corpus = "c";
+    // seed near-dup subjects "project:crewtracks" and "project:crewTracks-liner-build"
+    remember(s, { subject: "project:crewtracks", key: "status", value: "active", corpus });
+    remember(s, { subject: "project:crewTracks-liner-build", key: "status", value: "active", corpus });
+    const r = await subjectCensus(s, { corpus }, jaccardDeps);
+    expect(r.subjects.length).toBeGreaterThanOrEqual(2);
+    expect(r.candidates[0].score).toBeGreaterThan(0);
+    expect(r.content).not.toContain("alias-of"); // advisory, not a ratification shape
+  });
+
+  it("reports distinct subjects with claim counts, sorted desc", async () => {
+    const s = freshSession();
+    const corpus = "subject-census-counts";
+    remember(s, { subject: "user:brett", key: "editor", value: "vim", corpus });
+    remember(s, { subject: "user:brett", key: "lang", value: "TypeScript", corpus });
+    remember(s, { subject: "user:alice", key: "lang", value: "Rust", corpus });
+    const r = await subjectCensus(s, { corpus }, jaccardDeps);
+    const brettEntry = r.subjects.find((x) => x.subject === "user:brett");
+    const aliceEntry = r.subjects.find((x) => x.subject === "user:alice");
+    expect(brettEntry).toBeDefined();
+    expect(brettEntry!.claims).toBe(2);
+    expect(aliceEntry).toBeDefined();
+    expect(aliceEntry!.claims).toBe(1);
+  });
+
+  it("content is advisory: names the fragmented pair and points at reconcile", async () => {
+    const s = freshSession();
+    const corpus = "subject-census-content";
+    remember(s, { subject: "project:crewtracks", key: "status", value: "active", corpus });
+    remember(s, { subject: "project:crewTracks-liner-build", key: "status", value: "active", corpus });
+    const r = await subjectCensus(s, { corpus }, jaccardDeps);
+    expect(r.content).toContain("reconcile");
+    expect(r.content).toContain("project:crewtracks");
+  });
+
+  it("unknown corpus returns empty report and does NOT create it", async () => {
+    const s = freshSession();
+    const r = await subjectCensus(s, { corpus: "never-seen-subject" }, jaccardDeps);
+    expect(r.subjects).toEqual([]);
+    expect(r.candidates).toEqual([]);
+    expect(listCorpora(s).corpora.map((c) => c.id)).not.toContain("never-seen-subject");
   });
 });
 

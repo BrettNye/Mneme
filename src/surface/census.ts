@@ -162,3 +162,90 @@ export async function keyCensus(
     content,
   };
 }
+
+export interface SubjectCensusResult {
+  corpus: string;
+  subjects: { subject: string; claims: number }[];
+  candidates: { a: string; b: string; score: number }[]; // sorted desc, truncated to limit
+  rankFn: string;
+  warnings: string[];
+  content: string; // advisory-only text; no alias-of ratification shape
+}
+
+/**
+ * Read-only census over the subject axis. Symmetric to keyCensus but the content
+ * is ADVISORY ONLY — there is no subject-alias mechanism, so unlike keyCensus this
+ * never composes a `remember(... alias-of ...)` ratification shape. Instead it
+ * names near-duplicate subject pairs and points at `reconcile` as the ingest-time
+ * fix for fragmented subjects.
+ *
+ * Census never writes and never logs to the recall-log.
+ */
+export async function subjectCensus(
+  session: Session,
+  args: CensusArgs & { corpus: string },
+  deps: ReadDeps,
+): Promise<SubjectCensusResult> {
+  const corpus = args.corpus;
+  const limit = args.limit ?? 20;
+  const embeddings: EmbeddingState = deps.embeddings;
+
+  const emptyResult: SubjectCensusResult = {
+    corpus,
+    subjects: [],
+    candidates: [],
+    rankFn: embeddings.rankFn,
+    warnings: [],
+    content: "",
+  };
+
+  // Read-only: unknown corpus → empty report, no corpus created
+  if (!session.listCorpora().some((c) => c.id === corpus)) {
+    return emptyResult;
+  }
+
+  const { entities, candidates, rankFn: effectiveRankFn, warnings } = await censusCore(
+    "subject",
+    session,
+    corpus,
+    deps,
+    limit,
+  );
+
+  const subjects = entities.map(({ value, claims }) => ({ subject: value, claims }));
+
+  // ── Composed content: advisory only, no alias-of ratification shape ───────────
+  const lines: string[] = [
+    `## Subject Census: corpus "${corpus}"`,
+    "",
+    `**Subjects (${subjects.length}):**`,
+  ];
+
+  for (const { subject, claims } of subjects) {
+    lines.push(`- \`${subject}\`: ${claims} claim${claims !== 1 ? "s" : ""}`);
+  }
+
+  if (candidates.length > 0) {
+    lines.push("", `**Top subject-pair candidates (${candidates.length}):**`);
+    for (const { a, b, score } of candidates) {
+      lines.push(`- \`${a}\` ↔ \`${b}\`: ${score.toFixed(3)}`);
+    }
+    lines.push(
+      "",
+      "These subjects look like they may refer to one entity. There is no subject-alias " +
+        "mechanism — canonicalize at ingest time via `reconcile` instead of splitting claims " +
+        "across near-duplicate subjects.",
+    );
+  }
+
+  const content = lines.join("\n");
+
+  return {
+    corpus,
+    subjects,
+    candidates,
+    rankFn: effectiveRankFn,
+    warnings,
+    content,
+  };
+}
