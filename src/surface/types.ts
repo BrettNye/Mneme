@@ -63,6 +63,9 @@ export interface CorpusSpec {
   contradictionPolicy?: ContradictionPolicy;
   /** Per-source scalar→Beta pseudocounts; merged over DEFAULT_SCALAR_PSEUDOCOUNT. */
   scalarPseudocount?: Partial<Record<Source, number>>;
+  /** Per-key cardinality declaration. Undeclared keys default to "single" (⊥-eligible).
+   *  Persisted into ClaimSchema.keyCardinality; honored per-corpus by the read path. */
+  keyCardinality?: Record<string, "single" | "multi">;
 }
 
 export interface SessionOptions {

@@ -8,6 +8,7 @@
  */
 import { distinctEntities, entityScorer, type EntityAxis } from "./entities.js";
 import { loadAliasContext } from "./recall.js";
+import { resolveKeyCardinality } from "./cardinality.js";
 import type { Session, ReadDeps } from "./types.js";
 import type { KeyAliasMap } from "../retrieval/key-alias.js";
 
@@ -132,15 +133,20 @@ export async function reconcile(
   const known = session.listCorpora().some((c) => c.id === args.corpus);
   const warnings: string[] = [];
   const now = Date.now(); // ONE instant, shared by alias load + both axis enumerations
+  // Resolve effective cardinality ONCE — the corpus's own schema.keyCardinality wins over
+  // deps.keyCardinality (per-key) — and thread it into both the alias load and the
+  // live-entity enumeration so both honor the per-corpus declaration identically.
+  const effective = resolveKeyCardinality(session, args.corpus, deps.keyCardinality);
   const aliasContext = known
-    ? loadAliasContext(session, args.corpus, now, deps.keyCardinality)
+    ? loadAliasContext(session, args.corpus, now, effective)
     : { aliasMap: {}, selfAliases: [], warnings: [] };
   warnings.push(...aliasContext.warnings);
   const aliasMap = aliasContext.aliasMap;
+  const deps2: ReadDeps = { ...deps, keyCardinality: effective };
 
   const thresholds: MatchAxisThresholds = { limit, reuseAt, newAt };
-  const s = await matchAxis(session, args, "subject", args.subjects, known, aliasMap, now, deps, thresholds, warnings);
-  const k = await matchAxis(session, args, "key", args.keys, known, aliasMap, now, deps, thresholds, warnings);
+  const s = await matchAxis(session, args, "subject", args.subjects, known, aliasMap, now, deps2, thresholds, warnings);
+  const k = await matchAxis(session, args, "key", args.keys, known, aliasMap, now, deps2, thresholds, warnings);
 
   if (!known) warnings.push(`corpus "${args.corpus}" does not exist — all candidates are new`);
 

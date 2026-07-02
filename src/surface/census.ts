@@ -9,7 +9,11 @@
  * that lived in recall.ts.
  */
 import { distinctEntities, entityScorer, type EntityAxis } from "./entities.js";
-import { loadAliasContext, type EmbeddingState } from "./recall.js"; // hoisted fn; runtime-only call → cycle-safe
+import { loadAliasContext, MCP_EVIDENCE_POOLING_RULE, type EmbeddingState } from "./recall.js"; // hoisted fn; runtime-only call → cycle-safe
+import { resolveKeyCardinality, cardinalitySafetyWarnings } from "./cardinality.js";
+import { pipe, leaf } from "../mneme.js";
+import { canonicalReadStages } from "../retrieval/read-pipeline.js";
+import type { Corpus } from "../algebra/types.js";
 import type { Session, ReadDeps } from "./types.js";
 
 export interface CensusArgs {
@@ -42,8 +46,9 @@ export async function censusCore(
   limit: number,
 ) {
   const now = Date.now(); // ONE instant, shared by alias load + enumeration (matches keyCensus)
-  const aliasContext = loadAliasContext(session, corpus, now, deps.keyCardinality);
-  const entities = distinctEntities(session, corpus, axis, deps, aliasContext.aliasMap, now);
+  const effective = resolveKeyCardinality(session, corpus, deps.keyCardinality);
+  const aliasContext = loadAliasContext(session, corpus, now, effective);
+  const entities = distinctEntities(session, corpus, axis, { ...deps, keyCardinality: effective }, aliasContext.aliasMap, now);
   const { rankFn, warnings, scoreOne } = await entityScorer(entities.map((e) => e.value), deps);
 
   const pairs: { a: string; b: string; score: number }[] = [];
@@ -61,6 +66,7 @@ export async function censusCore(
     rankFn,
     warnings: [...aliasContext.warnings, ...warnings],
     aliasContext,
+    effective,
   };
 }
 
@@ -100,7 +106,7 @@ export async function keyCensus(
   }
 
   // ── Enumerate + score (shared core: single alias load, single now) ────────────
-  const { entities, candidates, rankFn: effectiveRankFn, warnings, aliasContext } = await censusCore(
+  const { entities, candidates, rankFn: effectiveRankFn, warnings, aliasContext, effective } = await censusCore(
     "key",
     session,
     corpus,
@@ -108,6 +114,28 @@ export async function keyCensus(
     limit,
   );
   const { aliasMap, selfAliases } = aliasContext;
+
+  // ── Cardinality safety check (best-effort; never throws into keyCensus) ───────
+  // One extra lightweight query over the pre-⊥ (τ_valid + ⊕_dedupe) corpus — no
+  // ranking/warm-up — so a single-cardinality key holding ≥2 distinct values is
+  // surfaced as a mass-deprecation safety warning before ⊥ silently drops one.
+  try {
+    const now = Date.now(); // best-effort re-check; a fresh now is acceptable here
+    const canon = canonicalReadStages({
+      evaluationInstant: now,
+      keyCardinality: effective,
+      keyAliases: aliasMap,
+      evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
+    });
+    const preContra = session.mneme.query<Corpus>(
+      corpus,
+      pipe(leaf(corpus), canon[0], canon[1]),
+      { evaluationClock: now },
+    );
+    warnings.push(...cardinalitySafetyWarnings(preContra, effective, aliasMap));
+  } catch (e) {
+    warnings.push(`cardinality-safety check failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   const keys = entities.map(({ value, claims }) => ({ key: value, claims }));
 

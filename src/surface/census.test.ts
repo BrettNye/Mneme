@@ -267,6 +267,18 @@ describe("subjectCensus", () => {
   });
 });
 
+describe("keyCensus - cardinality safety warning", () => {
+  it("keyCensus warns on a single-cardinality key with >=2 distinct values", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    s.write("c", { subject: "proj", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    s.write("c", { subject: "proj", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const r = await keyCensus(s, { corpus: "c" }, jaccardDeps);
+    expect(r.warnings.some((w) => /single-cardinality.*plan/.test(w))).toBe(true);
+    s.close();
+  });
+});
+
 describe("census - scalar pooling under aliases", () => {
   it("key_census does not crash on the same corpus shape", async () => {
     const s = freshSession();

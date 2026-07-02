@@ -165,14 +165,14 @@ describe("recall — topScore / abstained / rankFn fields", () => {
     expect(r.rankFn).toBe("jaccard");
   });
 
-  it("exactly ONE mneme.query call per recall (single execution)", async () => {
+  it("exactly TWO mneme.query calls per recall (main ranked query + lightweight cardinality-safety query)", async () => {
     const s = freshSession();
     const corpus = "onequery-corpus";
     remember(s, { subject: "s", key: "k", value: "test value", corpus });
 
     const querySpy = vi.spyOn(s.mneme, "query");
     await recall(s, { about: "test", corpus }, jaccardDeps);
-    expect(querySpy).toHaveBeenCalledTimes(1);
+    expect(querySpy).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -511,6 +511,27 @@ describe("recall — coverage annotation + provenance handles", () => {
     expect(r.matches[0].id.length).toBeGreaterThan(0);
     expect(r.matches[0].tags).toContain("session:s1");
     s.close();
+  });
+});
+
+describe("recall — cardinality safety warning", () => {
+  it("recall warns when a single-cardinality key holds >=2 distinct values, and multi suppresses it", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    s.write("c", { subject: "proj", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    s.write("c", { subject: "proj", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const single = await recall(s, { about: "plan", corpus: "c" }, jaccardDeps);
+    expect(single.warnings?.some((w) => /single-cardinality.*plan.*distinct values/.test(w))).toBe(true);
+    s.close();
+
+    const s2 = freshSession();
+    s2.createCorpus({ id: "c", keyCardinality: { plan: "multi" } });
+    s2.write("c", { subject: "proj", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    s2.write("c", { subject: "proj", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const multi = await recall(s2, { about: "plan", corpus: "c" }, jaccardDeps);
+    expect(multi.warnings?.some((w) => /single-cardinality/.test(w))).toBeFalsy();
+    expect(multi.matches.length).toBe(2); // both coexist
+    s2.close();
   });
 });
 
