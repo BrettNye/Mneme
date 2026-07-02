@@ -277,6 +277,26 @@ describe("keyCensus - cardinality safety warning", () => {
     expect(r.warnings.some((w) => /single-cardinality.*plan/.test(w))).toBe(true);
     s.close();
   });
+
+  it("keyCensus exposes the structured cardinalityCollisions list", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    s.write("c", { subject: "proj", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    s.write("c", { subject: "proj", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const r = await keyCensus(s, { corpus: "c" }, jaccardDeps);
+    expect(r.cardinalityCollisions).toEqual([
+      { subject: "proj", key: "plan", distinctValues: 2, totalClaims: 2 },
+    ]);
+    s.close();
+  });
+
+  it("keyCensus cardinalityCollisions is empty when there is no collision", async () => {
+    const s = freshSession();
+    const corpus = "census-no-collision";
+    remember(s, { subject: "user:brett", key: "editor", value: "vim", corpus });
+    const r = await keyCensus(s, { corpus }, jaccardDeps);
+    expect(r.cardinalityCollisions).toEqual([]);
+  });
 });
 
 describe("census - scalar pooling under aliases", () => {

@@ -8,6 +8,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { remember, recall, listCorpora, keyCensus, subjectCensus, reconcile, explainRecall, type RecallTrace } from "../surface/index.js";
+// Not (yet) re-exported from ../surface/index.js — imported directly per house
+// convention (the mcp layer may import surface modules directly).
+import { audit } from "../surface/audit.js";
 import { openMnemeEngine } from "./engine.js";
 import { appendRecallLog } from "./recall-log.js";
 
@@ -23,6 +26,7 @@ const MNEME_WRITE_SCHEMA = `Mneme stores typed claims (subject, key, value) as d
 - RECONCILE ENTITIES BEFORE MINTING. Before writing a new subject or key, run reconcile (and subject_census to audit) to reuse an existing canonical entity; entity fragmentation is the #1 ingestion failure mode.
 - If recall/key_census warns that a single-cardinality key holds ≥2 distinct values that should coexist, declare it multi with declare_cardinality.
 - Pass explain: true to recall to audit why each claim was served / merged / deprecated / dropped.
+- Run audit periodically to review proposed canonicalizations (aliases / cardinality) — propose-then-confirm, never auto-applied.
 
 The corpus auto-partitions per repo (default = project dir name); pass corpus only to cross that boundary.`;
 
@@ -76,6 +80,15 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         id: z.string().describe("the committed claim's id"),
         status: z.string().describe("committed | rejected | duplicate"),
         corpus: z.string().describe("the corpus the claim was written to"),
+        supersession: z
+          .object({
+            action: z.string().describe("committed | superseded | merged | duplicate"),
+            deprecatedIds: z.array(z.string()).describe("live claims this write deprecated (action=superseded)"),
+            mergedInto: z.string().optional().describe("action=merged/duplicate: the surviving claim it was absorbed into"),
+            reason: z.any().optional().describe("vocabulary-aligned disposition reason"),
+          })
+          .optional()
+          .describe("best-effort attribution of what this write did to its (subject,key) group"),
       },
     },
     async (a) => {
@@ -89,9 +102,20 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         scope: a.scope,
         validFrom: a.validFrom,
       });
-      const structuredContent = { id: r.id, status: r.status, corpus: r.corpus };
+      const structuredContent = { id: r.id, status: r.status, corpus: r.corpus, supersession: r.supersession };
+      let text = `${r.status} ${r.id} in corpus '${r.corpus}'`;
+      if (r.supersession && r.supersession.action !== "committed") {
+        if (r.supersession.action === "superseded") {
+          const n = r.supersession.deprecatedIds.length;
+          text += ` (superseded ${n} earlier claim${n === 1 ? "" : "s"})`;
+        } else if (r.supersession.action === "merged" && r.supersession.mergedInto) {
+          text += ` (merged into ${r.supersession.mergedInto})`;
+        } else if (r.supersession.action === "duplicate" && r.supersession.mergedInto) {
+          text += ` (duplicate of ${r.supersession.mergedInto})`;
+        }
+      }
       return {
-        content: [{ type: "text" as const, text: `${r.status} ${r.id} in corpus '${r.corpus}'` }],
+        content: [{ type: "text" as const, text }],
         structuredContent,
       };
     },
@@ -476,6 +500,68 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
       return {
         content: [{ type: "text" as const, text: `declared on '${resolvedCorpus}': ${JSON.stringify(declared)}` }],
         structuredContent: { corpus: resolvedCorpus, keyCardinality: declared },
+      };
+    },
+  );
+
+  server.registerTool(
+    "audit",
+    {
+      title: "Audit a corpus for canonicalization opportunities",
+      description:
+        "Whole-corpus maintenance pass: composes key_census, subject_census, and single-cardinality collisions into one ranked list of proposed canonicalizations " +
+        "(key aliases, subject fragmentation, cardinality declarations). PROPOSE ONLY — never applies anything; review each suggestedAction and apply it explicitly " +
+        "(e.g. declare_cardinality) to confirm.",
+      inputSchema: {
+        corpus: z.string().optional().describe(`corpus to audit; defaults to '${defaultCorpus}'`),
+        limit: z.number().int().positive().optional().describe("max candidates per underlying census to consider (default 20)"),
+      },
+      // Pure read: no state change, repeatable. Charter I3 — propose-then-confirm,
+      // never auto-applied.
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: {
+        corpus: z.string(),
+        proposals: z.array(
+          z.object({
+            kind: z.enum(["key-alias", "subject-fragmentation", "cardinality-declare"]),
+            entities: z.array(z.string()).describe("key pair / subject pair / [subject, key], depending on kind"),
+            score: z.number().optional().describe("similarity score for alias/fragmentation proposals"),
+            claimsAffected: z.number().describe("ranking signal — claims touched by this proposal"),
+            suggestedAction: z.string().describe("ready-to-apply action string — never auto-run by audit itself"),
+            detail: z.string(),
+          }),
+        ).describe("ranked proposed canonicalizations, desc by claimsAffected then score"),
+        rankFn: z.string().describe("similarity function used for scoring"),
+        warnings: z.array(z.string()).describe("non-fatal warnings from alias loading or key/subject-pair scoring"),
+        content: z.string().describe("composed human-readable maintenance report"),
+      },
+    },
+    async (a) => {
+      const resolvedCorpus = a.corpus ?? defaultCorpus;
+
+      // Embeddings lazy: first audit pays the init cost; boot stays instant.
+      const embeddings = await initEmbeddings();
+      const r = await audit(session, {
+        corpus: resolvedCorpus,
+        limit: a.limit,
+      }, { embeddings, keyCardinality });
+
+      // Surface warnings to stderr (house convention: tools stay pure; server does I/O).
+      if (r.warnings.length > 0) {
+        for (const w of r.warnings) {
+          console.error(`[mneme/audit] ${w}`);
+        }
+      }
+
+      return {
+        content: [{ type: "text" as const, text: r.content || "(empty corpus — no proposals)" }],
+        structuredContent: {
+          corpus: r.corpus,
+          proposals: r.proposals,
+          rankFn: r.rankFn,
+          warnings: r.warnings,
+          content: r.content,
+        },
       };
     },
   );

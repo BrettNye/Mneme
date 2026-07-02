@@ -319,7 +319,7 @@ describe("mneme MCP server (key_census wiring)", () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toContain("key_census");
     expect(names).toEqual(
-      ["declare_cardinality", "key_census", "list_corpora", "reconcile", "recall", "remember", "subject_census"].sort(),
+      ["audit", "declare_cardinality", "key_census", "list_corpora", "reconcile", "recall", "remember", "subject_census"].sort(),
     );
     await client.close();
   });
@@ -823,6 +823,150 @@ describe("mneme MCP server (declare_cardinality wiring)", () => {
       (after.structuredContent?.warnings as string[] | undefined)?.some((w) => /single-cardinality/.test(w)),
     ).toBeFalsy();
 
+    await client.close();
+  });
+});
+
+// ── remember supersession wiring tests ──────────────────────────────────────────
+
+describe("mneme MCP server (remember supersession wiring)", () => {
+  it("remember outputSchema advertises an optional supersession field", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const rememberTool = tools.find((t) => t.name === "remember");
+    expect(rememberTool?.outputSchema).toBeDefined();
+    const schema = rememberTool!.outputSchema as { properties?: Record<string, unknown> };
+    expect("supersession" in (schema.properties ?? {})).toBe(true);
+    await client.close();
+  });
+
+  it("a distinct value under a single-cardinality key returns supersession.action=superseded with deprecatedIds", async () => {
+    const { client } = await connected("supersession-test");
+
+    const first = (await client.callTool({
+      name: "remember",
+      arguments: { subject: "proj:x", key: "plan", value: "alpha", corpus: "supersession-test" },
+    })) as { structuredContent?: { id: string; supersession?: { action: string; deprecatedIds: string[] } } };
+    expect(first.structuredContent?.supersession?.action).toBe("committed");
+    const firstId = first.structuredContent?.id;
+
+    const second = (await client.callTool({
+      name: "remember",
+      arguments: { subject: "proj:x", key: "plan", value: "bravo", corpus: "supersession-test" },
+    })) as {
+      structuredContent?: { id: string; supersession?: { action: string; deprecatedIds: string[] } };
+      content: { type: string; text: string }[];
+    };
+
+    expect(second.structuredContent?.supersession?.action).toBe("superseded");
+    expect(second.structuredContent?.supersession?.deprecatedIds).toContain(firstId);
+    expect(second.structuredContent?.supersession?.deprecatedIds.length).toBeGreaterThan(0);
+    expect(second.content[0].text).toMatch(/superseded 1 earlier claim/);
+
+    await client.close();
+  });
+});
+
+// ── audit wiring tests ───────────────────────────────────────────────────────────
+
+describe("mneme MCP server (audit wiring)", () => {
+  it("advertises audit as read-only, idempotent, closed-world", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.audit).toBeDefined();
+    expect(byName.audit.annotations?.readOnlyHint).toBe(true);
+    expect(byName.audit.annotations?.idempotentHint).toBe(true);
+    expect(byName.audit.annotations?.openWorldHint).toBe(false);
+    expect(byName.audit.outputSchema).toBeDefined();
+    await client.close();
+  });
+
+  it("audit structuredContent has all required fields and defaults corpus", async () => {
+    const { client } = await connected("audit-default-corpus");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user:brett", key: "editor", value: "vim" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user:brett", key: "preferred_editor", value: "emacs" },
+    });
+
+    const result = (await client.callTool({
+      name: "audit",
+      arguments: {},
+    })) as {
+      structuredContent?: {
+        corpus: string;
+        proposals: { kind: string; entities: string[]; claimsAffected: number; suggestedAction: string; detail: string }[];
+        rankFn: string;
+        warnings: string[];
+        content: string;
+      };
+    };
+
+    const sc = result.structuredContent;
+    expect(sc).toBeDefined();
+    expect(sc?.corpus).toBe("audit-default-corpus");
+    expect(Array.isArray(sc?.proposals)).toBe(true);
+    expect(typeof sc?.rankFn).toBe("string");
+    expect(Array.isArray(sc?.warnings)).toBe(true);
+    expect(typeof sc?.content).toBe("string");
+    expect(sc?.content).toContain("Audit");
+
+    await client.close();
+  });
+
+  it("audit proposes a cardinality-declare for a single-cardinality collision; the tool itself writes nothing; declare_cardinality then clears it on re-audit", async () => {
+    const { client } = await connected("audit-cc");
+
+    async function callTool(name: string, args: Record<string, unknown>) {
+      return (await client.callTool({ name, arguments: args })) as {
+        structuredContent?: Record<string, unknown>;
+      };
+    }
+
+    await callTool("remember", { subject: "proj", key: "plan", value: "alpha", corpus: "audit-cc" });
+    await callTool("remember", { subject: "proj", key: "plan", value: "bravo", corpus: "audit-cc" });
+
+    const before = await callTool("recall", { about: "plan", subject: "proj", key: "plan", corpus: "audit-cc" });
+    const countBefore = (before.structuredContent?.matches as unknown[]).length;
+
+    const auditResult1 = await callTool("audit", { corpus: "audit-cc" });
+    const proposals1 = (auditResult1.structuredContent?.proposals ?? []) as { kind: string; entities: string[] }[];
+    const cardProposal = proposals1.find((p) => p.kind === "cardinality-declare" && p.entities.includes("plan"));
+    expect(cardProposal).toBeDefined();
+
+    // Charter I3: audit is propose-then-confirm, never auto-applied — claim count
+    // and served matches must be unchanged before/after the audit call itself.
+    const afterAudit = await callTool("recall", { about: "plan", subject: "proj", key: "plan", corpus: "audit-cc" });
+    const countAfterAudit = (afterAudit.structuredContent?.matches as unknown[]).length;
+    expect(countAfterAudit).toBe(countBefore);
+
+    // Applying the proposal is a separate, explicit agent action...
+    await callTool("declare_cardinality", { corpus: "audit-cc", cardinality: { plan: "multi" } });
+
+    // ...which clears the proposal on re-audit.
+    const auditResult2 = await callTool("audit", { corpus: "audit-cc" });
+    const proposals2 = (auditResult2.structuredContent?.proposals ?? []) as { kind: string; entities: string[] }[];
+    expect(proposals2.some((p) => p.kind === "cardinality-declare" && p.entities.includes("plan"))).toBe(false);
+
+    await client.close();
+  });
+});
+
+// ── MNEME_WRITE_SCHEMA instructions ────────────────────────────────────────────
+
+describe("mneme MCP server (instructions)", () => {
+  it("server instructions reference audit as a periodic maintenance pass", async () => {
+    const { client } = await connected();
+    const instructions = client.getInstructions();
+    expect(instructions).toBeDefined();
+    expect(instructions).toMatch(/run audit periodically/i);
+    expect(instructions).toMatch(/propose-then-confirm/i);
+    expect(instructions).toMatch(/never auto-applied/i);
     await client.close();
   });
 });
