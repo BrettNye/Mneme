@@ -131,4 +131,25 @@ describe("cli run", () => {
     expect(msg).toContain("inspect");
     err.mockRestore();
   });
+
+  it("explain prints stage counts and dispositions", async () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "ex.db");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await run(["corpus", "create", "c", "--db", db])).toBe(0);
+    expect(await run(["commit", "c", "--subject", "project:mneme", "--key", "status", "--value", "deploy in progress", "--db", db])).toBe(0);
+    const code = await run(["explain", "deploy", "--corpus", "c", "--db", db]);
+    expect(code).toBe(0);
+    const output = log.mock.calls.flat().join("\n");
+    expect(output).toMatch(/served|candidates|afterTau/i);
+    log.mockRestore();
+    err.mockRestore();
+  });
+
+  it("explain without <about> exits 1", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["explain"]);
+    expect(code).toBe(1);
+    err.mockRestore();
+  });
 });

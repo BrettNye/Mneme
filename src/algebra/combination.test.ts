@@ -1,4 +1,4 @@
-import { oplusDedupe, oplusSynthesizeAs } from "./combination.js";
+import { dedupeGroups, oplusDedupe, oplusSynthesizeAs } from "./combination.js";
 import { corpusOf } from "./types.js";
 
 // -------------------------------------------------------------------
@@ -75,6 +75,33 @@ const scalarClaim = (
     },
     evidence: [],
     scope: {},
+  }) as any;
+
+/** Minimal claim for dedupeGroups tests (configurable subject/key, uses valid.from for representative ordering). */
+const makeClaim = (opts: {
+  id: string;
+  subject: string;
+  key: string;
+  value: string;
+  validFrom: number;
+  scopeHash?: string;
+  source?: string;
+}) =>
+  ({
+    id: opts.id,
+    subject: opts.subject,
+    key: opts.key,
+    scopeHash: opts.scopeHash ?? "_",
+    value: opts.value,
+    source: opts.source ?? "workflow",
+    confidence: {
+      distribution: "beta",
+      parameters: { alpha: 3, beta: 2 },
+      raw: 0.6,
+    },
+    evidence: [],
+    scope: {},
+    valid: { from: opts.validFrom, to: null },
   }) as any;
 
 // -------------------------------------------------------------------
@@ -411,4 +438,30 @@ it("similarity mode with max_mean returns the true max-mean winner within a simi
   expect(out.claims).toHaveLength(1);
   // max_mean should pick the one with mean 0.9
   expect(out.claims[0].confidence.parameters).toEqual({ alpha: 9, beta: 1 });
+});
+
+// ===================================================================
+// dedupeGroups: exposes oplusDedupe's merge attributions
+// ===================================================================
+describe("dedupeGroups", () => {
+  it("maps merged-away claims to their surviving representative and matches oplusDedupe survivors", () => {
+    // Two token-similar values on the same (subject,key) → single cluster; latest valid.from wins.
+    const older = makeClaim({ id: "c-old", subject: "s", key: "k", value: "deploy the web api", validFrom: 1 });
+    const newer = makeClaim({ id: "c-new", subject: "s", key: "k", value: "deploy the web api now", validFrom: 2 });
+    const other = makeClaim({ id: "c-other", subject: "s", key: "k2", value: "unrelated", validFrom: 1 });
+    const c = corpusOf([older, newer, other]);
+
+    const { survivors, mergedInto } = dedupeGroups(
+      "rule_weighted_avg", undefined, { similarity: { fn: "jaccard", cutoff: 0.5 } },
+    )(c);
+
+    // c-old merged into the newer representative (valid.from DESC → c-new is representative)
+    expect(mergedInto.get("c-old")).toBe("c-new");
+    expect(mergedInto.has("c-new")).toBe(false);
+    expect(mergedInto.has("c-other")).toBe(false);
+
+    // survivors === what oplusDedupe returns
+    const viaOplus = oplusDedupe("rule_weighted_avg", undefined, { similarity: { fn: "jaccard", cutoff: 0.5 } })(c);
+    expect(new Set(survivors.claims.map((x) => x.id))).toEqual(new Set(viaOplus.claims.map((x) => x.id)));
+  });
 });

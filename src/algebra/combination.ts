@@ -18,39 +18,55 @@ export interface DedupeOptions {
   similarity?: SimilarityConfig;
 }
 
+export interface DedupeGroupsResult {
+  survivors: Corpus;
+  /** merged-away claim id → surviving representative id (no entry for singleton clusters). */
+  mergedInto: Map<string, string>;
+}
+
 /**
- * Fold a group's claims through the pairwise combine(). For weighted_avg, thread the accumulated
- * source-weight so the fold equals the full normalized weighted average; max rules pre-sort by
- * claim id so the first-arg-wins tie-break is lexicographic; evidence_pooled folds exactly.
+ * The grouping+merge core of ⊕_dedupe, exposing which claims were absorbed and into which
+ * survivor. `oplusDedupe` is exactly `(c) => dedupeGroups(...)(c).survivors`.
+ *
+ * Survivor id: combineGroup returns one of the cluster's own claims (spread of sorted[0]
+ * for arithmetic rules; the winning claim for max rules; the sole claim for singletons),
+ * so `survivor.id` is always a member id — every non-survivor member maps to it.
  */
-export const oplusDedupe =
+export const dedupeGroups =
   (ruleId: string, params?: unknown, opts?: DedupeOptions) =>
-  (c: Corpus): Corpus => {
+  (c: Corpus): DedupeGroupsResult => {
     assertNotDeprecatedRule(ruleId);
 
-    // Validate similarity config eagerly (before any grouping work)
     if (opts?.similarity) {
       const { fn, cutoff } = opts.similarity;
-      // This throws /no similarity fn/ if unregistered
       similarityFn(fn);
       if (cutoff < 0 || cutoff > 1) {
         throw new Error(`similarity cutoff ${cutoff} is outside [0, 1]`);
       }
     }
 
-    // Group claims by (subject, key, scopeHash)
     const groups = partitionBy(c.claims as Claim[], (cl) =>
-      claimTripleKey(cl.subject, cl.key, cl.scopeHash)
+      claimTripleKey(cl.subject, cl.key, cl.scopeHash),
     );
 
     const out: Claim[] = [];
+    const mergedInto = new Map<string, string>();
     for (const group of groups.values()) {
       for (const part of subPartitions(group, opts)) {
-        out.push(combineGroup(ruleId, part, params));
+        const survivor = combineGroup(ruleId, part, params);
+        out.push(survivor);
+        for (const member of part) {
+          if (member.id !== survivor.id) mergedInto.set(member.id, survivor.id);
+        }
       }
     }
-    return corpusOf(out);
+    return { survivors: corpusOf(out), mergedInto };
   };
+
+export const oplusDedupe =
+  (ruleId: string, params?: unknown, opts?: DedupeOptions) =>
+  (c: Corpus): Corpus =>
+    dedupeGroups(ruleId, params, opts)(c).survivors;
 
 /**
  * No similarity configured → [group] (today's behavior, untouched).
@@ -159,6 +175,11 @@ export const oplusSynthesizeAs =
     } as unknown as Claim;
   };
 
+/**
+ * Fold a group's claims through the pairwise combine(). For weighted_avg, thread the accumulated
+ * source-weight so the fold equals the full normalized weighted average; max rules pre-sort by
+ * claim id so the first-arg-wins tie-break is lexicographic; evidence_pooled folds exactly.
+ */
 function combineGroup(ruleId: string, claims: Claim[], params?: unknown): Claim {
   if (claims.length === 0) {
     throw new Error("combineGroup called with empty group");

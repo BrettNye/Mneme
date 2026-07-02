@@ -318,7 +318,7 @@ describe("mneme MCP server (key_census wiring)", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toContain("key_census");
-    expect(names).toEqual(["key_census", "list_corpora", "recall", "remember"]);
+    expect(names).toEqual(["key_census", "list_corpora", "reconcile", "recall", "remember", "subject_census"].sort());
     await client.close();
   });
 
@@ -524,6 +524,36 @@ describe("mneme MCP server (key_census wiring)", () => {
     }
   });
 
+  it("recall with explain:true returns a trace; without it, no trace", async () => {
+    const { client } = await connected("explain-test");
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "project:mneme", key: "deploy.target", value: "us-east prod cluster", corpus: "explain-test" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "project:mneme", key: "deploy.cadence", value: "weekly on Tuesdays", corpus: "explain-test" },
+    });
+
+    const withoutExplain = (await client.callTool({
+      name: "recall",
+      arguments: { about: "deploy", corpus: "explain-test" },
+    })) as { structuredContent?: { trace?: unknown; matches: { id: string }[] } };
+    expect(withoutExplain.structuredContent?.trace).toBeUndefined();
+
+    const withExplain = (await client.callTool({
+      name: "recall",
+      arguments: { about: "deploy", corpus: "explain-test", explain: true },
+    })) as { structuredContent?: { trace?: { stageCounts?: unknown }; matches: { id: string }[] } };
+    expect(withExplain.structuredContent?.trace).toBeDefined();
+    expect(withExplain.structuredContent?.trace?.stageCounts).toBeDefined();
+    // explain never changes the served result:
+    expect(withExplain.structuredContent?.matches.map((m) => m.id))
+      .toEqual(withoutExplain.structuredContent?.matches.map((m) => m.id));
+
+    await client.close();
+  });
+
   it("recall structuredContent carries coverage and match provenance handles", async () => {
     const { client } = await connected("covsrv");
     await client.callTool({
@@ -544,6 +574,209 @@ describe("mneme MCP server (key_census wiring)", () => {
     expect(res.structuredContent?.matches[0]?.id).toEqual(expect.any(String));
     expect(res.structuredContent?.matches[0]?.tags).toContain("session:s1");
     expect(res.structuredContent?.warnings?.some((w) => w.includes("no claim available to this recall"))).toBe(true);
+    await client.close();
+  });
+});
+
+// ── subject_census wiring tests ─────────────────────────────────────────────────
+
+describe("mneme MCP server (subject_census wiring)", () => {
+  it("advertises subject_census as read-only, idempotent, closed-world", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.subject_census).toBeDefined();
+    expect(byName.subject_census.annotations?.readOnlyHint).toBe(true);
+    expect(byName.subject_census.annotations?.idempotentHint).toBe(true);
+    expect(byName.subject_census.annotations?.openWorldHint).toBe(false);
+    expect(byName.subject_census.outputSchema).toBeDefined();
+    await client.close();
+  });
+
+  it("subject_census returns structuredContent with all expected fields and defaults corpus", async () => {
+    const { client } = await connected("subj-default-corpus");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "project:crewtracks", key: "status", value: "active" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "project:crewTracks", key: "decision", value: "go" },
+    });
+
+    const result = (await client.callTool({
+      name: "subject_census",
+      arguments: {},
+    })) as {
+      structuredContent?: {
+        corpus: string;
+        subjects: { subject: string; claims: number }[];
+        candidates: { a: string; b: string; score: number }[];
+        rankFn: string;
+        warnings: string[];
+        content: string;
+      };
+    };
+
+    const sc = result.structuredContent;
+    expect(sc).toBeDefined();
+    expect(sc?.corpus).toBe("subj-default-corpus");
+    expect(Array.isArray(sc?.subjects)).toBe(true);
+    const subjectNames = sc?.subjects.map((s) => s.subject) ?? [];
+    expect(subjectNames).toContain("project:crewtracks");
+    expect(subjectNames).toContain("project:crewTracks");
+    expect(Array.isArray(sc?.candidates)).toBe(true);
+    expect(typeof sc?.rankFn).toBe("string");
+    expect(Array.isArray(sc?.warnings)).toBe(true);
+    expect(typeof sc?.content).toBe("string");
+    expect(sc?.content).toContain("project:crewtracks");
+
+    await client.close();
+  });
+
+  it("subject_census is read-only: does not write any new claims", async () => {
+    const { client } = await connected("subj-readonly");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "entity:a", key: "status", value: "active", corpus: "subj-readonly" },
+    });
+
+    const censusBefore = (await client.callTool({
+      name: "recall",
+      arguments: { about: "active", corpus: "subj-readonly" },
+    })) as { structuredContent?: { matches: unknown[] } };
+    const countBefore = censusBefore.structuredContent?.matches.length ?? 0;
+
+    await client.callTool({
+      name: "subject_census",
+      arguments: { corpus: "subj-readonly" },
+    });
+
+    const censusAfter = (await client.callTool({
+      name: "recall",
+      arguments: { about: "active", corpus: "subj-readonly" },
+    })) as { structuredContent?: { matches: unknown[] } };
+    const countAfter = censusAfter.structuredContent?.matches.length ?? 0;
+
+    expect(countAfter).toBe(countBefore);
+
+    await client.close();
+  });
+});
+
+// ── reconcile wiring tests ───────────────────────────────────────────────────────
+
+describe("mneme MCP server (reconcile wiring)", () => {
+  it("advertises reconcile as read-only, idempotent, closed-world", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.reconcile).toBeDefined();
+    expect(byName.reconcile.annotations?.readOnlyHint).toBe(true);
+    expect(byName.reconcile.annotations?.idempotentHint).toBe(true);
+    expect(byName.reconcile.annotations?.openWorldHint).toBe(false);
+    expect(byName.reconcile.outputSchema).toBeDefined();
+    await client.close();
+  });
+
+  it("reconcile returns dispositions for subjects and keys, defaults corpus", async () => {
+    const { client } = await connected("rec-default-corpus");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "project:crewtracks", key: "status", value: "active" },
+    });
+
+    const result = (await client.callTool({
+      name: "reconcile",
+      arguments: {
+        subjects: ["project:crewTracks", "division:traffic-control"],
+        keys: ["status"],
+      },
+    })) as {
+      structuredContent?: {
+        corpus: string;
+        subjects: { candidate: string; suggestions: { existing: string; score: number }[]; disposition: string }[];
+        keys: { candidate: string; suggestions: { existing: string; score: number }[]; disposition: string }[];
+        rankFn: string;
+        warnings: string[];
+        content: string;
+      };
+    };
+
+    const sc = result.structuredContent;
+    expect(sc).toBeDefined();
+    expect(sc?.corpus).toBe("rec-default-corpus");
+    expect(sc?.subjects).toHaveLength(2);
+    expect(sc?.subjects[0].disposition).toBe("reuse");
+    expect(sc?.subjects[0].suggestions[0]?.existing).toBe("project:crewtracks");
+    expect(sc?.subjects[1].disposition).toBe("new");
+    expect(sc?.keys).toHaveLength(1);
+    expect(sc?.keys[0].disposition).toBe("reuse");
+    expect(typeof sc?.rankFn).toBe("string");
+    expect(Array.isArray(sc?.warnings)).toBe(true);
+    expect(typeof sc?.content).toBe("string");
+
+    await client.close();
+  });
+
+  it("reconcile accepts custom thresholds and limit", async () => {
+    const { client } = await connected("rec-thresholds");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "widget", key: "status", value: "active", corpus: "rec-thresholds" },
+    });
+
+    const result = (await client.callTool({
+      name: "reconcile",
+      arguments: {
+        corpus: "rec-thresholds",
+        subjects: ["widget-extra"],
+        newThreshold: 0.2,
+        reuseThreshold: 0.9,
+      },
+    })) as {
+      structuredContent?: {
+        subjects: { disposition: string; suggestions: { score: number }[] }[];
+      };
+    };
+
+    expect(result.structuredContent?.subjects[0].disposition).toBe("uncertain");
+    expect(result.structuredContent?.subjects[0].suggestions[0].score).toBeCloseTo(0.5, 5);
+
+    await client.close();
+  });
+
+  it("reconcile is read-only: does not write any new claims", async () => {
+    const { client } = await connected("rec-readonly");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "entity:a", key: "status", value: "active", corpus: "rec-readonly" },
+    });
+
+    const censusBefore = (await client.callTool({
+      name: "recall",
+      arguments: { about: "active", corpus: "rec-readonly" },
+    })) as { structuredContent?: { matches: unknown[] } };
+    const countBefore = censusBefore.structuredContent?.matches.length ?? 0;
+
+    await client.callTool({
+      name: "reconcile",
+      arguments: { corpus: "rec-readonly", subjects: ["entity:a", "entity:b"], keys: ["status", "new-key"] },
+    });
+
+    const censusAfter = (await client.callTool({
+      name: "recall",
+      arguments: { about: "active", corpus: "rec-readonly" },
+    })) as { structuredContent?: { matches: unknown[] } };
+    const countAfter = censusAfter.structuredContent?.matches.length ?? 0;
+
+    expect(countAfter).toBe(countBefore);
+
     await client.close();
   });
 });

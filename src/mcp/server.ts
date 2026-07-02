@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { remember, recall, listCorpora, keyCensus } from "../surface/index.js";
+import { remember, recall, listCorpora, keyCensus, subjectCensus, reconcile, explainRecall, type RecallTrace } from "../surface/index.js";
 import { openMnemeEngine } from "./engine.js";
 import { appendRecallLog } from "./recall-log.js";
 
@@ -133,6 +133,10 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           .union([z.string(), z.number()])
           .optional()
           .describe("temporal scope: ISO-8601 string or epoch ms. Anchors BOTH which claims are valid and the recency term; default now"),
+        explain: z
+          .boolean()
+          .optional()
+          .describe("when true, also return a RecallTrace explaining why each candidate claim was served/merged/deprecated/dropped; best-effort, never changes the served result (default false)"),
       },
       // Pure read: no state change, repeatable.
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -158,6 +162,10 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           entities: z.array(z.object({ text: z.string(), supported: z.boolean() })),
           missing: z.array(z.string()),
         }).describe("entity-coverage facts over the pre-knob survivors; agents decide refusal"),
+        trace: z
+          .any()
+          .optional()
+          .describe("RecallTrace: per-stage counts + per-claim dispositions; present only when explain=true and re-derivation succeeded"),
       },
     },
     async (a) => {
@@ -166,7 +174,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
       // Embeddings lazy: first recall pays the init cost; boot stays instant.
       // RecallDeps includes keyCardinality from config loaded at startup.
       const embeddings = await initEmbeddings();
-      const r = await recall(session, {
+      const recallArgs = {
         about: a.about,
         subject: a.subject,
         key: a.key,
@@ -178,7 +186,18 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
         recencyAlpha: a.recencyAlpha,
         recencyHalfLifeDays: a.recencyHalfLifeDays,
         asOf: a.asOf,
-      }, { embeddings, keyCardinality });
+      };
+      const r = await recall(session, recallArgs, { embeddings, keyCardinality });
+
+      let trace: RecallTrace | undefined;
+      if (a.explain) {
+        try {
+          trace = await explainRecall(session, recallArgs, { embeddings, keyCardinality });
+        } catch (err) {
+          // Best-effort: an explain failure never fails the recall.
+          console.error(`[mneme/recall] explain failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
 
       // Append recall-log entry (best-effort, synchronous, never throws into handler).
       appendRecallLog(dbPath, {
@@ -221,6 +240,7 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           rankFn: r.rankFn,
           coverage: r.coverage,
           warnings: r.warnings,
+          trace,
         },
       };
     },
@@ -294,6 +314,130 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           unratified: r.unratified,
           warnings: r.warnings,
           rankFn: r.rankFn,
+          content: r.content,
+        },
+      };
+    },
+  );
+
+  server.registerTool(
+    "subject_census",
+    {
+      title: "Subject census",
+      description:
+        "Census the distinct subjects in a corpus, score all subject-pairs for similarity, and surface near-duplicate candidates. Advisory only — use reconcile to canonicalize subjects at ingest time.",
+      inputSchema: {
+        corpus: z.string().optional().describe(`corpus to census; defaults to '${defaultCorpus}'`),
+        limit: z.number().int().positive().optional().describe("max subject-pair candidates to return (default 20)"),
+      },
+      // Pure read: no state change, repeatable.
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: {
+        corpus: z.string(),
+        subjects: z.array(z.object({ subject: z.string(), claims: z.number() })).describe("distinct live subjects with per-subject claim counts"),
+        candidates: z.array(z.object({ a: z.string(), b: z.string(), score: z.number() })).describe("top subject-pair similarity candidates sorted descending, truncated to limit"),
+        rankFn: z.string().describe("similarity function used for subject-pair scoring"),
+        warnings: z.array(z.string()).describe("non-fatal warnings from alias loading or subject-pair scoring"),
+        content: z.string().describe("composed human-readable census report (advisory only)"),
+      },
+    },
+    async (a) => {
+      const resolvedCorpus = a.corpus ?? defaultCorpus;
+
+      // Embeddings lazy: first census pays the init cost; boot stays instant.
+      const embeddings = await initEmbeddings();
+      const r = await subjectCensus(session, {
+        corpus: resolvedCorpus,
+        limit: a.limit,
+      }, { embeddings, keyCardinality });
+
+      // Surface warnings to stderr (house convention: tools stay pure; server does I/O).
+      if (r.warnings.length > 0) {
+        for (const w of r.warnings) {
+          console.error(`[mneme/subject_census] ${w}`);
+        }
+      }
+
+      return {
+        content: [{ type: "text" as const, text: r.content || "(empty corpus — no subjects found)" }],
+        structuredContent: {
+          corpus: r.corpus,
+          subjects: r.subjects,
+          candidates: r.candidates,
+          rankFn: r.rankFn,
+          warnings: r.warnings,
+          content: r.content,
+        },
+      };
+    },
+  );
+
+  server.registerTool(
+    "reconcile",
+    {
+      title: "Reconcile candidate subjects/keys",
+      description:
+        "Score candidate subjects and/or keys against the corpus's live distinct entities and assign a reuse/uncertain/new disposition per thresholds. Never writes — use before remember to canonicalize entities and avoid fragmenting claims.",
+      inputSchema: {
+        corpus: z.string().optional().describe(`corpus to reconcile against; defaults to '${defaultCorpus}'`),
+        subjects: z.array(z.string()).optional().describe("candidate subjects to score against existing subjects"),
+        keys: z.array(z.string()).optional().describe("candidate keys to score against existing keys"),
+        limit: z.number().int().positive().optional().describe("max suggestions per candidate (default 5)"),
+        reuseThreshold: z.number().min(0).max(1).optional().describe("score >= this → 'reuse' (default 0.9, provisional, not calibrated)"),
+        newThreshold: z.number().min(0).max(1).optional().describe("score <= this → 'new' (default 0.5)"),
+      },
+      // Pure read: no state change, repeatable.
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: {
+        corpus: z.string(),
+        subjects: z.array(
+          z.object({
+            candidate: z.string(),
+            suggestions: z.array(z.object({ existing: z.string(), score: z.number() })),
+            disposition: z.enum(["reuse", "uncertain", "new"]),
+          }),
+        ).describe("per-candidate-subject scored suggestions and disposition"),
+        keys: z.array(
+          z.object({
+            candidate: z.string(),
+            suggestions: z.array(z.object({ existing: z.string(), score: z.number() })),
+            disposition: z.enum(["reuse", "uncertain", "new"]),
+          }),
+        ).describe("per-candidate-key scored suggestions and disposition"),
+        rankFn: z.string().describe("similarity function used for scoring"),
+        warnings: z.array(z.string()).describe("non-fatal warnings from alias loading or scoring"),
+        content: z.string().describe("composed human-readable reconcile report"),
+      },
+    },
+    async (a) => {
+      const resolvedCorpus = a.corpus ?? defaultCorpus;
+
+      // Embeddings lazy: first reconcile pays the init cost; boot stays instant.
+      const embeddings = await initEmbeddings();
+      const r = await reconcile(session, {
+        corpus: resolvedCorpus,
+        subjects: a.subjects,
+        keys: a.keys,
+        limit: a.limit,
+        reuseThreshold: a.reuseThreshold,
+        newThreshold: a.newThreshold,
+      }, { embeddings, keyCardinality });
+
+      // Surface warnings to stderr (house convention: tools stay pure; server does I/O).
+      if (r.warnings.length > 0) {
+        for (const w of r.warnings) {
+          console.error(`[mneme/reconcile] ${w}`);
+        }
+      }
+
+      return {
+        content: [{ type: "text" as const, text: r.content || "(no candidates given)" }],
+        structuredContent: {
+          corpus: r.corpus,
+          subjects: r.subjects,
+          keys: r.keys,
+          rankFn: r.rankFn,
+          warnings: r.warnings,
           content: r.content,
         },
       };
