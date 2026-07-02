@@ -156,11 +156,13 @@ export type EntityAxis = "subject" | "key";
 export interface DistinctEntity { value: string; claims: number }
 
 /** Live distinct entities on `axis`, over canonicalReadStages (same live-set semantics as
- *  keyCensus). `aliasMap` is passed in — the ONE loadAliasContext call per op is threaded. */
+ *  keyCensus). `aliasMap` AND `now` are passed in (not recomputed) so a single evaluation
+ *  instant is shared with the caller's alias load — matching keyCensus's single-`now`
+ *  behavior (recall.ts:397); recomputing `Date.now()` here would diverge on a tauValid
+ *  boundary and break the byte-identical guarantee. */
 export function distinctEntities(
-  session: Session, corpus: string, axis: EntityAxis, deps: ReadDeps, aliasMap: KeyAliasMap,
+  session: Session, corpus: string, axis: EntityAxis, deps: ReadDeps, aliasMap: KeyAliasMap, now: number,
 ): DistinctEntity[] {
-  const now = Date.now();
   let live: Corpus = { claims: session.mneme.read(corpus, { corpusId: corpus }) as Claim[] };
   for (const stage of canonicalReadStages({
     evaluationInstant: now, keyCardinality: deps.keyCardinality,
@@ -197,11 +199,14 @@ export async function entityScorer(
 ```
 
 ```typescript
-// src/surface/entities.test.ts — failing test (mirror recall.test.ts session/deps setup)
+// src/surface/entities.test.ts — failing test.
+// Reuse the OWNED shared harness (src/surface/test-support.ts), as recall.test.ts does —
+// do NOT hand-roll session/deps setup.
+import { freshSession, jaccardDeps } from "./test-support.js";
 import { distinctEntities } from "./entities.js";
 it("distinctEntities returns live distinct subjects with per-subject counts", () => {
-  // seed: 2 claims on subject "s1", 1 on "s2" (jaccard deps, aliasMap {})
-  const got = distinctEntities(session, "c", "subject", deps, {});
+  // seed: 2 claims on subject "s1", 1 on "s2"; aliasMap {}; single now
+  const got = distinctEntities(session, "c", "subject", jaccardDeps, {}, Date.now());
   expect(got.find((e) => e.value === "s1")?.claims).toBe(2);
   expect(got.find((e) => e.value === "s2")?.claims).toBe(1);
 });
@@ -214,8 +219,11 @@ it("distinctEntities returns live distinct subjects with per-subject counts", ()
 - Deprecated / dedupe-merged / alias-shaped claims are excluded (same live-set as `keyCensus`,
   because it runs `canonicalReadStages`).
 - Results are deterministic: sorted by count desc, then value asc.
+- `distinctEntities` uses the **caller-supplied `now`** for the pipeline instant (no internal
+  `Date.now()`), so a caller can share one instant across alias load + enumeration.
 - `entityScorer` returns `rankFn: "jaccard"` + a warning when warm-up throws; otherwise the
   registered rank fn with `scoreOne(a,b)` symmetric.
+- Tests reuse `src/surface/test-support.ts` (`freshSession`/`jaccardDeps`), not hand-rolled setup.
 
 Test file: `src/surface/entities.test.ts`.
 
@@ -261,9 +269,9 @@ export interface CensusResult {
 export async function censusCore(
   axis: EntityAxis, session: Session, corpus: string, deps: ReadDeps, limit: number,
 ) {
-  const now = Date.now();
+  const now = Date.now(); // ONE instant, shared by alias load + enumeration (matches keyCensus)
   const aliasContext = loadAliasContext(session, corpus, now, deps.keyCardinality);
-  const entities = distinctEntities(session, corpus, axis, deps, aliasContext.aliasMap);
+  const entities = distinctEntities(session, corpus, axis, deps, aliasContext.aliasMap, now);
   const { rankFn, warnings, scoreOne } = await entityScorer(entities.map((e) => e.value), deps);
   const pairs: { a: string; b: string; score: number }[] = [];
   for (let i = 0; i < entities.length; i++)
@@ -290,10 +298,13 @@ export type { CensusArgs, CensusResult } from "./census.js";
 
 ```typescript
 // src/surface/census.test.ts — the keyCensus describe blocks EXTRACTED from recall.test.ts,
-// byte-identical (imports repointed to ./census.js). This proves the move is behavior-preserving.
+// byte-identical, with imports repointed: keyCensus from ./census.js, harness still from
+// ./test-support.js (freshSession/jaccardDeps/makeFakeHybridDeps — extraction preserves these).
+// This proves the move is behavior-preserving.
+import { freshSession, jaccardDeps } from "./test-support.js";
 import { keyCensus } from "./census.js";
 it("keyCensus reports distinct keys with counts (moved, unchanged)", async () => {
-  const r = await keyCensus(session, { corpus: "c" }, deps);
+  const r = await keyCensus(session, { corpus: "c" }, jaccardDeps);
   expect(r.keys.find((k) => k.key === "status")?.claims).toBeGreaterThan(0);
 });
 ```
@@ -354,11 +365,12 @@ export async function subjectCensus(
 ```
 
 ```typescript
-// src/surface/census.test.ts — failing test
+// src/surface/census.test.ts — failing test (reuse the owned harness, not hand-rolled setup)
+import { freshSession, jaccardDeps } from "./test-support.js";
 import { subjectCensus } from "./census.js";
 it("subjectCensus scores fragmented subjects and stays advisory", async () => {
   // seed near-dup subjects "project:crewtracks" and "project:crewTracks-liner-build"
-  const r = await subjectCensus(session, { corpus: "c" }, deps);
+  const r = await subjectCensus(session, { corpus: "c" }, jaccardDeps);
   expect(r.subjects.length).toBeGreaterThanOrEqual(2);
   expect(r.candidates[0].score).toBeGreaterThan(0);
   expect(r.content).not.toContain("alias-of"); // advisory, not a ratification shape
@@ -416,11 +428,12 @@ export async function reconcile(session: Session, args: ReconcileArgs, deps: Rea
   const newAt = args.newThreshold ?? 0.5;
   const known = session.listCorpora().some((c) => c.id === args.corpus);
   const warnings: string[] = [];
-  const aliasMap = known ? loadAliasContext(session, args.corpus, Date.now(), deps.keyCardinality).aliasMap : {};
+  const now = Date.now(); // ONE instant, shared by alias load + both axis enumerations
+  const aliasMap = known ? loadAliasContext(session, args.corpus, now, deps.keyCardinality).aliasMap : {};
 
   const matchAxis = async (candidates: string[] | undefined, axis: EntityAxis): Promise<{ matches: ReconcileMatch[]; rankFn: string }> => {
     if (!candidates?.length) return { matches: [], rankFn: deps.embeddings.rankFn };
-    const existing = known ? distinctEntities(session, args.corpus, axis, deps, aliasMap).map((e) => e.value) : [];
+    const existing = known ? distinctEntities(session, args.corpus, axis, deps, aliasMap, now).map((e) => e.value) : [];
     const { rankFn, warnings: w, scoreOne } = await entityScorer([...candidates, ...existing], deps);
     warnings.push(...w);
     const matches = candidates.map((candidate) => {
@@ -442,13 +455,14 @@ export async function reconcile(session: Session, args: ReconcileArgs, deps: Rea
 ```
 
 ```typescript
-// src/surface/reconcile.test.ts — failing tests
+// src/surface/reconcile.test.ts — failing tests (reuse the owned harness, not hand-rolled setup)
+import { freshSession, jaccardDeps } from "./test-support.js";
 import { reconcile } from "./reconcile.js";
 it("reuses a near-duplicate subject and mints a genuinely-new one", async () => {
   // existing subject "project:crewtracks" seeded in corpus "c"
   const r = await reconcile(session, {
     corpus: "c", subjects: ["project:crewTracks", "division:traffic-control"],
-  }, deps);
+  }, jaccardDeps);
   expect(r.subjects[0].disposition).toBe("reuse");
   expect(r.subjects[0].suggestions[0].existing).toBe("project:crewtracks");
   expect(r.subjects[1].disposition).toBe("new"); // over-anchoring guard

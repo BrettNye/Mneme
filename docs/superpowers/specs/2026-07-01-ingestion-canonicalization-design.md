@@ -84,9 +84,10 @@ test.
   export type EntityAxis = "subject" | "key";
   export interface DistinctEntity { value: string; claims: number } // value = subject or key string
   /** Live distinct entities on `axis`, over canonicalReadStages (same live-set semantics as keyCensus).
-   *  `aliasMap` is passed in (not loaded here) so the ONE loadAliasContext call per op is threaded,
-   *  never double-read. */
-  export function distinctEntities(session: Session, corpus: string, axis: EntityAxis, deps: ReadDeps, aliasMap: KeyAliasMap): DistinctEntity[];
+   *  `aliasMap` AND `now` are passed in (not recomputed) so ONE loadAliasContext call + ONE evaluation
+   *  instant per op are threaded — never double-read, and no independent Date.now() that could diverge
+   *  from the alias load on a tauValid boundary (matches keyCensus's single-`now`). */
+  export function distinctEntities(session: Session, corpus: string, axis: EntityAxis, deps: ReadDeps, aliasMap: KeyAliasMap, now: number): DistinctEntity[];
   /** Score every unordered pair of the given strings with the registered rank fn (hybrid warmed, jaccard fallback).
    *  Returns { rankFn, warnings, scoreOne(a,b) } — the scorer, not the pairs, so callers choose the topology. */
   export function entityScorer(strings: string[], deps: ReadDeps): Promise<{ rankFn: string; warnings: string[]; scoreOne: (a: string, b: string) => number }>;
