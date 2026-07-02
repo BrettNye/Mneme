@@ -60,11 +60,23 @@ export function groupDispositions(
     keyAliases: aliasMap,
     evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
   });
+  // deprecated-by.byId reports the NEWEST deprecator (the ultimate survivor), not the first pair
+  // seen — meaningful for lineage and required so a full deprecatedIds chain can be recovered by
+  // scanning for the survivor's id (see supersessionOutcome).
+  const byId = new Map<string, Claim>();
+  for (const c of survivors.claims) byId.set(c.id, c);
   const deprecatedBy = new Map<string, string>();
   for (const p of pairs) {
     if (p.left.valid.from === p.right.valid.from) continue;
     const [older, newer] = p.left.valid.from < p.right.valid.from ? [p.left, p.right] : [p.right, p.left];
-    if (!deprecatedBy.has(older.id)) deprecatedBy.set(older.id, newer.id);
+    const cur = deprecatedBy.get(older.id);
+    if (cur === undefined) {
+      deprecatedBy.set(older.id, newer.id);
+      continue;
+    }
+    const curClaim = byId.get(cur);
+    const curFrom = curClaim ? curClaim.valid.from : -Infinity;
+    if (newer.valid.from > curFrom || (newer.valid.from === curFrom && newer.id < cur)) deprecatedBy.set(older.id, newer.id);
   }
   for (const [id, byId] of deprecatedBy)
     out.set(id, { disposition: "deprecated", reason: { kind: "deprecated-by", byId, via: "single-cardinality" } });
@@ -100,16 +112,22 @@ export function supersessionOutcome(session: Session, corpus: string, claimId: s
     const action = targetClaim && targetClaim.valueHash === written.valueHash ? "duplicate" : "merged";
     return { action, deprecatedIds: [], mergedInto: target, reason };
   }
-  const deprecatedIds: string[] = [];
-  for (const [id, d] of dispositions) {
-    if (d.disposition === "deprecated" && (d.reason as Extract<DispositionReason, { kind: "deprecated-by" }>).byId === claimId)
-      deprecatedIds.push(id);
+  if (own?.disposition === "served") {
+    // Within written's (subject,key,scopeHash) single-cardinality cluster, a "served" claim is
+    // the sole newest survivor — so it deprecated every OTHER "deprecated" claim sharing its
+    // scopeHash, regardless of which one directly attributed deprecated-by.byId to it (the
+    // deprecatedBy map only records the ultimate-survivor edge per older claim, not a full chain).
+    const groupById = new Map<string, Claim>();
+    for (const c of group) groupById.set(c.id, c);
+    const deprecatedIds = [...dispositions.entries()]
+      .filter(([id, d]) => d.disposition === "deprecated" && groupById.get(id)?.scopeHash === written.scopeHash)
+      .map(([id]) => id);
+    if (deprecatedIds.length)
+      return {
+        action: "superseded",
+        deprecatedIds,
+        reason: { kind: "deprecated-by", byId: claimId, via: "single-cardinality" },
+      };
   }
-  if (deprecatedIds.length)
-    return {
-      action: "superseded",
-      deprecatedIds,
-      reason: { kind: "deprecated-by", byId: claimId, via: "single-cardinality" },
-    };
   return { action: "committed", deprecatedIds: [] };
 }

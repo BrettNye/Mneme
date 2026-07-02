@@ -89,6 +89,20 @@ describe("supersessionOutcome", () => {
     expect(out.deprecatedIds).toEqual([]);
     s.close();
   });
+
+  it("reports the FULL deprecation chain for a 3-value single-cardinality write (regression)", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    const alpha = s.write("c", { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    const bravo = s.write("c", { subject: "p", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const charlie = s.write("c", { subject: "p", key: "plan", value: "charlie", valid: { from: 3, to: Infinity } });
+    const out = supersessionOutcome(s, "c", charlie.id);
+    expect(out.action).toBe("superseded");
+    expect(out.deprecatedIds).toHaveLength(2);
+    expect(out.deprecatedIds).toContain(alpha.id);
+    expect(out.deprecatedIds).toContain(bravo.id);
+    s.close();
+  });
 });
 
 describe("groupDispositions", () => {
@@ -101,6 +115,20 @@ describe("groupDispositions", () => {
     const disp = groupDispositions(claims, { plan: "single" }, {}, Date.now());
     expect(disp.get(b.id)!.disposition).toBe("served");
     expect(disp.get(a.id)!.disposition).toBe("deprecated");
+    s.close();
+  });
+
+  it("attributes deprecated-by.byId to the NEWEST claim in a 3-chain, not the middle one", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    const alpha = s.write("c", { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    const bravo = s.write("c", { subject: "p", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const charlie = s.write("c", { subject: "p", key: "plan", value: "charlie", valid: { from: 3, to: Infinity } });
+    const claims = s.mneme.read("c", { corpusId: "c", subject: "p", key: "plan" });
+    const disp = groupDispositions(claims, { plan: "single" }, {}, Date.now());
+    const alphaReason = disp.get(alpha.id)!.reason as { kind: "deprecated-by"; byId: string };
+    expect(alphaReason.byId).toBe(charlie.id);
+    void bravo;
     s.close();
   });
 });
