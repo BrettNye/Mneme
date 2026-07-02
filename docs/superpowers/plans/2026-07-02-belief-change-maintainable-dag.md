@@ -9,11 +9,11 @@ default_review_mode: split
 
 ```mermaid
 flowchart TD
-    task-belief-change["task-belief-change: vocab + supersessionOutcome<br/>files: src/surface/belief-change.ts +2 more"]
-    task-remember["task-remember: remember reports supersession<br/>files: src/surface/remember.ts +1 more"]
-    task-audit-surface["task-audit-surface: audit propose-loop<br/>files: src/surface/audit.ts +1 more"]
-    task-remember-mcp["task-remember-mcp: MCP remember output<br/>files: src/mcp/server.ts +1 more"]
-    task-audit-mcp["task-audit-mcp: audit MCP tool<br/>files: src/mcp/server.ts +1 more"]
+    task-belief-change["task-belief-change: vocab + supersessionOutcome<br/>files: src/surface/belief-change.ts +2 more"]:::done
+    task-remember["task-remember: remember reports supersession<br/>files: src/surface/remember.ts +1 more"]:::done
+    task-audit-surface["task-audit-surface: audit propose-loop<br/>files: src/surface/audit.ts +1 more"]:::done
+    task-remember-mcp["task-remember-mcp: MCP remember output<br/>files: src/mcp/server.ts +1 more"]:::done
+    task-audit-mcp["task-audit-mcp: audit MCP tool<br/>files: src/mcp/server.ts +1 more"]:::done
 
     task-belief-change --> task-remember
     task-belief-change --> task-audit-surface
@@ -67,7 +67,7 @@ files:
   - src/surface/belief-change.ts
   - src/surface/belief-change.test.ts
   - src/surface/explain.ts
-status: pending
+status: done
 quality_reviewer_hint: opus
 ```
 
@@ -194,7 +194,7 @@ depends_on: [task-belief-change]
 files:
   - src/surface/remember.ts
   - src/surface/remember.test.ts
-status: pending
+status: done
 ```
 
 Extend `RememberResult` with the belief-change outcome and populate it best-effort after the write.
@@ -254,7 +254,7 @@ depends_on: [task-belief-change]
 files:
   - src/surface/audit.ts
   - src/surface/audit.test.ts
-status: pending
+status: done
 quality_reviewer_hint: opus
 ```
 
@@ -338,7 +338,7 @@ depends_on: [task-remember]
 files:
   - src/mcp/server.ts
   - src/mcp/server.integration.test.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
@@ -365,7 +365,7 @@ depends_on: [task-audit-surface, task-remember-mcp]
 files:
   - src/mcp/server.ts
   - src/mcp/server.integration.test.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
