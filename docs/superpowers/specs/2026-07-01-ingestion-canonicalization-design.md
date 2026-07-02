@@ -71,31 +71,38 @@ barrels re-point to the new modules (internal move, the same pattern the ops-lay
 used); external importers of `mneme`/`mneme/surface` see no change, guarded by a back-compat
 test.
 
+- **Shared deps type → `src/surface/types.ts`.** The read-deps shape `{ embeddings;
+  keyCardinality? }` currently lives in `recall.ts` as `RecallDeps`; census/reconcile
+  depending on a *recall*-named type is an SoC smell. Promote it to the neutral surface
+  types home as `ReadDeps` (where `Session`/`CorpusSpec`/`SessionOptions` already live) and
+  make `RecallDeps = ReadDeps` a back-compat alias (public export unchanged). All three ops
+  (`recall`, census, `reconcile`) consume `ReadDeps`.
+
 - **`src/surface/entities.ts`** — the shared primitive (one responsibility: *live distinct
   entities + similarity*). Consumed by both census and reconcile (DRY):
   ```ts
   export type EntityAxis = "subject" | "key";
   export interface DistinctEntity { value: string; claims: number } // value = subject or key string
   /** Live distinct entities on `axis`, over canonicalReadStages (same live-set semantics as keyCensus).
-   *  `aliasMap` is passed in (not loaded here) so a caller that also reports aliases (keyCensus)
-   *  loads the alias context ONCE and threads it — no double read. */
-  export function distinctEntities(session: Session, corpus: string, axis: EntityAxis, deps: CensusDeps, aliasMap: KeyAliasMap): DistinctEntity[];
+   *  `aliasMap` is passed in (not loaded here) so the ONE loadAliasContext call per op is threaded,
+   *  never double-read. */
+  export function distinctEntities(session: Session, corpus: string, axis: EntityAxis, deps: ReadDeps, aliasMap: KeyAliasMap): DistinctEntity[];
   /** Score every unordered pair of the given strings with the registered rank fn (hybrid warmed, jaccard fallback).
    *  Returns { rankFn, warnings, scoreOne(a,b) } — the scorer, not the pairs, so callers choose the topology. */
-  export function entityScorer(strings: string[], deps: CensusDeps): Promise<{ rankFn: string; warnings: string[]; scoreOne: (a: string, b: string) => number }>;
+  export function entityScorer(strings: string[], deps: ReadDeps): Promise<{ rankFn: string; warnings: string[]; scoreOne: (a: string, b: string) => number }>;
   ```
   `distinctEntities` reuses `canonicalReadStages` exactly as `keyCensus` does today, taking
   the already-loaded `aliasMap` as `keyAliases`; `entityScorer` reuses `similarityFn` +
-  `warmValues` exactly as `keyCensus` does today. `CensusDeps` is the existing `RecallDeps`
-  shape (`{ embeddings; keyCardinality? }`) re-exported. **Alias context is loaded once per
-  op** (via the already-exported `loadAliasContext`) at the census/reconcile entry and
-  threaded into `distinctEntities` — `keyCensus` reuses the same load for its alias report;
-  `subjectCensus`/`reconcile` load it only for the canonical read.
+  `warmValues` exactly as `keyCensus` does today (the warm→jaccard-fallback block is
+  extracted from `keyCensus`, removing that duplication).
 
 - **`src/surface/census.ts`** — census reporting (one responsibility). Holds:
-  - `censusCore(axis, session, args, deps)` — enumerate via `distinctEntities`, score all
-    O(n²) pairs via `entityScorer`, sort desc (score, then names, for determinism), truncate
-    to `limit`. Returns `{ entities, candidates, rankFn, warnings }`.
+  - `censusCore(axis, session, args, deps)` — loads alias context ONCE (via the exported
+    `loadAliasContext`), enumerates via `distinctEntities`, scores all O(n²) pairs via
+    `entityScorer`, sorts desc (score, then names, for determinism), truncates to `limit`.
+    Returns `{ entities, candidates, rankFn, warnings, aliasContext }` — the `aliasContext`
+    is returned so `keyCensus` builds its alias report from the same load (no second read);
+    `subjectCensus` ignores it. `reconcile` loads its own single alias context.
   - `keyCensus` — **moved verbatim from `recall.ts`**; delegates enumerate+score to
     `censusCore("key", …)`, then keeps its key-specific alias layer (`aliases`,
     `unratified`, the `alias-of` ratification shape). Signature/`CensusArgs`/`CensusResult`
@@ -137,7 +144,7 @@ export interface ReconcileResult {
   warnings: string[];
   content: string;                 // human-readable: per candidate, disposition + top suggestion
 }
-export async function reconcile(session: Session, args: ReconcileArgs, deps: CensusDeps): Promise<ReconcileResult>;
+export async function reconcile(session: Session, args: ReconcileArgs, deps: ReadDeps): Promise<ReconcileResult>;
 ```
 
 Mechanism (composition, no new equations):
@@ -174,7 +181,7 @@ export interface SubjectCensusResult {
   warnings: string[];
   content: string; // advisory report: "these subjects look like one entity — canonicalize at ingest via reconcile"
 }
-export async function subjectCensus(session: Session, args: CensusArgs & { corpus: string }, deps: CensusDeps): Promise<SubjectCensusResult>;
+export async function subjectCensus(session: Session, args: CensusArgs & { corpus: string }, deps: ReadDeps): Promise<SubjectCensusResult>;
 ```
 
 Symmetric to `keyCensus` on the subject axis, via `censusCore("subject", …)`. The one
@@ -217,13 +224,18 @@ empty result, no corpus creation.
   - a mid-band pair → `uncertain`.
   - key candidates reconcile symmetrically.
   - empty/unknown corpus → all-`new`, no corpus created; warning on unknown.
-- **`src/surface/census.test.ts`** — `subjectCensus` enumerates fragmented subjects and
-  scores the near-duplicate pair high; advisory `content` names the pair; `keyCensus`
-  behavior is unchanged after the move (its existing tests move with it, byte-identical
-  assertions).
+- **`src/surface/census.test.ts`** — the `keyCensus` `describe` blocks are **extracted from
+  `recall.test.ts`** (they are intermingled there — ~18 references — not a separate file) and
+  moved here **byte-identical** (assertions unchanged), proving the move is behavior-
+  preserving; plus new `subjectCensus` tests (enumerates fragmented subjects, scores the
+  near-duplicate pair high, advisory `content` names the pair). `recall.test.ts` keeps only
+  recall tests afterward.
 - **`src/surface/layering.test.ts`** — stays green (new files import no `src/mcp`).
-- **`src/mcp/backcompat.test.ts` + a surface barrel export test** — `keyCensus` public API
-  and import paths unchanged after the move; `reconcile`/`subjectCensus` exported.
+- **Back-compat (public API unchanged after the move)** — `src/mcp/backcompat.test.ts` + a
+  surface barrel export test assert `keyCensus`/`CensusArgs`/`CensusResult` are still exported
+  from `mneme` and `mneme/surface` (and still resolvable by `src/mcp/index.ts` and the
+  external `integrations/openclaw/memory-mneme` consumer), and that `reconcile`/`subjectCensus`
+  are exported.
 - **MCP integration** (`src/mcp/server.integration.test.ts`) — `subject_census` and
   `reconcile` tools return the expected structured content; read-only (no writes).
 
