@@ -94,6 +94,11 @@ export function openSession(opts: SessionOptions = {}): Session {
       const pcOverrides = Object.fromEntries(
         Object.entries(spec.scalarPseudocount ?? {}).filter(([, v]) => v !== undefined)
       );
+      for (const [k, v] of Object.entries(spec.keyCardinality ?? {})) {
+        if (v !== "single" && v !== "multi") {
+          throw new Error(`invalid keyCardinality for key "${k}": ${v} (expected "single" | "multi")`);
+        }
+      }
       const version = spec.schemaVersion ?? SURFACE_DEFAULTS.schemaVersion;
       const def: CorpusDef = {
         id: spec.id,
@@ -107,6 +112,7 @@ export function openSession(opts: SessionOptions = {}): Session {
           scopeFields: (spec.scopeFields ?? {}) as Record<string, "string">,
           required: [],
           scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT, ...pcOverrides },
+          ...(spec.keyCardinality ? { keyCardinality: spec.keyCardinality } : {}),
         },
         defaults: {
           decayPolicy: { kind: "none" },

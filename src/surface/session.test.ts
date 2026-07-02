@@ -234,6 +234,36 @@ describe("scalarPseudocount defaults (Appendix A.1)", () => {
   });
 });
 
+describe("keyCardinality on CorpusSpec", () => {
+  it("createCorpus persists keyCardinality and round-trips across reopen", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s1 = openSession({ dbPath: db });
+    s1.createCorpus({ id: "c", keyCardinality: { status: "single", tags: "multi" } });
+    s1.close();
+    const s2 = openSession({ dbPath: db });
+    const def = s2.inspectCorpus("c") as { schema: { keyCardinality?: Record<string, string> } };
+    expect(def.schema.keyCardinality).toEqual({ status: "single", tags: "multi" });
+    s2.close();
+  });
+
+  it("createCorpus rejects an invalid cardinality value", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    expect(() => s.createCorpus({ id: "x", keyCardinality: { k: "many" as "single" } }))
+      .toThrow(/invalid keyCardinality/);
+    s.close();
+  });
+
+  it("leaves keyCardinality absent from the persisted schema when omitted", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "y", subjects: [] });
+    const def = s.inspectCorpus("y") as { schema: { keyCardinality?: unknown } };
+    expect(def.schema.keyCardinality).toBeUndefined();
+    s.close();
+  });
+});
+
 describe("C7 backfill on session re-open", () => {
   it("spec test 4: backfills an empty scalarPseudocount on load, persists, and announces", () => {
     const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
