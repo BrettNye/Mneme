@@ -845,14 +845,14 @@ describe("mneme MCP server (remember supersession wiring)", () => {
 
     const first = (await client.callTool({
       name: "remember",
-      arguments: { subject: "proj:x", key: "plan", value: "alpha", corpus: "supersession-test" },
+      arguments: { subject: "proj:x", key: "plan", value: "alpha", corpus: "supersession-test", validFrom: "2026-01-01T00:00:00Z" },
     })) as { structuredContent?: { id: string; supersession?: { action: string; deprecatedIds: string[] } } };
     expect(first.structuredContent?.supersession?.action).toBe("committed");
     const firstId = first.structuredContent?.id;
 
     const second = (await client.callTool({
       name: "remember",
-      arguments: { subject: "proj:x", key: "plan", value: "bravo", corpus: "supersession-test" },
+      arguments: { subject: "proj:x", key: "plan", value: "bravo", corpus: "supersession-test", validFrom: "2026-02-01T00:00:00Z" },
     })) as {
       structuredContent?: { id: string; supersession?: { action: string; deprecatedIds: string[] } };
       content: { type: string; text: string }[];
@@ -991,11 +991,11 @@ describe("mneme MCP server (history wiring)", () => {
 
     const first = (await client.callTool({
       name: "remember",
-      arguments: { subject: "proj:h", key: "plan", value: "alpha", corpus: "history-test" },
+      arguments: { subject: "proj:h", key: "plan", value: "alpha", corpus: "history-test", validFrom: "2026-01-01T00:00:00Z" },
     })) as { structuredContent?: { id: string } };
     const second = (await client.callTool({
       name: "remember",
-      arguments: { subject: "proj:h", key: "plan", value: "bravo", corpus: "history-test" },
+      arguments: { subject: "proj:h", key: "plan", value: "bravo", corpus: "history-test", validFrom: "2026-02-01T00:00:00Z" },
     })) as { structuredContent?: { id: string } };
 
     const result = (await client.callTool({
