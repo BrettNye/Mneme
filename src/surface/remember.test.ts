@@ -86,6 +86,29 @@ describe("remember — scope and validFrom", () => {
 
 // ── ensureCorpus: default scopeFields ────────────────────────────────────────
 
+// ── remember: supersession outcome ────────────────────────────────────────────
+
+describe("remember — supersession outcome", () => {
+  it("remember reports superseding an older single-cardinality value", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    remember(s, { subject: "p", key: "plan", value: "alpha", corpus: "c", validFrom: "2026-01-01T00:00:00Z" });
+    const r = remember(s, { subject: "p", key: "plan", value: "bravo", corpus: "c", validFrom: "2026-02-01T00:00:00Z" });
+    expect(r.supersession?.action).toBe("superseded");
+    expect(r.supersession?.deprecatedIds.length).toBeGreaterThan(0);
+    s.close();
+  });
+
+  it("remember reports committed for a coexisting multi-cardinality write", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c2", keyCardinality: { tag: "multi" } });
+    remember(s, { subject: "p", key: "tag", value: "alpha", corpus: "c2", validFrom: "2026-01-01T00:00:00Z" });
+    const r = remember(s, { subject: "p", key: "tag", value: "bravo", corpus: "c2", validFrom: "2026-02-01T00:00:00Z" });
+    expect(r.supersession?.action).toBe("committed");
+    s.close();
+  });
+});
+
 describe("ensureCorpus — default scopeFields for new corpora", () => {
   it("new corpus gets project/person/context scopeFields", () => {
     const s = freshSession();

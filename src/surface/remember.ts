@@ -1,4 +1,5 @@
 import type { Session } from "./types.js";
+import { supersessionOutcome, type SupersessionOutcome } from "./belief-change.js";
 
 /** Create the corpus if it doesn't already exist (idempotent). */
 export function ensureCorpus(session: Session, corpusId: string): void {
@@ -33,6 +34,8 @@ export interface RememberResult {
   id: string;
   status: string;
   corpus: string;
+  /** What this write did to the belief state (best-effort; never throws). */
+  supersession?: SupersessionOutcome;
 }
 
 export function remember(session: Session, args: RememberArgs): RememberResult {
@@ -62,7 +65,15 @@ export function remember(session: Session, args: RememberArgs): RememberResult {
     // under resolveDeprecateOlder instead of last-write-wins.
     valid: { from: validFrom ?? Date.now(), to: Infinity },
   });
-  return { id: out.id, status: out.status, corpus: args.corpus };
+  let supersession: SupersessionOutcome | undefined;
+  if (out.status === "committed") {
+    try {
+      supersession = supersessionOutcome(session, args.corpus, out.id);
+    } catch {
+      // best-effort: never fail the write on attribution errors
+    }
+  }
+  return { id: out.id, status: out.status, corpus: args.corpus, supersession };
 }
 
 export interface ListResult {
