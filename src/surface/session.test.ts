@@ -264,6 +264,33 @@ describe("keyCardinality on CorpusSpec", () => {
   });
 });
 
+describe("declareCardinality", () => {
+  it("merges into an existing corpus and preserves claims + other schema fields", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db, writer: "test" });
+    s.createCorpus({ id: "c", subjects: ["client:x"], keyCardinality: { status: "single" } });
+    s.write("c", { subject: "client:x", key: "plan", value: "alpha" });
+    const eff = s.declareCardinality("c", { plan: "multi" });
+    expect(eff).toEqual({ status: "single", plan: "multi" }); // merged, not replaced
+    const def = s.inspectCorpus("c") as { schema: { keyCardinality: Record<string, string>; subjects: string[] } };
+    expect(def.schema.keyCardinality).toEqual({ status: "single", plan: "multi" });
+    expect(def.schema.subjects).toEqual(["client:x"]); // other schema fields intact
+    const claims = s.mneme.read("c", { corpusId: "c" });
+    expect(claims.some((cl) => cl.value === "alpha")).toBe(true); // claim survives the def re-create
+    s.close();
+  });
+
+  it("creates the corpus when absent; invalid value throws", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db, writer: "test" });
+    s.declareCardinality("fresh", { plan: "multi" });
+    expect((s.inspectCorpus("fresh") as { schema: { keyCardinality: Record<string, string> } }).schema.keyCardinality)
+      .toEqual({ plan: "multi" });
+    expect(() => s.declareCardinality("fresh", { k: "many" as "single" })).toThrow(/invalid keyCardinality/);
+    s.close();
+  });
+});
+
 describe("C7 backfill on session re-open", () => {
   it("spec test 4: backfills an empty scalarPseudocount on load, persists, and announces", () => {
     const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");

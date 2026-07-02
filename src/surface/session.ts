@@ -1,6 +1,7 @@
 import { createMneme, createSqliteAdapter } from "../index.js";
 import type { CorpusDef, CandidateClaim, Confidence, BatchResult } from "../index.js";
 import { scalarConfidence } from "../core/confidence.js";
+import { validateKeyCardinality } from "../catalog/schema.js";
 import { parseDsl, normalizeDsl } from "./dsl.js";
 import { loadCorpora, saveCorpora, ensureDir } from "./corpus-store.js";
 import { SURFACE_DEFAULTS, defaultConfidence, DEFAULT_SCALAR_PSEUDOCOUNT } from "./types.js";
@@ -94,11 +95,7 @@ export function openSession(opts: SessionOptions = {}): Session {
       const pcOverrides = Object.fromEntries(
         Object.entries(spec.scalarPseudocount ?? {}).filter(([, v]) => v !== undefined)
       );
-      for (const [k, v] of Object.entries(spec.keyCardinality ?? {})) {
-        if (v !== "single" && v !== "multi") {
-          throw new Error(`invalid keyCardinality for key "${k}": ${v} (expected "single" | "multi")`);
-        }
-      }
+      if (spec.keyCardinality) validateKeyCardinality(spec.keyCardinality);
       const version = spec.schemaVersion ?? SURFACE_DEFAULTS.schemaVersion;
       const def: CorpusDef = {
         id: spec.id,
@@ -128,6 +125,21 @@ export function openSession(opts: SessionOptions = {}): Session {
       mneme.createCorpus(def);
       versionOf.set(spec.id, version);
       saveCorpora(dbPath, mneme.listCorpora());
+    },
+
+    declareCardinality(corpusId, cardinality) {
+      validateKeyCardinality(cardinality);
+      const existing = mneme.listCorpora((c) => c.id === corpusId)[0] as CorpusDef | undefined;
+      if (!existing) {
+        session.createCorpus({ id: corpusId, keyCardinality: cardinality });
+        return { ...cardinality };
+      }
+      const merged = { ...(existing.schema.keyCardinality ?? {}), ...cardinality };
+      // Overwrite the DEF only (Catalog.createCorpus is corpora.set) — claims are stored
+      // separately in the adapter and are NOT touched.
+      mneme.createCorpus({ ...existing, schema: { ...existing.schema, keyCardinality: merged } });
+      saveCorpora(dbPath, mneme.listCorpora());
+      return merged;
     },
 
     write(corpusId: string, rec: WriteRecord): WriteOutcome {

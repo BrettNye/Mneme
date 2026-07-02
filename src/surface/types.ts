@@ -85,6 +85,10 @@ export type QueryResult = Corpus | RankedCorpus | ComposedContext | AggregateRes
 export interface Session {
   readonly mneme: Mneme; // escape hatch to the raw facade
   createCorpus(spec: CorpusSpec): void;
+  /** Declare per-key cardinality for a corpus (create-or-patch, merge). Validates values;
+   *  creates the corpus if absent, else merges into schema.keyCardinality and re-persists the
+   *  def (claims untouched). Returns the effective keyCardinality map after the merge. */
+  declareCardinality(corpusId: string, cardinality: Record<string, "single" | "multi">): Record<string, "single" | "multi">;
   listCorpora(): { id: string; displayName: string }[];
   inspectCorpus(corpusId: string): unknown;
   write(corpusId: string, rec: WriteRecord): WriteOutcome;
