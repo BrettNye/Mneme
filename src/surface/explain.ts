@@ -27,16 +27,10 @@ import { CONTRADICTION_FLAG_KEY } from "../algebra/resolution.js";
 import { abstainBelowTop, relevanceFloor } from "../algebra/similarity.js";
 import type { Corpus as AlgebraCorpus } from "../algebra/types.js";
 import type { Claim } from "../core/claim.js";
+import type { DispositionReason } from "./belief-change.js";
 
-export type DispositionReason =
-  | { kind: "served" }
-  | { kind: "merged-into"; targetId: string }
-  | { kind: "deprecated-by"; byId: string; via: "single-cardinality" }
-  | { kind: "tau-invalid" }
-  | { kind: "below-floor"; score: number; floor: number }
-  | { kind: "abstained"; topScore: number; threshold: number }
-  | { kind: "over-limit"; rank: number; limit: number }
-  | { kind: "alias-or-flag" };
+// MOVED to belief-change.ts (charter vocabulary home); re-exported here for back-compat.
+export type { DispositionReason } from "./belief-change.js";
 
 export interface ClaimDisposition {
   id: string;
