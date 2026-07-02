@@ -13,7 +13,7 @@ import { pipe, leaf, sigma, rho } from "../mneme.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Stage } from "../algebra/expression.js";
 import type { Corpus, Corpus as AlgebraCorpus } from "../algebra/types.js";
-import type { Session } from "./types.js";
+import type { Session, ReadDeps } from "./types.js";
 import { pointEstimate } from "../core/confidence.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
 import { RULE } from "../distribution/rules.js";
@@ -43,11 +43,8 @@ export interface EmbeddingState {
   cache?: EmbeddingCache;
 }
 
-export interface RecallDeps {
-  embeddings: EmbeddingState;
-  keyCardinality?: Record<string, "single" | "multi">;
-  // NOTE: arrives PRE-LOADED from the server; tools never import config.ts or MCP internals.
-}
+/** @deprecated prefer ReadDeps; retained as a byte-compatible alias. */
+export type RecallDeps = ReadDeps;
 
 // ── Shared private helper: alias-load + variant-cardinality warnings ──────────
 

@@ -7,6 +7,7 @@ import type { Corpus, RankedCorpus, ComposedContext } from "../algebra/types.js"
 import type { AggregateResult } from "../algebra/aggregation.js";
 import type { ContradictionPolicy } from "../catalog/corpus.js";
 import type { Mneme } from "../mneme.js";
+import type { EmbeddingState } from "./recall.js";
 
 /** Boilerplate-free write input; the session fills the rest of CandidateClaim. */
 export interface WriteRecord {
@@ -67,6 +68,13 @@ export interface CorpusSpec {
 export interface SessionOptions {
   dbPath?: string; writer?: string; profile?: string;
   workspace?: string; source?: Source;
+}
+
+/** Shared read-op deps: embeddings state + optional per-key cardinality.
+ *  Neutral home for the deps shape used by recall, census, and reconcile. */
+export interface ReadDeps {
+  embeddings: EmbeddingState;
+  keyCardinality?: Record<string, "single" | "multi">;
 }
 
 export type QueryResult = Corpus | RankedCorpus | ComposedContext | AggregateResult;
