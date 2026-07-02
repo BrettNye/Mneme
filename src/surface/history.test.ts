@@ -38,6 +38,27 @@ describe("lineageOf", () => {
     s.close();
   });
 
+  it("breaks valid.from ties by recordedSeq even when alias-family read order is reversed", () => {
+    // The single-key "tag" test above passes trivially: the adapter already returns claims
+    // in recordedSeq order for a single key (ORDER BY recorded_seq ASC), and JS's stable
+    // sort preserves that for tied valid.from — so it exercises nothing about the
+    // `|| a.recordedSeq - b.recordedSeq` tiebreaker clause itself. This test forces a
+    // pre-sort claim order that is the OPPOSITE of recordedSeq order (via a multi-key
+    // alias family: keyFamilyOf("plan", aliasMap) => ["plan", "roadmap"], so the "plan"
+    // claim is concatenated ahead of the "roadmap" claim despite having a HIGHER
+    // recordedSeq) so only the recordedSeq clause can produce the correct order.
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "multi" } });
+    s.write("c", { subject: "key:roadmap", key: "alias-of", value: "plan", valid: { from: 1, to: Infinity } });
+    // Lower recordedSeq, but read AFTER the "plan" claim in family-iteration order.
+    s.write("c", { subject: "p", key: "roadmap", value: "rm-first", valid: { from: 5, to: Infinity } });
+    // Higher recordedSeq, but read FIRST in family-iteration order (["plan", "roadmap"]).
+    s.write("c", { subject: "p", key: "plan", value: "pl-second", valid: { from: 5, to: Infinity } });
+    const r = lineageOf(s, { corpus: "c", subject: "p", key: "plan" });
+    expect(r.entries.map((e) => e.value)).toEqual(["rm-first", "pl-second"]);
+    s.close();
+  });
+
   it("attributes token-similar restatements as merged", () => {
     const s = freshSession();
     s.createCorpus({ id: "c", keyCardinality: { note: "single" } });
