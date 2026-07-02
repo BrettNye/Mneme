@@ -162,4 +162,28 @@ describe("reconcile", () => {
     expect(r.content).toContain("reuse");
     expect(r.content).toContain("project:crewtracks");
   });
+
+  it("reconcile's live-entity set honors a per-corpus multi-cardinality declaration (schema, not deps)", async () => {
+    // "plan" is declared multi at the CORPUS level (session.createCorpus schema),
+    // NOT via deps.keyCardinality — jaccardDeps carries no keyCardinality at all.
+    // This proves reconcile resolves effective cardinality via resolveKeyCardinality
+    // (reading the corpus's own schema), not merely deps.keyCardinality.
+    //
+    // "roadmap" is a variant alias of canonical key "plan", so the two claims below
+    // land in ONE (subject, canonical="plan") contradiction triple. Without honoring
+    // the multi declaration, default (single) cardinality would deprecate the OLDER
+    // claim in the pair — the one carrying the literal key "plan" — so "plan" would
+    // vanish from the live key-axis enumeration entirely (only "roadmap" would survive).
+    // Honoring multi excludes the triple from cluster formation, so BOTH claims —
+    // and both literal keys, "plan" and "roadmap" — stay live.
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "multi" } });
+    s.write("c", { subject: "key:roadmap", key: "alias-of", value: "plan" });
+    s.write("c", { subject: "proj", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    s.write("c", { subject: "proj", key: "roadmap", value: "bravo", valid: { from: 2, to: Infinity } });
+
+    const r = await reconcile(s, { corpus: "c", keys: ["plan"] }, jaccardDeps);
+    expect(r.keys[0].suggestions.some((sg) => sg.existing === "plan")).toBe(true);
+    s.close();
+  });
 });
