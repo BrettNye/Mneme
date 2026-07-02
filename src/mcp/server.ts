@@ -656,6 +656,12 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
     },
     async (a) => {
       const resolvedCorpus = a.corpus ?? defaultCorpus;
+      if (!session.listCorpora().some((c) => c.id === resolvedCorpus)) {
+        return {
+          content: [{ type: "text" as const, text: `claim '${a.claimId}' not found` }],
+          structuredContent: { found: false, claimId: a.claimId },
+        };
+      }
       const claim = session.inspect(resolvedCorpus, a.claimId);
       if (!claim) {
         return {

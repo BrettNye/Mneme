@@ -1123,7 +1123,8 @@ describe("mneme MCP server (inspect wiring)", () => {
 
   it("returns found:false for a missing claim id", async () => {
     const { client } = await connected("inspect-missing");
-    // Seed the corpus so it exists (inspect on a truly unknown corpus is out of scope here).
+    // Seed the corpus so it exists, so this covers the missing-claim-id branch
+    // specifically (the unknown-corpus branch is covered separately below).
     await client.callTool({
       name: "remember",
       arguments: { subject: "entity:a", key: "status", value: "active", corpus: "inspect-missing" },
@@ -1136,6 +1137,20 @@ describe("mneme MCP server (inspect wiring)", () => {
 
     expect(result.structuredContent?.found).toBe(false);
     expect(result.structuredContent?.claimId).toBe("nonexistent-claim-id");
+
+    await client.close();
+  });
+
+  it("returns found:false (not a throw) for inspect on a truly unknown corpus", async () => {
+    const { client } = await connected();
+
+    const result = (await client.callTool({
+      name: "inspect",
+      arguments: { corpus: "never-created-corpus", claimId: "whatever-id" },
+    })) as { structuredContent?: { found: boolean; claimId: string }; isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({ found: false, claimId: "whatever-id" });
 
     await client.close();
   });
