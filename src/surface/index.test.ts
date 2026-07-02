@@ -20,4 +20,15 @@ describe("surface barrel", () => {
     const mod = await import("./index.js");
     expect(typeof mod.explainRecall).toBe("function");
   });
+
+  it("keyCensus is still exported from the surface barrel (back-compat)", async () => {
+    const mod = await import("./index.js");
+    expect(typeof mod.keyCensus).toBe("function");
+  });
+
+  it("subjectCensus and reconcile are exported from the surface barrel", async () => {
+    const mod = await import("./index.js");
+    expect(typeof mod.subjectCensus).toBe("function");
+    expect(typeof mod.reconcile).toBe("function");
+  });
 });

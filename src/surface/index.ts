@@ -15,10 +15,15 @@ export type {
   CorpusSpec,
   QueryResult,
 } from "./types.js";
-export { recall, keyCensus, parseAsOf } from "./recall.js";
+export { recall, parseAsOf } from "./recall.js";
 export type {
-  EmbeddingState, RecallDeps, RecallArgs, RecallMatch, RecallResult, CensusArgs, CensusResult,
+  EmbeddingState, RecallDeps, RecallArgs, RecallMatch, RecallResult,
 } from "./recall.js";
+export { keyCensus, subjectCensus } from "./census.js";
+export type { CensusArgs, CensusResult, SubjectCensusResult } from "./census.js";
+export { reconcile } from "./reconcile.js";
+export type { ReconcileArgs, ReconcileResult, ReconcileMatch, EntitySuggestion, ReconcileDisposition } from "./reconcile.js";
+export type { ReadDeps } from "./types.js";
 export { remember, ensureCorpus, listCorpora } from "./remember.js";
 export type { RememberArgs, RememberResult, ListResult } from "./remember.js";
 export { explainRecall } from "./explain.js";

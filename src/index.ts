@@ -102,11 +102,16 @@ export { DEFAULT_SCALAR_PSEUDOCOUNT } from "./surface/types.js";
 // Imported from their defining modules directly (not ./surface/index.js) to
 // avoid an index → surface/index → index cycle: surface/index.ts itself
 // value-imports pipe/leaf/sigma/rho/kappa from this file.
-export { recall, keyCensus } from "./surface/recall.js";
+export { recall } from "./surface/recall.js";
 export { remember, ensureCorpus, listCorpora } from "./surface/remember.js";
 export type {
-  RecallDeps, RecallArgs, RecallMatch, RecallResult, CensusArgs, CensusResult, EmbeddingState,
+  RecallDeps, RecallArgs, RecallMatch, RecallResult, EmbeddingState,
 } from "./surface/recall.js";
+export { keyCensus, subjectCensus } from "./surface/census.js";
+export type { CensusArgs, CensusResult, SubjectCensusResult } from "./surface/census.js";
+export { reconcile } from "./surface/reconcile.js";
+export type { ReconcileArgs, ReconcileResult, ReconcileMatch, EntitySuggestion, ReconcileDisposition } from "./surface/reconcile.js";
+export type { ReadDeps } from "./surface/types.js";
 export type { RememberArgs, RememberResult, ListResult } from "./surface/remember.js";
 export { explainRecall } from "./surface/explain.js";
 export type { RecallTrace, ClaimDisposition, DispositionReason } from "./surface/explain.js";

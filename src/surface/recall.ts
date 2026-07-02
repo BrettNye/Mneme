@@ -336,9 +336,3 @@ export async function recall(
   };
 }
 
-// ── keyCensus ─────────────────────────────────────────────────────────────────
-// Moved to ./census.ts (task-census). Transient re-export shim so surface/index.ts
-// and the root barrel keep resolving; removed by a later task once importers are
-// repointed directly at ./census.js.
-export { keyCensus } from "./census.js";
-export type { CensusArgs, CensusResult } from "./census.js";
