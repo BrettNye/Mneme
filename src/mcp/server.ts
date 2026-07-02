@@ -7,10 +7,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { remember, recall, listCorpora, keyCensus, subjectCensus, reconcile, explainRecall, type RecallTrace } from "../surface/index.js";
+import { remember, recall, listCorpora, keyCensus, subjectCensus, reconcile, explainRecall, pointEstimate, type RecallTrace } from "../surface/index.js";
 // Not (yet) re-exported from ../surface/index.js — imported directly per house
 // convention (the mcp layer may import surface modules directly).
 import { audit } from "../surface/audit.js";
+import { lineageOf } from "../surface/history.js";
 import { openMnemeEngine } from "./engine.js";
 import { appendRecallLog } from "./recall-log.js";
 
@@ -562,6 +563,122 @@ export function createMnemeMcpServer(opts: McpServerOptions = {}): {
           warnings: r.warnings,
           content: r.content,
         },
+      };
+    },
+  );
+
+  server.registerTool(
+    "history",
+    {
+      title: "Lineage of a (subject,key)",
+      description:
+        "Return the full non-destructive lineage of one (subject,key): every committed version (served, deprecated, merged, tau-invalid) " +
+        "tagged with its disposition and reason as of the given time. Use to see what changed and why, not just the latest served value.",
+      inputSchema: {
+        corpus: z.string().optional().describe(`corpus to read; defaults to '${defaultCorpus}'`),
+        subject: z.string().describe("the subject to trace"),
+        key: z.string().describe("the key to trace"),
+        asOf: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe("temporal scope: ISO-8601 string or epoch ms; default now"),
+      },
+      // Pure read: no state change, repeatable.
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: {
+        corpus: z.string(),
+        subject: z.string(),
+        key: z.string(),
+        asOf: z.number(),
+        entries: z.array(
+          z.object({
+            id: z.string(),
+            value: z.any().describe("the claim value (any JSON)"),
+            confidence: z.number().describe("point estimate of the claim's confidence, 0..1"),
+            valid: z.object({ from: z.number(), to: z.number() }),
+            recordedSeq: z.number(),
+            tags: z.array(z.string()),
+            disposition: z.enum(["served", "deprecated", "merged", "tau-invalid"]),
+            reason: z.any().describe("vocabulary-aligned disposition reason"),
+          }),
+        ).describe("every committed version of this (subject,key), oldest to newest"),
+        content: z.string().describe("composed human-readable lineage report"),
+      },
+    },
+    async (a) => {
+      const r = lineageOf(session, {
+        corpus: a.corpus ?? defaultCorpus,
+        subject: a.subject,
+        key: a.key,
+        asOf: a.asOf,
+      });
+      return {
+        content: [{ type: "text" as const, text: r.content || "(no lineage found)" }],
+        structuredContent: {
+          corpus: r.corpus,
+          subject: r.subject,
+          key: r.key,
+          asOf: r.asOf,
+          entries: r.entries,
+          content: r.content,
+        },
+      };
+    },
+  );
+
+  server.registerTool(
+    "inspect",
+    {
+      title: "Inspect a raw claim",
+      description:
+        "Return the raw stored fields of one claim by id — subject, key, value, confidence, validity, provenance. Use for low-level " +
+        "debugging/auditing when history's lineage view isn't specific enough.",
+      inputSchema: {
+        corpus: z.string().optional().describe(`corpus to read; defaults to '${defaultCorpus}'`),
+        claimId: z.string().describe("the claim id to inspect"),
+      },
+      // Pure read: no state change, repeatable.
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: {
+        found: z.boolean(),
+        claimId: z.string().optional().describe("present when found=false: the id that was looked up"),
+        id: z.string().optional(),
+        subject: z.string().optional(),
+        key: z.string().optional(),
+        value: z.any().optional().describe("the claim value (any JSON)"),
+        confidence: z.number().optional().describe("point estimate of the claim's confidence, 0..1"),
+        valid: z.object({ from: z.number(), to: z.number() }).optional(),
+        recordedSeq: z.number().optional(),
+        source: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        status: z.string().optional(),
+      },
+    },
+    async (a) => {
+      const resolvedCorpus = a.corpus ?? defaultCorpus;
+      const claim = session.inspect(resolvedCorpus, a.claimId);
+      if (!claim) {
+        return {
+          content: [{ type: "text" as const, text: `no claim found for id '${a.claimId}' in corpus '${resolvedCorpus}'` }],
+          structuredContent: { found: false, claimId: a.claimId },
+        };
+      }
+      const structuredContent = {
+        found: true,
+        id: claim.id,
+        subject: claim.subject,
+        key: claim.key,
+        value: claim.value,
+        confidence: pointEstimate(claim.confidence),
+        valid: { from: claim.valid.from, to: claim.valid.to },
+        recordedSeq: claim.recordedSeq,
+        source: claim.source,
+        tags: [...claim.tags],
+        status: claim.status,
+      };
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(structuredContent, null, 2) }],
+        structuredContent,
       };
     },
   );

@@ -319,7 +319,7 @@ describe("mneme MCP server (key_census wiring)", () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toContain("key_census");
     expect(names).toEqual(
-      ["audit", "declare_cardinality", "key_census", "list_corpora", "reconcile", "recall", "remember", "subject_census"].sort(),
+      ["audit", "declare_cardinality", "history", "inspect", "key_census", "list_corpora", "reconcile", "recall", "remember", "subject_census"].sort(),
     );
     await client.close();
   });
@@ -967,6 +967,206 @@ describe("mneme MCP server (instructions)", () => {
     expect(instructions).toMatch(/run audit periodically/i);
     expect(instructions).toMatch(/propose-then-confirm/i);
     expect(instructions).toMatch(/never auto-applied/i);
+    await client.close();
+  });
+});
+
+// ── history (lineage) wiring tests ──────────────────────────────────────────────
+
+describe("mneme MCP server (history wiring)", () => {
+  it("advertises history as read-only, idempotent, closed-world", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.history).toBeDefined();
+    expect(byName.history.annotations?.readOnlyHint).toBe(true);
+    expect(byName.history.annotations?.idempotentHint).toBe(true);
+    expect(byName.history.annotations?.openWorldHint).toBe(false);
+    expect(byName.history.outputSchema).toBeDefined();
+    await client.close();
+  });
+
+  it("returns all versions of a superseded (subject,key), latest served and older deprecated", async () => {
+    const { client } = await connected("history-test");
+
+    const first = (await client.callTool({
+      name: "remember",
+      arguments: { subject: "proj:h", key: "plan", value: "alpha", corpus: "history-test" },
+    })) as { structuredContent?: { id: string } };
+    const second = (await client.callTool({
+      name: "remember",
+      arguments: { subject: "proj:h", key: "plan", value: "bravo", corpus: "history-test" },
+    })) as { structuredContent?: { id: string } };
+
+    const result = (await client.callTool({
+      name: "history",
+      arguments: { corpus: "history-test", subject: "proj:h", key: "plan" },
+    })) as {
+      structuredContent?: {
+        corpus: string;
+        subject: string;
+        key: string;
+        asOf: number;
+        entries: { id: string; value: unknown; disposition: string }[];
+        content: string;
+      };
+    };
+
+    const sc = result.structuredContent;
+    expect(sc).toBeDefined();
+    expect(sc?.corpus).toBe("history-test");
+    expect(sc?.subject).toBe("proj:h");
+    expect(sc?.key).toBe("plan");
+    expect(typeof sc?.asOf).toBe("number");
+    expect(sc?.entries).toHaveLength(2);
+
+    const byId = Object.fromEntries((sc?.entries ?? []).map((e) => [e.id, e]));
+    expect(byId[first.structuredContent!.id]?.disposition).toBe("deprecated");
+    expect(byId[second.structuredContent!.id]?.disposition).toBe("served");
+    expect(byId[first.structuredContent!.id]?.value).toBe("alpha");
+    expect(byId[second.structuredContent!.id]?.value).toBe("bravo");
+
+    await client.close();
+  });
+
+  it("history defaults corpus to the server defaultCorpus when omitted", async () => {
+    const { client } = await connected("hist-default-corpus");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "proj:d", key: "status", value: "active" },
+    });
+
+    const result = (await client.callTool({
+      name: "history",
+      arguments: { subject: "proj:d", key: "status" },
+    })) as { structuredContent?: { corpus: string; entries: unknown[] } };
+
+    expect(result.structuredContent?.corpus).toBe("hist-default-corpus");
+    expect(result.structuredContent?.entries).toHaveLength(1);
+
+    await client.close();
+  });
+
+  it("history is read-only: does not write any new claims nor create an unknown corpus", async () => {
+    const { client } = await connected("hist-readonly");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "entity:a", key: "status", value: "active", corpus: "hist-readonly" },
+    });
+
+    const result = (await client.callTool({
+      name: "history",
+      arguments: { corpus: "nonexistent-corpus-hist", subject: "entity:a", key: "status" },
+    })) as { structuredContent?: { entries: unknown[] } };
+    expect(result.structuredContent?.entries).toEqual([]);
+
+    const corpora = (await client.callTool({ name: "list_corpora", arguments: {} })) as {
+      structuredContent?: { corpora: { id: string }[] };
+    };
+    const ids = corpora.structuredContent?.corpora.map((c) => c.id) ?? [];
+    expect(ids).not.toContain("nonexistent-corpus-hist");
+
+    await client.close();
+  });
+});
+
+// ── inspect (raw claim) wiring tests ────────────────────────────────────────────
+
+describe("mneme MCP server (inspect wiring)", () => {
+  it("advertises inspect as read-only, idempotent, closed-world", async () => {
+    const { client } = await connected();
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.inspect).toBeDefined();
+    expect(byName.inspect.annotations?.readOnlyHint).toBe(true);
+    expect(byName.inspect.annotations?.idempotentHint).toBe(true);
+    expect(byName.inspect.annotations?.openWorldHint).toBe(false);
+    expect(byName.inspect.outputSchema).toBeDefined();
+    await client.close();
+  });
+
+  it("returns the raw claim's fields for a written claim id", async () => {
+    const { client } = await connected("inspect-test");
+
+    const rem = (await client.callTool({
+      name: "remember",
+      arguments: { subject: "proj:i", key: "status", value: "active", confidence: 0.8, corpus: "inspect-test" },
+    })) as { structuredContent?: { id: string } };
+    const claimId = rem.structuredContent!.id;
+
+    const result = (await client.callTool({
+      name: "inspect",
+      arguments: { corpus: "inspect-test", claimId },
+    })) as {
+      structuredContent?: {
+        found: boolean;
+        id: string;
+        subject: string;
+        key: string;
+        value: unknown;
+        confidence: number;
+      };
+    };
+
+    const sc = result.structuredContent;
+    expect(sc?.found).toBe(true);
+    expect(sc?.id).toBe(claimId);
+    expect(sc?.subject).toBe("proj:i");
+    expect(sc?.key).toBe("status");
+    expect(sc?.value).toBe("active");
+    expect(typeof sc?.confidence).toBe("number");
+
+    await client.close();
+  });
+
+  it("returns found:false for a missing claim id", async () => {
+    const { client } = await connected("inspect-missing");
+    // Seed the corpus so it exists (inspect on a truly unknown corpus is out of scope here).
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "entity:a", key: "status", value: "active", corpus: "inspect-missing" },
+    });
+
+    const result = (await client.callTool({
+      name: "inspect",
+      arguments: { corpus: "inspect-missing", claimId: "nonexistent-claim-id" },
+    })) as { structuredContent?: { found: boolean; claimId: string } };
+
+    expect(result.structuredContent?.found).toBe(false);
+    expect(result.structuredContent?.claimId).toBe("nonexistent-claim-id");
+
+    await client.close();
+  });
+
+  it("inspect is read-only: does not write any new claims", async () => {
+    const { client } = await connected("inspect-readonly");
+
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "entity:a", key: "status", value: "active", corpus: "inspect-readonly" },
+    });
+
+    const before = (await client.callTool({
+      name: "recall",
+      arguments: { about: "active", corpus: "inspect-readonly" },
+    })) as { structuredContent?: { matches: unknown[] } };
+    const countBefore = before.structuredContent?.matches.length ?? 0;
+
+    await client.callTool({
+      name: "inspect",
+      arguments: { corpus: "inspect-readonly", claimId: "some-id" },
+    });
+
+    const after = (await client.callTool({
+      name: "recall",
+      arguments: { about: "active", corpus: "inspect-readonly" },
+    })) as { structuredContent?: { matches: unknown[] } };
+    const countAfter = after.structuredContent?.matches.length ?? 0;
+
+    expect(countAfter).toBe(countBefore);
+
     await client.close();
   });
 });
