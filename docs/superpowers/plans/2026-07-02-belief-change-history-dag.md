@@ -9,9 +9,9 @@ default_review_mode: split
 
 ```mermaid
 flowchart TD
-    task-group-dispositions["task-group-dispositions: shared attribution<br/>files: src/surface/belief-change.ts +1 more"]
-    task-lineage["task-lineage: lineageOf<br/>files: src/surface/history.ts +1 more"]
-    task-mcp["task-mcp: history + inspect tools<br/>files: src/mcp/server.ts +1 more"]
+    task-group-dispositions["task-group-dispositions: shared attribution<br/>files: src/surface/belief-change.ts +1 more"]:::done
+    task-lineage["task-lineage: lineageOf<br/>files: src/surface/history.ts +1 more"]:::done
+    task-mcp["task-mcp: history + inspect tools<br/>files: src/mcp/server.ts +1 more"]:::done
 
     task-group-dispositions --> task-lineage
     task-lineage --> task-mcp
@@ -47,7 +47,7 @@ depends_on: []
 files:
   - src/surface/belief-change.ts
   - src/surface/belief-change.test.ts
-status: pending
+status: done
 quality_reviewer_hint: opus
 ```
 
@@ -127,7 +127,7 @@ depends_on: [task-group-dispositions]
 files:
   - src/surface/history.ts
   - src/surface/history.test.ts
-status: pending
+status: done
 ```
 
 `lineageOf` — the full non-destructive lineage of one (subject,key), every version + its
@@ -216,7 +216,7 @@ depends_on: [task-lineage]
 files:
   - src/mcp/server.ts
   - src/mcp/server.integration.test.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
