@@ -79,23 +79,28 @@ never per-corpus, and the collapse is silent.
   ): Record<string, "single" | "multi"> | undefined;
 
   /** Advisory warnings for single-cardinality (subject, canonical key) groups holding ≥2
-   *  distinct values (which read-time resolution collapses to the latest). Reuses pairsOf —
-   *  the same operator Cluster A's deprecated-by via:"single-cardinality" derives from.
-   *  `corpus` must be the pre-⊥ corpus (τ_valid + ⊕_dedupe applied), i.e. exactly what
-   *  canonicalReadStages feeds into ⊥, so the count matches what actually gets deprecated. */
+   *  distinct values (which read-time resolution collapses to the latest). Reuses clustersOf —
+   *  the cluster former behind pairsOf, from which Cluster A's deprecated-by via:"single-
+   *  cardinality" derives. `corpus` must be the pre-⊥ corpus (τ_valid + ⊕_dedupe applied),
+   *  i.e. exactly what canonicalReadStages feeds into ⊥, so the count matches what actually
+   *  gets deprecated. */
   export function cardinalitySafetyWarnings(
     corpus: Corpus, effectiveCardinality: Record<string, "single" | "multi"> | undefined,
     aliasMap: KeyAliasMap,
   ): string[];
   ```
   `resolveKeyCardinality` reads `session.mneme.listCorpora((c) => c.id === corpus)[0]?.schema.keyCardinality`
-  and returns `{ ...depsCardinality, ...schemaCardinality }` (schema wins), or `undefined` if the
-  merged map is empty. `cardinalitySafetyWarnings` calls `pairsOf(corpus, 0, { keyCardinality,
-  keyAliases: aliasMap })`, groups the returned pairs by `(subject, canonicalKeyOf(key, aliasMap))`,
-  counts distinct `valueHash` per group, and emits one warning per group (≥2 distinct values).
+  and returns `{ ...depsCardinality, ...schemaCardinality }` (schema wins), or `undefined` when the
+  merged map has no keys (so callers pass `undefined` → all-single default, unchanged).
+  `cardinalitySafetyWarnings` calls `clustersOf(corpus, 0, { keyCardinality: effectiveCardinality,
+  keyAliases: aliasMap })` — which already excludes `"multi"` keys, groups by `(subject, canonical
+  key, scopeHash)`, and exposes `distinctValues` per cluster — then emits one warning per cluster
+  with `distinctValues >= 2`, naming `cluster.triple.subject`, `cluster.triple.key` (already
+  canonical), and the count. No manual grouping and no need for the private `canonicalKeyOf`.
   Note: `cardinality.ts` does not import `entities.ts` (avoids a cycle with the
-  `entities → recall` `MCP_EVIDENCE_POOLING_RULE` import); it depends only on `types`, algebra,
-  and `retrieval/key-alias`.
+  `entities → recall` `MCP_EVIDENCE_POOLING_RULE` import); it depends only on `types`, algebra
+  (`types`, `contradiction`'s `clustersOf`/`ContradictionCluster`), and `retrieval/key-alias`
+  (`KeyAliasMap`).
 
 - **`src/surface/types.ts`** — add `keyCardinality?` to `CorpusSpec`.
 
@@ -125,25 +130,31 @@ never per-corpus, and the collapse is silent.
      when `undefined`, so existing defs and the store stay byte-identical for undeclared corpora).
 3. Round-trips through `saveCorpora`/`loadCorpora` (already serializes the full `schema`).
 4. `resolveKeyCardinality` makes the stored declaration flow into the read path per-corpus,
-   merged over the deps/global map (declaration wins). `recall`/`censusCore`/`reconcile` use the
-   resolved map wherever they currently pass `deps.keyCardinality` to `canonicalReadStages`/
-   `pairsOf`/`distinctEntities`. (`reconcile` uses it via `distinctEntities`; threading the
-   resolved map keeps it consistent.)
+   merged over the deps/global map (declaration wins). Each op computes
+   `const effective = resolveKeyCardinality(session, corpus, deps.keyCardinality)` once, then
+   uses `effective` wherever it currently uses `deps.keyCardinality`:
+   - `recall` — passes `effective` to `canonicalReadStages` (recall.ts:280) and to
+     `loadAliasContext` (replacing `deps.keyCardinality` at recall.ts:213/210 usage).
+   - `censusCore` / `reconcile` — pass `effective` to `loadAliasContext`, and to `distinctEntities`
+     by handing it `{ ...deps, keyCardinality: effective }` (distinctEntities reads
+     `deps.keyCardinality`; no signature change). This transparently covers `keyCensus`,
+     `subjectCensus`, and `reconcile`'s live-entity enumeration.
 
 ## Part B — Safety warning (recall-time)
 
 Detection (`cardinalitySafetyWarnings`): over the pre-⊥ corpus (τ_valid + ⊕_dedupe), run
-`pairsOf` with the effective cardinality + alias map. Each single-cardinality `(subject,
-canonical key)` group with ≥2 distinct values yields pairs → emit one warning naming the
-subject, key, and distinct-value count:
+`clustersOf` with the effective cardinality + alias map. Each single-cardinality cluster with
+`distinctValues >= 2` → emit one warning naming the subject, canonical key, and count:
 
 > `single-cardinality (subject:client:acme, key:database.choice) holds 3 distinct values — recall serves only the latest; declare keyCardinality:"multi" if they should coexist.`
 
-- **`recall`:** compute the pre-⊥ corpus with the prefix it already composes
-  (`leaf → σ → τ_valid → ⊕_dedupe`, i.e. `pipe(leaf, ...sigmas, canon[0], canon[1])` — the same
-  first two `canonicalReadStages`), run `cardinalitySafetyWarnings`, append to `allWarnings`.
-  One extra lightweight query per recall (no ranking/knobs). Warnings already surface to the
-  caller (and to stderr via the MCP server convention).
+- **`recall`:** capture `const canon = canonicalReadStages({ ... effective ... })` (recall already
+  builds these; hold the array like `explainRecall` does), compute the pre-⊥ corpus with the prefix
+  it already composes (`pipe(leaf, ...sigmas, canon[0], canon[1])` — τ_valid + ⊕_dedupe), run
+  `cardinalitySafetyWarnings`, append to `allWarnings`. This is one extra lightweight query per
+  recall (no ranking, no embeddings warm-up — recall's dominant cost). Cost note: the query is
+  bounded to the σ-scoped subset and skips the expensive stages; acceptable for an always-on
+  safety net. Warnings already surface to the caller (and to stderr via the MCP server convention).
 - **`keyCensus`:** it already reads all raw claims and runs the canonical pipeline; compute the
   pre-⊥ corpus (τ_valid + dedupe over the full corpus) and append the same warnings to its
   `warnings`.
