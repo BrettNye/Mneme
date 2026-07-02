@@ -80,3 +80,10 @@ it("ClaimSchema without keyCardinality field type-checks (optional)", () => {
   const schemaWithout: ClaimSchema = { ...schema };
   expect(schemaWithout.keyCardinality).toBeUndefined();
 });
+
+import { validateKeyCardinality } from "./schema.js";
+
+it("validateKeyCardinality accepts single/multi and throws on anything else", () => {
+  expect(() => validateKeyCardinality({ a: "single", b: "multi" })).not.toThrow();
+  expect(() => validateKeyCardinality({ a: "many" as "single" })).toThrow(/invalid keyCardinality/);
+});

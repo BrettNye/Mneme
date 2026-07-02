@@ -74,3 +74,19 @@ export function cardinalityOf(
   }
   return v;
 }
+
+/**
+ * Throws if any value in the map is not "single" | "multi" (fail-fast at declaration).
+ * Shared by createCorpus and declareCardinality (surface).
+ */
+export function validateKeyCardinality(
+  map: Record<string, "single" | "multi">,
+): void {
+  for (const [k, v] of Object.entries(map)) {
+    if (v !== "single" && v !== "multi") {
+      throw new Error(
+        `invalid keyCardinality for key "${k}": ${v} (expected "single" | "multi")`,
+      );
+    }
+  }
+}
