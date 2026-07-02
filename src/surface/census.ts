@@ -10,7 +10,7 @@
  */
 import { distinctEntities, entityScorer, type EntityAxis } from "./entities.js";
 import { loadAliasContext, MCP_EVIDENCE_POOLING_RULE, type EmbeddingState } from "./recall.js"; // hoisted fn; runtime-only call → cycle-safe
-import { resolveKeyCardinality, cardinalitySafetyWarnings } from "./cardinality.js";
+import { resolveKeyCardinality, cardinalityCollisions, formatCardinalityCollision, type CardinalityCollision } from "./cardinality.js";
 import { pipe, leaf } from "../mneme.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
 import type { Corpus } from "../algebra/types.js";
@@ -31,6 +31,7 @@ export interface CensusResult {
   warnings: string[];
   rankFn: string;
   content: string; // composed text incl. remember-shape ratification affordance
+  cardinalityCollisions: CardinalityCollision[]; // structural single-cardinality collisions (see cardinality.ts)
 }
 
 /**
@@ -98,6 +99,7 @@ export async function keyCensus(
     warnings: [],
     rankFn: embeddings.rankFn,
     content: "",
+    cardinalityCollisions: [],
   };
 
   // Read-only: unknown corpus → empty report, no corpus created
@@ -119,6 +121,7 @@ export async function keyCensus(
   // One extra lightweight query over the pre-⊥ (τ_valid + ⊕_dedupe) corpus — no
   // ranking/warm-up — so a single-cardinality key holding ≥2 distinct values is
   // surfaced as a mass-deprecation safety warning before ⊥ silently drops one.
+  let collisions: CardinalityCollision[] = [];
   try {
     const now = Date.now(); // best-effort re-check; a fresh now is acceptable here
     const canon = canonicalReadStages({
@@ -132,7 +135,8 @@ export async function keyCensus(
       pipe(leaf(corpus), canon[0], canon[1]),
       { evaluationClock: now },
     );
-    warnings.push(...cardinalitySafetyWarnings(preContra, effective, aliasMap));
+    collisions = cardinalityCollisions(preContra, effective, aliasMap);
+    warnings.push(...collisions.map(formatCardinalityCollision));
   } catch (e) {
     warnings.push(`cardinality-safety check failed: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -188,6 +192,7 @@ export async function keyCensus(
     warnings,
     rankFn: effectiveRankFn,
     content,
+    cardinalityCollisions: collisions,
   };
 }
 

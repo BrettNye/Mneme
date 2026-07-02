@@ -34,6 +34,42 @@ describe("audit", () => {
     s.close();
   });
 
+  it("cardinality-declare claimsAffected equals the group's total claim count, not distinctValues", async () => {
+    const s = freshSession();
+    const corpus = "audit-cardinality-units";
+    s.createCorpus({ id: corpus, keyCardinality: { plan: "single" } });
+    // beta confidence (not the default scalar) so a >1-claim value group can be pooled
+    // by clustersOf's default EVIDENCE_POOLED rule during collision detection.
+    const beta = { distribution: "beta" as const, parameters: { alpha: 2, beta: 2 }, raw: 0.5 };
+    // ⊕_dedupe groups by RAW key (pre-alias); the cardinality cluster groups by CANONICAL
+    // key. Two raw keys aliased to the same canonical key each keep their own duplicate
+    // value un-merged across the raw-key boundary, so once grouped under the canonical
+    // key totalClaims (3) > distinctValues (2, "alpha" appearing under both raw keys +
+    // "bravo") — the case the old distinctValues-based ranking got wrong.
+    s.write(corpus, { subject: "p", key: "plan", value: "alpha", confidence: beta, valid: { from: 1, to: Infinity } });
+    s.write(corpus, { subject: "p", key: "plan_variant", value: "alpha", confidence: beta, valid: { from: 2, to: Infinity } });
+    s.write(corpus, { subject: "p", key: "plan_variant", value: "bravo", confidence: beta, valid: { from: 3, to: Infinity } });
+    remember(s, { subject: "key:plan_variant", key: "alias-of", value: "plan", corpus });
+    const r = await audit(s, { corpus }, jaccardDeps);
+    const prop = r.proposals.find((p) => p.kind === "cardinality-declare");
+    expect(prop).toBeDefined();
+    expect(prop!.claimsAffected).toBe(3); // totalClaims, NOT distinctValues (2)
+    s.close();
+  });
+
+  it("cardinality-declare proposal is structural: subject/key containing comma or ')' is not mis-parsed", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { "weird)key": "single" } });
+    s.write("c", { subject: "p,x)", key: "weird)key", value: "alpha", valid: { from: 1, to: Infinity } });
+    s.write("c", { subject: "p,x)", key: "weird)key", value: "bravo", valid: { from: 2, to: Infinity } });
+    const r = await audit(s, { corpus: "c" }, jaccardDeps);
+    const prop = r.proposals.find((p) => p.kind === "cardinality-declare");
+    expect(prop).toBeDefined();
+    expect(prop!.entities).toEqual(["p,x)", "weird)key"]);
+    expect(prop!.claimsAffected).toBe(2);
+    s.close();
+  });
+
   it("proposes a key-alias for near-duplicate keys, composed from keyCensus candidates", async () => {
     const s = freshSession();
     const corpus = "audit-key-alias";

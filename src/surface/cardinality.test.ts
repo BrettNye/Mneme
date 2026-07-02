@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { freshSession } from "./test-support.js";
-import { resolveKeyCardinality, cardinalitySafetyWarnings } from "./cardinality.js";
+import { resolveKeyCardinality, cardinalitySafetyWarnings, cardinalityCollisions, formatCardinalityCollision } from "./cardinality.js";
 
 describe("cardinality", () => {
   it("resolveKeyCardinality: corpus declaration wins over deps map", () => {
@@ -28,6 +28,38 @@ describe("cardinality", () => {
     const corpus = { claims: s.mneme.read("c", { corpusId: "c" }) };
     expect(cardinalitySafetyWarnings(corpus, undefined, {})).toHaveLength(1);
     expect(cardinalitySafetyWarnings(corpus, { status: "multi" }, {})).toHaveLength(0);
+    s.close();
+  });
+
+  it("cardinalityCollisions: returns structured {subject,key,distinctValues,totalClaims} for a collision", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    s.write("c", { subject: "proj", key: "status", value: "a", valid: { from: 1, to: Infinity } });
+    s.write("c", { subject: "proj", key: "status", value: "b", valid: { from: 2, to: Infinity } });
+    s.write("c", { subject: "proj", key: "status", value: "c", valid: { from: 3, to: Infinity } });
+    const corpus = { claims: s.mneme.read("c", { corpusId: "c" }) };
+    const collisions = cardinalityCollisions(corpus, undefined, {});
+    expect(collisions).toEqual([
+      { subject: "proj", key: "status", distinctValues: 3, totalClaims: 3 },
+    ]);
+    // multi cardinality suppresses the collision entirely
+    expect(cardinalityCollisions(corpus, { status: "multi" }, {})).toHaveLength(0);
+    s.close();
+  });
+
+  it("cardinalitySafetyWarnings is derived from cardinalityCollisions via formatCardinalityCollision (byte-identical)", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    s.write("c", { subject: "proj", key: "status", value: "a", valid: { from: 1, to: Infinity } });
+    s.write("c", { subject: "proj", key: "status", value: "b", valid: { from: 2, to: Infinity } });
+    const corpus = { claims: s.mneme.read("c", { corpusId: "c" }) };
+    const collisions = cardinalityCollisions(corpus, undefined, {});
+    const warnings = cardinalitySafetyWarnings(corpus, undefined, {});
+    expect(warnings).toEqual(collisions.map(formatCardinalityCollision));
+    expect(warnings[0]).toBe(
+      `single-cardinality (subject:proj, key:status) holds 2 distinct values` +
+      ` — recall serves only the latest; declare keyCardinality:"multi" if they should coexist.`,
+    );
     s.close();
   });
 });

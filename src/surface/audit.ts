@@ -2,8 +2,8 @@
  * audit.ts — the whole-corpus detector.
  *
  * Composes `keyCensus` (alias candidates), `subjectCensus` (subject fragmentation),
- * and single-cardinality collisions (surfaced via keyCensus's cardinality-safety
- * warnings) into ONE ranked list of proposed declarations.
+ * and single-cardinality collisions (structural — keyCensus's `cardinalityCollisions`,
+ * NOT the prose warning strings) into ONE ranked list of proposed declarations.
  *
  * Charter I3 (hard invariant): PROPOSE ONLY. `audit` never applies a proposal —
  * no alias claim, no cardinality declaration, no deprecation. It calls only the
@@ -12,6 +12,7 @@
  */
 import type { Session, ReadDeps } from "./types.js";
 import { keyCensus, subjectCensus } from "./census.js";
+import { formatCardinalityCollision } from "./cardinality.js";
 
 export type ProposalKind = "key-alias" | "subject-fragmentation" | "cardinality-declare";
 
@@ -31,12 +32,6 @@ export interface AuditResult {
   warnings: string[];
   content: string; // human-readable maintenance report
 }
-
-// Matches the cardinality-safety warning composed by cardinalitySafetyWarnings
-// (src/surface/cardinality.ts):
-//   `single-cardinality (subject:${subject}, key:${key}) holds ${n} distinct values — ...`
-const CARDINALITY_WARNING_RE =
-  /^single-cardinality \(subject:([^,]+), key:([^)]+)\) holds (\d+) distinct values/;
 
 /**
  * Read-only whole-corpus audit. Composes keyCensus + subjectCensus into a single
@@ -100,17 +95,15 @@ export async function audit(
     });
   }
 
-  // ── cardinality-declare proposals (from keyCensus.warnings) ─────────────────
-  for (const w of keyResult.warnings) {
-    const m = CARDINALITY_WARNING_RE.exec(w);
-    if (!m) continue;
-    const [, subject, key, count] = m;
+  // ── cardinality-declare proposals (from keyCensus.cardinalityCollisions, structural) ──
+  for (const collision of keyResult.cardinalityCollisions) {
+    const { subject, key, totalClaims } = collision;
     proposals.push({
       kind: "cardinality-declare",
       entities: [subject, key],
-      claimsAffected: Number(count),
+      claimsAffected: totalClaims, // consistent with key-alias/subject-fragmentation: claim counts
       suggestedAction: `session.declareCardinality("${corpus}", { "${key}": "multi" })`,
-      detail: w,
+      detail: formatCardinalityCollision(collision),
     });
   }
 
