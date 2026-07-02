@@ -43,13 +43,18 @@ export function supersessionOutcome(session: Session, corpus: string, claimId: s
   const keyCardinality = resolveKeyCardinality(session, corpus, undefined);
   const { aliasMap } = loadAliasContext(session, corpus, now, keyCardinality);
   const written = session.mneme.read(corpus, { corpusId: corpus }).find((c) => c.id === claimId);
+  // written-not-found: e.g. a stale/foreign id. No group to attribute against — "committed" by
+  // design (this also covers the OLDER member of a ⊥ pair, which is dead-on-arrival and never
+  // itself the "newer" side below, so it naturally falls through to "committed" too).
   if (!written) return { action: "committed", deprecatedIds: [] };
+  // Scoped to the exact (subject, key) of `written`; alias-family expansion across related keys
+  // is a documented v1 limitation (not handled here).
   const group = tauValid(now)(
     corpusOf(
       session.mneme.read(corpus, { corpusId: corpus, subject: written.subject, key: written.key }) as Claim[],
     ),
   );
-  const { mergedInto } = dedupeGroups(DEDUPE_DEFAULTS.rule, undefined, {
+  const { survivors, mergedInto } = dedupeGroups(DEDUPE_DEFAULTS.rule, undefined, {
     similarity: { fn: DEDUPE_DEFAULTS.fn, cutoff: DEDUPE_DEFAULTS.cutoff },
   })(group);
   if (mergedInto.has(claimId)) {
@@ -58,7 +63,9 @@ export function supersessionOutcome(session: Session, corpus: string, claimId: s
     const action = targetClaim && targetClaim.valueHash === written.valueHash ? "duplicate" : "merged";
     return { action, deprecatedIds: [], mergedInto: target, reason: { kind: "merged-into", targetId: target } };
   }
-  const pairs = pairsOf(group, 0, {
+  // ⊥ runs on the ⊕_dedupe SURVIVORS (canonicalReadStages: τ_valid → ⊕_dedupe → ⊥), not the raw
+  // τ_valid group — a claim merged away above must never be reported as a live deprecation.
+  const pairs = pairsOf(survivors, 0, {
     keyCardinality,
     keyAliases: aliasMap,
     evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
