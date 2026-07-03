@@ -188,8 +188,11 @@ export async function reverseReconcile(
   }
 
   // ── Approach A (low): per-subject value clustering ─────────────────────────
-  // Requires >=2 SUBSTANTIAL clusters (each with >=2 members) — a split like [2,1]
-  // is one real group plus a lone outlier, not an over-merge, and must NOT fire.
+  // Requires >=2 SUBSTANTIAL clusters (each with >=2 members) — this gate suppresses
+  // ANY split with a singleton side ([2,1], [3,1], [5,1], …), not just [2,1]: one
+  // real group plus a lone outlier is not an over-merge, and must NOT fire. Accepted
+  // trade-off: a genuine second entity that happens to appear as a lone claim is
+  // missed by design — Approach B's per-claim re-attribution check is the backstop.
   const lowProposals: OverFoldProposal[] = [];
   for (const [subject, subjectItems] of bySubject) {
     if (subjectItems.length < minClaims) continue;
@@ -268,14 +271,17 @@ export async function reverseReconcile(
     const representative = misCohering
       .filter((m) => m.betterSubject === modeSubject)
       .reduce((best, m) => (m.gap > best.gap ? m : best));
-    const maxGapOverall = misCohering.reduce((best, m) => Math.max(best, m.gap), -Infinity);
 
     mediumProposals.push({
       kind: "subject-over-merge",
       subject,
       claim: representative.claimId,
       betterSubject: modeSubject,
-      cohesion: maxGapOverall,
+      // cohesion describes modeSubject's OWN evidence (its max gap), not the max gap
+      // across ALL mis-cohering claims — when votes split across MULTIPLE other
+      // subjects, a different subject's larger gap must never be reported under
+      // modeSubject's name (see docs/superpowers/specs/... quality review).
+      cohesion: modeGap,
       affectedClaims: misCohering.length,
       confidence: "medium",
       detail:

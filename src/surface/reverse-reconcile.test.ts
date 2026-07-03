@@ -214,6 +214,32 @@ describe("reverseReconcile", () => {
     s.close();
   });
 
+  it("aggregated approach B: cohesion reflects the MODE winner's own gap, not a larger gap belonging to a different (losing) subject", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    // project:a's three claims are mutually token-disjoint (own cohesion ~0 for each).
+    s.write("c", { subject: "project:a", key: "k1", value: "red apple fruit snack", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "k2", value: "blue ocean wave surf", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "k3", value: "green forest tree wood", source: "llm", confidence: 0.8 });
+    // project:b pulls TWO of project:a's claims (k1, k2) with a WEAK gap (jaccard 2/6).
+    s.write("c", { subject: "project:b", key: "k1", value: "red apple orange citrus", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:b", key: "k2", value: "blue ocean tide current", source: "llm", confidence: 0.8 });
+    // project:c pulls only ONE of project:a's claims (k3) but with a STRONGER gap (jaccard 3/5).
+    s.write("c", { subject: "project:c", key: "k1", value: "green forest tree jungle", source: "llm", confidence: 0.8 });
+
+    const r = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
+
+    const bProposals = r.proposals.filter((p) => p.confidence === "medium" && p.subject === "project:a");
+    // (a) exactly one aggregated B proposal for project:a
+    expect(bProposals.length).toBe(1);
+    // (b) betterSubject is the MODE winner (2 votes) — project:b, not project:c (1 vote)
+    expect(bProposals[0].betterSubject).toBe("project:b");
+    // (c) cohesion is project:b's OWN max gap (2/6 ≈ 0.333), NOT project:c's larger gap (3/5 = 0.6)
+    expect(bProposals[0].cohesion).toBeCloseTo(2 / 6, 10);
+    expect(bProposals[0].cohesion).not.toBeCloseTo(0.6, 5);
+    s.close();
+  });
+
   it("approach A requires >=2 clusters each with >=2 members — a lone-outlier split (2,1) does not flag; (2,2) does", async () => {
     const s = freshSession();
     s.createCorpus({ id: "c" });
