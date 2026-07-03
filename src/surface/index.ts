@@ -32,3 +32,7 @@ export { ingest } from "./ingest.js";
 export type { IngestArgs, IngestContext, CandidateClaim, IngestedClaim, IngestReport } from "./ingest.js";
 export { reverseReconcile } from "./reverse-reconcile.js";
 export type { OverFoldProposal, ReverseReconcileResult } from "./reverse-reconcile.js";
+export { audit } from "./audit.js";
+export type { AuditProposal, AuditResult, ProposalKind } from "./audit.js";
+export { lineageOf } from "./history.js";
+export type { LineageEntry, LineageResult } from "./history.js";
