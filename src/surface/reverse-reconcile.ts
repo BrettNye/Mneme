@@ -36,12 +36,14 @@ import { resolveKeyCardinality } from "./cardinality.js";
 export interface OverFoldProposal {
   kind: "subject-over-merge";
   subject: string;
-  /** (approach B) the specific suspect claim id. */
+  /** (approach B, aggregated) a representative mis-cohering claim id. */
   claim?: string;
   /** (approach B) the subject its value coheres with more. */
   betterSubject?: string;
-  /** (approach B) the score gap driving the flag — the winning cohesion score. */
+  /** (approach B) the max cohesion gap observed among the subject's mis-cohering claims. */
   cohesion?: number;
+  /** (approach B) how many of the subject's claims cohere more with another subject. */
+  affectedClaims?: number;
   confidence: "low" | "medium"; // A = low, B = medium — NEVER "high" (heuristic)
   detail: string; // hedged: "possible over-merge — review", never asserted
 }
@@ -186,26 +188,37 @@ export async function reverseReconcile(
   }
 
   // ── Approach A (low): per-subject value clustering ─────────────────────────
+  // Requires >=2 SUBSTANTIAL clusters (each with >=2 members) — a split like [2,1]
+  // is one real group plus a lone outlier, not an over-merge, and must NOT fire.
   const lowProposals: OverFoldProposal[] = [];
   for (const [subject, subjectItems] of bySubject) {
     if (subjectItems.length < minClaims) continue;
     const clusters = clusterValues(subjectItems.map((i) => i.value), scoreOne);
-    if (clusters.length >= 2) {
+    const substantialClusters = clusters.filter((c) => c.length >= 2);
+    if (substantialClusters.length >= 2) {
       lowProposals.push({
         kind: "subject-over-merge",
         subject,
         confidence: "low",
         detail:
-          `subject "${subject}" holds ${clusters.length} well-separated value clusters ` +
-          `across ${subjectItems.length} claims — possible over-merge — review`,
+          `subject "${subject}" holds ${substantialClusters.length} well-separated value clusters ` +
+          `(each with >=2 claims, of ${clusters.length} total) across ${subjectItems.length} claims — ` +
+          `possible over-merge — review`,
       });
     }
   }
 
-  // ── Approach B (medium): per-claim value→subject re-attribution check ──────
+  // ── Approach B (medium): per-subject aggregated value→subject re-attribution
+  // check. Per-claim mis-cohering findings are collected, then rolled into AT
+  // MOST ONE proposal per subject — a 13-mis-cohering-claim over-merge should
+  // read as one signal, not 13 (incl. redundant bidirectional pairs), which is
+  // naturally avoided once each subject only ever emits its own proposal.
   const mediumProposals: OverFoldProposal[] = [];
   for (const [subject, subjectItems] of bySubject) {
     if (subjectItems.length < 2) continue; // no own-subject cohesion baseline without a sibling
+
+    interface MisCohering { claimId: string; betterSubject: string; gap: number }
+    const misCohering: MisCohering[] = [];
     for (const item of subjectItems) {
       const ownOthers = subjectItems.filter((o) => o.claimId !== item.claimId).map((o) => o.value);
       const ownCohesion = ownOthers.length > 0
@@ -224,19 +237,51 @@ export async function reverseReconcile(
       }
 
       if (bestOtherSubject !== undefined && bestOtherCohesion > ownCohesion) {
-        mediumProposals.push({
-          kind: "subject-over-merge",
-          subject,
-          claim: item.claimId,
-          betterSubject: bestOtherSubject,
-          cohesion: bestOtherCohesion,
-          confidence: "medium",
-          detail:
-            `claim on subject "${subject}" coheres more with "${bestOtherSubject}" ` +
-            `(${bestOtherCohesion.toFixed(3)} vs ${ownCohesion.toFixed(3)}) — possible over-merge — review`,
+        misCohering.push({
+          claimId: item.claimId, betterSubject: bestOtherSubject, gap: bestOtherCohesion - ownCohesion,
         });
       }
     }
+
+    if (misCohering.length === 0) continue;
+
+    // Mode: most common betterSubject among mis-cohering claims; tie-break by
+    // the highest single gap within the tied groups.
+    const counts = new Map<string, number>();
+    const maxGapBySubject = new Map<string, number>();
+    for (const m of misCohering) {
+      counts.set(m.betterSubject, (counts.get(m.betterSubject) ?? 0) + 1);
+      maxGapBySubject.set(m.betterSubject, Math.max(maxGapBySubject.get(m.betterSubject) ?? -Infinity, m.gap));
+    }
+    let modeSubject = misCohering[0].betterSubject;
+    let modeCount = -Infinity;
+    let modeGap = -Infinity;
+    for (const [otherSubject, count] of counts) {
+      const gap = maxGapBySubject.get(otherSubject)!;
+      if (count > modeCount || (count === modeCount && gap > modeGap)) {
+        modeSubject = otherSubject;
+        modeCount = count;
+        modeGap = gap;
+      }
+    }
+
+    const representative = misCohering
+      .filter((m) => m.betterSubject === modeSubject)
+      .reduce((best, m) => (m.gap > best.gap ? m : best));
+    const maxGapOverall = misCohering.reduce((best, m) => Math.max(best, m.gap), -Infinity);
+
+    mediumProposals.push({
+      kind: "subject-over-merge",
+      subject,
+      claim: representative.claimId,
+      betterSubject: modeSubject,
+      cohesion: maxGapOverall,
+      affectedClaims: misCohering.length,
+      confidence: "medium",
+      detail:
+        `${misCohering.length} of ${subjectItems.length} claims cohere more with other subjects ` +
+        `(e.g. \`${modeSubject}\`) — possible over-merge — review`,
+    });
   }
 
   const proposals = [...mediumProposals, ...lowProposals];

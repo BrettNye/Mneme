@@ -193,4 +193,40 @@ describe("reverseReconcile", () => {
     expect(r.proposals.some((p) => p.subject === "project:z" && p.confidence === "low")).toBe(false);
     s.close();
   });
+
+  it("aggregates approach B per subject into ONE proposal (not one per mis-cohering claim)", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    s.write("c", { subject: "project:a", key: "feature1", value: "widget inventory tracking barcode scan", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "feature2", value: "widget inventory tracking barcode label", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "feature3", value: "vehicle telemetry fuel diesel engine", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "feature4", value: "vehicle telemetry fuel electric hybrid", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:b", key: "feature1", value: "vehicle telemetry fuel diesel", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:b", key: "feature2", value: "vehicle telemetry fuel gasoline", source: "llm", confidence: 0.8 });
+
+    const r = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
+
+    const bProposals = r.proposals.filter((p) => p.confidence === "medium" && p.subject === "project:a");
+    expect(bProposals.length).toBe(1);
+    expect(bProposals[0].betterSubject).toBe("project:b");
+    expect(bProposals[0].affectedClaims).toBeGreaterThanOrEqual(2);
+    expect(bProposals[0].detail).toMatch(/possible over-merge — review/);
+    s.close();
+  });
+
+  it("approach A requires >=2 clusters each with >=2 members — a lone-outlier split (2,1) does not flag; (2,2) does", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    s.write("c", { subject: "project:floor", key: "k1", value: "payroll export timesheet flow", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:floor", key: "k2", value: "payroll approval timesheet review", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:floor", key: "k3", value: "totally unrelated theme node", source: "llm", confidence: 0.8 });
+
+    const r1 = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
+    expect(r1.proposals.some((p) => p.subject === "project:floor" && p.confidence === "low")).toBe(false);
+
+    s.write("c", { subject: "project:floor", key: "k4", value: "totally unrelated theme service", source: "llm", confidence: 0.8 });
+    const r2 = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
+    expect(r2.proposals.some((p) => p.subject === "project:floor" && p.confidence === "low")).toBe(true);
+    s.close();
+  });
 });
