@@ -133,6 +133,35 @@ describe("audit", () => {
     s.close();
   });
 
+  it("surfaces subject-over-merge proposals from reverseReconcile, ranked after the high-confidence kinds", async () => {
+    const s = freshSession();
+    const corpus = "audit-overmerge";
+    s.createCorpus({ id: corpus, keyCardinality: { plan: "single" } });
+    // high-confidence cardinality-declare signal (claimsAffected=2, kind claimsAffected>0).
+    s.write(corpus, { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    s.write(corpus, { subject: "p", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    // over-merged subject: two token-disjoint value clusters on one subject.
+    s.write(corpus, { subject: "project:x", key: "capability", value: "payroll export csv adp", valid: { from: 3, to: Infinity }, source: "llm", confidence: 0.8 });
+    s.write(corpus, { subject: "project:x", key: "capability2", value: "payroll timesheet approval flow", valid: { from: 4, to: Infinity }, source: "llm", confidence: 0.8 });
+    s.write(corpus, { subject: "project:x", key: "capability3", value: "geofencing biometric clock gate", valid: { from: 5, to: Infinity }, source: "llm", confidence: 0.8 });
+    s.write(corpus, { subject: "project:x", key: "capability4", value: "geofencing location perimeter alerts", valid: { from: 6, to: Infinity }, source: "llm", confidence: 0.8 });
+
+    const r = await audit(s, { corpus }, jaccardDeps);
+
+    const overMerge = r.proposals.filter((p) => p.kind === "subject-over-merge");
+    expect(overMerge.length).toBeGreaterThan(0);
+    expect(overMerge[0].detail).toMatch(/confidence: (low|medium)/);
+
+    const lastHighConfIdx = r.proposals.reduce(
+      (last, p, i) => (p.claimsAffected > 0 ? i : last),
+      -1,
+    );
+    const firstOverMergeIdx = r.proposals.findIndex((p) => p.kind === "subject-over-merge");
+    expect(lastHighConfIdx).toBeGreaterThanOrEqual(0);
+    expect(firstOverMergeIdx).toBeGreaterThan(lastHighConfIdx);
+    s.close();
+  });
+
   it("content is a human-readable maintenance report naming the proposals", async () => {
     const s = freshSession();
     const corpus = "audit-content";
