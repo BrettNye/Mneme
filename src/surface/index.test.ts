@@ -31,4 +31,12 @@ describe("surface barrel", () => {
     expect(typeof mod.subjectCensus).toBe("function");
     expect(typeof mod.reconcile).toBe("function");
   });
+
+  it("ingest, reverseReconcile, audit and lineageOf are exported from the surface barrel", async () => {
+    const mod = await import("./index.js");
+    expect(typeof mod.ingest).toBe("function");
+    expect(typeof mod.reverseReconcile).toBe("function");
+    expect(typeof mod.audit).toBe("function");
+    expect(typeof mod.lineageOf).toBe("function");
+  });
 });
