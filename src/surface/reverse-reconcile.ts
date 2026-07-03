@@ -53,33 +53,62 @@ export interface ReverseReconcileResult {
   content: string;
 }
 
-/** Approach A: values connect into the same cluster when their pairwise score is
- *  STRICTLY above this edge threshold. Low so genuinely disjoint token sets
- *  (score 0) never accidentally cluster, while any real token overlap does. */
-const CLUSTER_EDGE_THRESHOLD = 0.1;
+/**
+ * Approach A clustering is SCORER-RELATIVE, not tied to any scorer's absolute
+ * baseline. Jaccard scores genuinely-disjoint token sets ~0; cosine (and hence
+ * hybrid = max(jaccard,cosine)) maps them to a ~0.5 neutral baseline (orthogonal
+ * embeddings, (1+cos)/2 with cos=0) — an absolute edge threshold tuned for one
+ * baseline silently no-ops under the other (union-find unions ~everything, so
+ * clusters.length is always 1). Instead:
+ *   1. Compute all pairwise sims for the subject's values.
+ *   2. Cohesion gate: if the score RANGE (max-min) is below SEPARATION_MIN, the
+ *      subject is cohesive — no meaningful separation regardless of the scorer's
+ *      absolute baseline — treat as one cluster (never flag).
+ *   3. Otherwise cluster with a RELATIVE edge threshold = the midpoint of the
+ *      observed range. A tight intra-cluster / far inter-cluster split (e.g.
+ *      jaccard ~0.6 intra / ~0 inter, OR hybrid ~0.9 intra / ~0.5 inter) crosses
+ *      this midpoint either way, so both scorers split an over-merged subject.
+ */
+const SEPARATION_MIN = 0.1;
 
 function valueToString(v: unknown): string {
   return typeof v === "string" ? v : canonicalizeValue(v as never);
 }
 
-/** Single-link (union-find) clustering: values connect when scoreOne(a,b) > threshold.
- *  Returns each connected component as an array of indices into `values`. */
+/** Scorer-relative single-link (union-find) clustering — see SEPARATION_MIN doc
+ *  above. Returns each connected component as an array of indices into `values`. */
 function clusterValues(
-  values: string[], scoreOne: (a: string, b: string) => number, threshold: number,
+  values: string[], scoreOne: (a: string, b: string) => number,
 ): number[][] {
+  const n = values.length;
+  if (n < 2) return values.map((_, i) => [i]);
+
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const sim = scoreOne(values[i], values[j]);
+      if (sim < min) min = sim;
+      if (sim > max) max = sim;
+    }
+  }
+
+  if (max - min < SEPARATION_MIN) return [values.map((_, i) => i)]; // cohesive: no split
+
+  const threshold = (min + max) / 2;
   const parent = values.map((_, i) => i);
   const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x])));
   const union = (a: number, b: number): void => {
     const ra = find(a), rb = find(b);
     if (ra !== rb) parent[ra] = rb;
   };
-  for (let i = 0; i < values.length; i++) {
-    for (let j = i + 1; j < values.length; j++) {
-      if (scoreOne(values[i], values[j]) > threshold) union(i, j);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (scoreOne(values[i], values[j]) >= threshold) union(i, j);
     }
   }
   const groups = new Map<number, number[]>();
-  for (let i = 0; i < values.length; i++) {
+  for (let i = 0; i < n; i++) {
     const root = find(i);
     if (!groups.has(root)) groups.set(root, []);
     groups.get(root)!.push(i);
@@ -115,7 +144,7 @@ export async function reverseReconcile(
   const corpus = args.corpus;
   const minClaims = args.minClaims ?? 3;
   const emptyResult: ReverseReconcileResult = {
-    corpus, proposals: [], rankFn: deps.embeddings.rankFn, content: "",
+    corpus, proposals: [], rankFn: deps.embeddings.rankFn, content: renderContent(corpus, []),
   };
 
   // Read-only: unknown corpus → empty report, no corpus created (I3-adjacent honesty).
@@ -160,7 +189,7 @@ export async function reverseReconcile(
   const lowProposals: OverFoldProposal[] = [];
   for (const [subject, subjectItems] of bySubject) {
     if (subjectItems.length < minClaims) continue;
-    const clusters = clusterValues(subjectItems.map((i) => i.value), scoreOne, CLUSTER_EDGE_THRESHOLD);
+    const clusters = clusterValues(subjectItems.map((i) => i.value), scoreOne);
     if (clusters.length >= 2) {
       lowProposals.push({
         kind: "subject-over-merge",
@@ -180,14 +209,14 @@ export async function reverseReconcile(
     for (const item of subjectItems) {
       const ownOthers = subjectItems.filter((o) => o.claimId !== item.claimId).map((o) => o.value);
       const ownCohesion = ownOthers.length > 0
-        ? Math.max(...ownOthers.map((v) => scoreOne(item.value, v)))
+        ? ownOthers.reduce((best, v) => Math.max(best, scoreOne(item.value, v)), -Infinity)
         : 0;
 
       let bestOtherSubject: string | undefined;
       let bestOtherCohesion = -Infinity;
       for (const [otherSubject, otherItems] of bySubject) {
         if (otherSubject === subject) continue;
-        const cohesion = Math.max(...otherItems.map((o) => scoreOne(item.value, o.value)));
+        const cohesion = otherItems.reduce((best, o) => Math.max(best, scoreOne(item.value, o.value)), -Infinity);
         if (cohesion > bestOtherCohesion) {
           bestOtherCohesion = cohesion;
           bestOtherSubject = otherSubject;

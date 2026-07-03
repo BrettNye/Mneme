@@ -5,9 +5,47 @@ import { join } from "node:path";
 import { openSession } from "./session.js";
 import { freshSession, jaccardDeps } from "./test-support.js";
 import { reverseReconcile } from "./reverse-reconcile.js";
+import { initEmbeddings } from "./embeddings.js";
+import type { ReadDeps } from "./types.js";
+import type { EmbeddingAdapter } from "../algebra/embedding.js";
 
 const deps = { embeddings: { rankFn: "jaccard" as const } };
 const tmpDb = () => join(mkdtempSync(join(tmpdir(), "mneme-rr-")), "s.db");
+
+/**
+ * Fake hybrid deps whose fake adapter embeds text as a one-hot bag-of-words vector
+ * over a fixed vocabulary. Mirrors real embedding geometry: two texts with ZERO
+ * shared tokens are ORTHOGONAL, so cosine maps them to the ~0.5 neutral baseline
+ * ((1+cos)/2 with cos=0) — NOT ~0 the way jaccard would score them. This is exactly
+ * the hybrid-scorer baseline the production `entityScorer` (rankFn:"hybrid" =
+ * max(jaccard,cosine)) exhibits, which is what let the jaccard-only-tuned
+ * CLUSTER_EDGE_THRESHOLD silently no-op in production (Approach A never split
+ * anything because every pair scored >= the old absolute threshold).
+ *
+ * initEmbeddings is a module-singleton: only the FIRST call in this file actually
+ * runs the factory and registers "cosine"/"hybrid" against this adapter/cache;
+ * later calls return the same cached state. The vocab below is a fixed superset
+ * covering every value written by every hybrid test in this file, so it stays
+ * correct regardless of which test invokes it first.
+ */
+const HYBRID_VOCAB = [
+  "alpha", "bravo", "charlie", "delta", "echo",
+  "foxtrot", "golf", "hotel", "india", "juliet",
+  "kilo", "lima", "mike", "november", "oscar", "papa",
+];
+let _hybridAdapterSeq = 0;
+async function makeWordBagHybridDeps(): Promise<ReadDeps> {
+  const id = `fake-wordbag-adapter-${++_hybridAdapterSeq}`;
+  const adapter: EmbeddingAdapter = {
+    id, version: "v1", dim: HYBRID_VOCAB.length,
+    embed: async (texts) => texts.map((t) => {
+      const toks = new Set(t.toLowerCase().split(/\W+/).filter(Boolean));
+      return HYBRID_VOCAB.map((w) => (toks.has(w) ? 1 : 0));
+    }),
+  };
+  const embeddings = await initEmbeddings(async () => adapter);
+  return { embeddings };
+}
 
 describe("reverseReconcile", () => {
   it("flags an over-merged subject (two token-disjoint value clusters), not a cohesive one", async () => {
@@ -66,7 +104,7 @@ describe("reverseReconcile", () => {
     const r = await reverseReconcile(s, { corpus: "does-not-exist" }, jaccardDeps);
 
     expect(r.proposals).toEqual([]);
-    expect(r.content).toBe("");
+    expect(r.content).toBe('## Reverse Reconcile: corpus "does-not-exist"\n\nNo over-fold signals detected.');
     expect(s.listCorpora().some((c) => c.id === "does-not-exist")).toBe(false);
     s.close();
   });
@@ -116,6 +154,31 @@ describe("reverseReconcile", () => {
     const firstMediumIdx = r.proposals.findIndex((p) => p.confidence === "medium");
     expect(firstMediumIdx).toBeGreaterThanOrEqual(0);
     if (firstLowIdx >= 0) expect(firstMediumIdx).toBeLessThan(firstLowIdx);
+    s.close();
+  });
+
+  it("approach A discriminates under hybrid scoring: flags a genuinely two-entity subject and spares a cohesive one, even though cosine maps unrelated text to a ~0.5 baseline (not jaccard's ~0)", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    // Two-cluster subject: cluster1 shares {alpha,bravo,charlie}; cluster2 shares
+    // {foxtrot,golf,hotel}. Cross-cluster pairs share NOTHING — jaccard scores them 0,
+    // but the fake cosine adapter scores them at the ~0.5 orthogonal baseline.
+    s.write("c", { subject: "project:split", key: "k1", value: "alpha bravo charlie delta", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:split", key: "k2", value: "alpha bravo charlie echo", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:split", key: "k3", value: "foxtrot golf hotel india", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:split", key: "k4", value: "foxtrot golf hotel juliet", source: "llm", confidence: 0.8 });
+    // Cohesive subject: every pair shares a common core {kilo,lima} — no meaningful
+    // separation, so it must NOT be flagged under either scorer.
+    s.write("c", { subject: "project:cohesive", key: "k1", value: "kilo lima mike november", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:cohesive", key: "k2", value: "kilo lima mike oscar", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:cohesive", key: "k3", value: "kilo lima papa november", source: "llm", confidence: 0.8 });
+
+    const hybridDeps = await makeWordBagHybridDeps();
+    const r = await reverseReconcile(s, { corpus: "c" }, hybridDeps);
+
+    expect(r.rankFn).toBe("hybrid");
+    expect(r.proposals.some((p) => p.subject === "project:split" && p.confidence === "low")).toBe(true);
+    expect(r.proposals.some((p) => p.subject === "project:cohesive" && p.confidence === "low")).toBe(false);
     s.close();
   });
 
