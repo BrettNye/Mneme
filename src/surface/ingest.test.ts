@@ -75,7 +75,14 @@ describe("ingest", () => {
     expect(seenCtx?.corpus).toBe("c");
     expect(seenCtx?.canonicalSubjects).toContain("project:crewtracks");
     expect(seenCtx?.canonicalKeys).toContain("status");
-    expect(typeof seenCtx?.canonPrompt).toBe("string");
+    // canonPrompt lists the live canon AND carries the anti-over-anchoring framing
+    // (reuse-when-SAME / mint-when-NEW, mint-when-unsure) — validated by the real-LLM A/B,
+    // where a "prefer existing" prompt collapsed 17 distinct entities onto 2 subjects.
+    const cp = seenCtx?.canonPrompt ?? "";
+    expect(cp).toContain("project:crewtracks");
+    expect(cp).toMatch(/same entity/i);
+    expect(cp).toMatch(/\bmint\b/i);
+    expect(cp).toMatch(/when unsure.*mint/i);
     s.close();
   });
 
