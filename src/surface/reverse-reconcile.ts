@@ -71,7 +71,46 @@ export interface ReverseReconcileResult {
  *      jaccard ~0.6 intra / ~0 inter, OR hybrid ~0.9 intra / ~0.5 inter) crosses
  *      this midpoint either way, so both scorers split an over-merged subject.
  */
+/**
+ * HEURISTIC, pending empirical calibration against labeled over-merge data (which
+ * we do not yet have). Controls the cohesion gate in `clusterValues`: below this
+ * pairwise-score RANGE, a subject is treated as cohesive (never split) regardless
+ * of the scorer's absolute baseline — see the `clusterValues` doc above for why a
+ * relative gate is required. 0.1 was chosen as a conservative "clearly separated"
+ * floor (comfortably above scorer noise, comfortably below the ~0.5-0.6+ ranges
+ * genuine two-entity subjects exhibit in the worked examples above) — not derived
+ * from labeled data. Exposed as `separationMin` on args so a consumer can tune it
+ * per-corpus once real signal is available.
+ */
 const SEPARATION_MIN = 0.1;
+
+/**
+ * HEURISTIC, pending empirical calibration against labeled over-merge data (which
+ * we do not yet have). Controls the "substantial cluster" floor in Approach A: a
+ * value cluster must have at least this many members to count toward the ">=2
+ * well-separated clusters" over-merge signal. 2 was chosen so a single outlier
+ * claim (a [N,1] split) never on its own triggers a flag — one real group plus a
+ * lone claim is far more likely to be a stray/mistagged claim than a second
+ * distinct entity; Approach B's per-claim re-attribution check is the backstop
+ * for that case. Not derived from labeled data.
+ */
+const MIN_CLUSTER_MEMBERS = 2;
+
+/**
+ * HEURISTIC, pending empirical calibration against labeled over-merge data (which
+ * we do not yet have). Controls the coherent-core gate in Approach B: a subject
+ * only qualifies as a grab-bag (over-merge) when its mis-cohering claims are a
+ * STRICT MINORITY of its live claims — i.e. the subject retains a MAJORITY
+ * coherent core of its own. Real-data finding (2026-07): a subject with 6 of 7
+ * (86%) claims mis-cohering with a bigger subject is effectively a FOLD-IN (the
+ * subject mostly belongs to the bigger one), not an over-merge — the earlier "<
+ * ALL" rule was too weak and flagged it anyway. 0.5 was chosen as the natural
+ * majority/minority split: a subject exactly half or more mis-cohering is
+ * suppressed as a fold-in candidate (reconcile/subjectCensus's job, the opposite
+ * direction), leaving Approach B to fire only on "an otherwise-coherent subject
+ * with SOME leaked foreign claims." Not derived from labeled data.
+ */
+const MAX_MISCOHERE_FRACTION = 0.5;
 
 function valueToString(v: unknown): string {
   return typeof v === "string" ? v : canonicalizeValue(v as never);
@@ -80,7 +119,7 @@ function valueToString(v: unknown): string {
 /** Scorer-relative single-link (union-find) clustering — see SEPARATION_MIN doc
  *  above. Returns each connected component as an array of indices into `values`. */
 function clusterValues(
-  values: string[], scoreOne: (a: string, b: string) => number,
+  values: string[], scoreOne: (a: string, b: string) => number, separationMin: number,
 ): number[][] {
   const n = values.length;
   if (n < 2) return values.map((_, i) => [i]);
@@ -95,7 +134,7 @@ function clusterValues(
     }
   }
 
-  if (max - min < SEPARATION_MIN) return [values.map((_, i) => i)]; // cohesive: no split
+  if (max - min < separationMin) return [values.map((_, i) => i)]; // cohesive: no split
 
   const threshold = (min + max) / 2;
   const parent = values.map((_, i) => i);
@@ -141,10 +180,13 @@ function renderContent(corpus: string, proposals: OverFoldProposal[]): string {
  * asserts — surfaces propose-only `OverFoldProposal[]` for human review.
  */
 export async function reverseReconcile(
-  session: Session, args: { corpus: string; minClaims?: number }, deps: ReadDeps,
+  session: Session,
+  args: { corpus: string; minClaims?: number; separationMin?: number },
+  deps: ReadDeps,
 ): Promise<ReverseReconcileResult> {
   const corpus = args.corpus;
   const minClaims = args.minClaims ?? 3;
+  const separationMin = args.separationMin ?? SEPARATION_MIN;
   const emptyResult: ReverseReconcileResult = {
     corpus, proposals: [], rankFn: deps.embeddings.rankFn, content: renderContent(corpus, []),
   };
@@ -196,8 +238,8 @@ export async function reverseReconcile(
   const lowProposals: OverFoldProposal[] = [];
   for (const [subject, subjectItems] of bySubject) {
     if (subjectItems.length < minClaims) continue;
-    const clusters = clusterValues(subjectItems.map((i) => i.value), scoreOne);
-    const substantialClusters = clusters.filter((c) => c.length >= 2);
+    const clusters = clusterValues(subjectItems.map((i) => i.value), scoreOne, separationMin);
+    const substantialClusters = clusters.filter((c) => c.length >= MIN_CLUSTER_MEMBERS);
     if (substantialClusters.length >= 2) {
       lowProposals.push({
         kind: "subject-over-merge",
@@ -205,7 +247,7 @@ export async function reverseReconcile(
         confidence: "low",
         detail:
           `subject "${subject}" holds ${substantialClusters.length} well-separated value clusters ` +
-          `(each with >=2 claims, of ${clusters.length} total) across ${subjectItems.length} claims — ` +
+          `(each with >=${MIN_CLUSTER_MEMBERS} claims, of ${clusters.length} total) across ${subjectItems.length} claims — ` +
           `possible over-merge — review`,
       });
     }
@@ -216,9 +258,21 @@ export async function reverseReconcile(
   // MOST ONE proposal per subject — a 13-mis-cohering-claim over-merge should
   // read as one signal, not 13 (incl. redundant bidirectional pairs), which is
   // naturally avoided once each subject only ever emits its own proposal.
+  //
+  // DIRECTION-AWARE (Change 1): reverseReconcile detects OVER-MERGE (a subject
+  // that has absorbed foreign claims but still has its own coherent core), NOT
+  // FOLD-IN (a subject mostly/entirely absorbed by one other subject — that's a
+  // `reconcile`/`subjectCensus` concern, the opposite direction). A subject whose
+  // mis-cohering claims are a MAJORITY (up to and including ALL) has no majority
+  // core of its own: emitting an over-merge proposal for it would tell a reviewer
+  // to "split" a subject that should instead be folded INTO the other one. So a
+  // subject only qualifies as a grab-bag when it is (a) not tiny (>=minClaims)
+  // and (b) retains a MAJORITY core — misCohering.length is a strict MINORITY of
+  // its own live claim count, per MAX_MISCOHERE_FRACTION above — see gates below.
   const mediumProposals: OverFoldProposal[] = [];
   for (const [subject, subjectItems] of bySubject) {
     if (subjectItems.length < 2) continue; // no own-subject cohesion baseline without a sibling
+    if (subjectItems.length < minClaims) continue; // too small — possible fold-in target, not an over-merge
 
     interface MisCohering { claimId: string; betterSubject: string; gap: number }
     const misCohering: MisCohering[] = [];
@@ -247,6 +301,10 @@ export async function reverseReconcile(
     }
 
     if (misCohering.length === 0) continue;
+    // No MAJORITY core of its own — mis-cohering claims are half or more of the
+    // subject's live claims: fold-in candidate, not an over-merge. Suppress
+    // regardless of subject size (see MAX_MISCOHERE_FRACTION doc above).
+    if (misCohering.length >= subjectItems.length * MAX_MISCOHERE_FRACTION) continue;
 
     // Mode: most common betterSubject among mis-cohering claims; tie-break by
     // the highest single gap within the tied groups.

@@ -197,8 +197,12 @@ describe("reverseReconcile", () => {
   it("aggregates approach B per subject into ONE proposal (not one per mis-cohering claim)", async () => {
     const s = freshSession();
     s.createCorpus({ id: "c" });
+    // feature1/feature2/feature5 form project:a's coherent core (share "widget
+    // inventory tracking barcode"); feature3/feature4 are the mis-cohering
+    // minority (2 of 5 = 40% < MAX_MISCOHERE_FRACTION*5=2.5).
     s.write("c", { subject: "project:a", key: "feature1", value: "widget inventory tracking barcode scan", source: "llm", confidence: 0.8 });
     s.write("c", { subject: "project:a", key: "feature2", value: "widget inventory tracking barcode label", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "feature5", value: "widget inventory tracking barcode reader", source: "llm", confidence: 0.8 });
     s.write("c", { subject: "project:a", key: "feature3", value: "vehicle telemetry fuel diesel engine", source: "llm", confidence: 0.8 });
     s.write("c", { subject: "project:a", key: "feature4", value: "vehicle telemetry fuel electric hybrid", source: "llm", confidence: 0.8 });
     s.write("c", { subject: "project:b", key: "feature1", value: "vehicle telemetry fuel diesel", source: "llm", confidence: 0.8 });
@@ -217,10 +221,18 @@ describe("reverseReconcile", () => {
   it("aggregated approach B: cohesion reflects the MODE winner's own gap, not a larger gap belonging to a different (losing) subject", async () => {
     const s = freshSession();
     s.createCorpus({ id: "c" });
-    // project:a's three claims are mutually token-disjoint (own cohesion ~0 for each).
+    // project:a's k1..k3 are mutually token-disjoint (own cohesion ~0 for each) —
+    // exactly the mis-cohering minority (3 of 7 < MAX_MISCOHERE_FRACTION*7=3.5).
+    // k4..k7 give project:a a genuine MAJORITY coherent core of its own (they all
+    // share tokens with each other, none with k1..k3/b/c) so the subject retains
+    // a majority core and is NOT suppressed by the fold-in gate (Change 1).
     s.write("c", { subject: "project:a", key: "k1", value: "red apple fruit snack", source: "llm", confidence: 0.8 });
     s.write("c", { subject: "project:a", key: "k2", value: "blue ocean wave surf", source: "llm", confidence: 0.8 });
     s.write("c", { subject: "project:a", key: "k3", value: "green forest tree wood", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "k4", value: "quartz mineral crystal shine", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "k5", value: "quartz mineral crystal glass", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "k6", value: "quartz mineral crystal gleam", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:a", key: "k7", value: "quartz mineral crystal polish", source: "llm", confidence: 0.8 });
     // project:b pulls TWO of project:a's claims (k1, k2) with a WEAK gap (jaccard 2/6).
     s.write("c", { subject: "project:b", key: "k1", value: "red apple orange citrus", source: "llm", confidence: 0.8 });
     s.write("c", { subject: "project:b", key: "k2", value: "blue ocean tide current", source: "llm", confidence: 0.8 });
@@ -253,6 +265,112 @@ describe("reverseReconcile", () => {
     s.write("c", { subject: "project:floor", key: "k4", value: "totally unrelated theme service", source: "llm", confidence: 0.8 });
     const r2 = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
     expect(r2.proposals.some((p) => p.subject === "project:floor" && p.confidence === "low")).toBe(true);
+    s.close();
+  });
+
+  // ── Change 1: approach B is direction-aware — over-merge only, never fold-in ──
+
+  it("approach B: a LARGE grab-bag subject (>=minClaims, a MINORITY mis-cohering, majority retains its own core) IS flagged, affectedClaims = minority count", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    // project:grab's own core: k1/k2/k3 mutually cohere (share alpha/bravo).
+    s.write("c", { subject: "project:grab", key: "k1", value: "alpha bravo charlie delta", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:grab", key: "k2", value: "alpha bravo charlie echo", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:grab", key: "k3", value: "alpha bravo delta foxtrot", source: "llm", confidence: 0.8 });
+    // Minority stray claims: cohere more with project:other than with the core.
+    s.write("c", { subject: "project:grab", key: "k4", value: "vehicle telemetry fuel diesel engine", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:grab", key: "k5", value: "vehicle telemetry fuel electric hybrid", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:other", key: "k1", value: "vehicle telemetry fuel diesel", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:other", key: "k2", value: "vehicle telemetry fuel gasoline", source: "llm", confidence: 0.8 });
+
+    const r = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
+
+    const flagged = r.proposals.find((p) => p.confidence === "medium" && p.subject === "project:grab");
+    expect(flagged).toBeDefined();
+    expect(flagged?.betterSubject).toBe("project:other");
+    expect(flagged?.affectedClaims).toBe(2);
+    s.close();
+  });
+
+  it("approach B: a SMALL subject (below minClaims) whose claims all cohere with one bigger subject is NOT flagged (fold-in, not over-merge)", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    s.write("c", { subject: "project:small", key: "k1", value: "vehicle telemetry fuel diesel engine", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:small", key: "k2", value: "vehicle telemetry fuel electric hybrid", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:big", key: "k1", value: "vehicle telemetry fuel diesel", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:big", key: "k2", value: "vehicle telemetry fuel gasoline", source: "llm", confidence: 0.8 });
+
+    const r = await reverseReconcile(s, { corpus: "c", minClaims: 3 }, jaccardDeps);
+
+    expect(r.proposals.some((p) => p.subject === "project:small")).toBe(false);
+    s.close();
+  });
+
+  it("approach B: a subject at/above minClaims where ALL claims cohere elsewhere is NOT flagged (no core — fold-in, independent of size)", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    s.write("c", { subject: "project:hollow", key: "k1", value: "red apple fruit snack", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:hollow", key: "k2", value: "blue ocean wave surf", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:hollow", key: "k3", value: "green forest tree wood", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:b", key: "k1", value: "red apple orange citrus", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:b", key: "k2", value: "blue ocean tide current", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:c", key: "k1", value: "green forest tree jungle", source: "llm", confidence: 0.8 });
+
+    const r = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
+
+    expect(r.proposals.some((p) => p.subject === "project:hollow")).toBe(false);
+    s.close();
+  });
+
+  // ── Change 2: SEPARATION_MIN is a named, tunable, documented gate ──
+
+  it("approach A: separationMin boundary — the same subject is cohesive (not flagged) just above the observed pairwise range, and split (flagged) just below it", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    // Observed pairwise range for this subject is exactly 0.6: intra-cluster jaccard
+    // 3/5 = 0.6 (k1/k2 share alpha/bravo/charlie; k3/k4 share foxtrot/golf/hotel),
+    // cross-cluster jaccard = 0 (disjoint token pools). Pin the gate right around it.
+    s.write("c", { subject: "project:boundary", key: "k1", value: "alpha bravo charlie delta", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:boundary", key: "k2", value: "alpha bravo charlie echo", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:boundary", key: "k3", value: "foxtrot golf hotel india", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:boundary", key: "k4", value: "foxtrot golf hotel juliet", source: "llm", confidence: 0.8 });
+
+    const aboveRange = await reverseReconcile(s, { corpus: "c", separationMin: 0.61 }, jaccardDeps);
+    expect(aboveRange.proposals.some((p) => p.subject === "project:boundary" && p.confidence === "low")).toBe(false);
+
+    const belowRange = await reverseReconcile(s, { corpus: "c", separationMin: 0.59 }, jaccardDeps);
+    expect(belowRange.proposals.some((p) => p.subject === "project:boundary" && p.confidence === "low")).toBe(true);
+    s.close();
+  });
+
+  // ── MAX_MISCOHERE_FRACTION: strict-minority core requirement (real-data finding) ──
+
+  it("approach B: a subject where mis-cohering claims are a MAJORITY (near-fold-in, e.g. 2 of 3) is NOT flagged; adding a coherent core tips it to a strict MINORITY and it IS flagged", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    // k1/k2 each cohere more with project:other than with each other or k3 (disjoint
+    // topics) — the mis-cohering pair. k3 is a unique-token claim with no match
+    // anywhere (own cohesion 0, best-other cohesion 0 — tie, so it stays coherent).
+    s.write("c", { subject: "project:leaning", key: "k1", value: "red apple fruit snack", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:leaning", key: "k2", value: "blue ocean wave surf", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:leaning", key: "k3", value: "kappa lambda mu nu", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:other", key: "k1", value: "red apple orange citrus", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:other", key: "k2", value: "blue ocean tide current", source: "llm", confidence: 0.8 });
+
+    // 2 of 3 = 67% mis-cohering — a MAJORITY (near-fold-in): must NOT be flagged.
+    const majority = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
+    expect(majority.proposals.some((p) => p.subject === "project:leaning")).toBe(false);
+
+    // Add two more unique-token core claims (no match anywhere, same tie logic as
+    // k3) to grow the subject's own coherent core without touching the mis-cohering
+    // pair. Now 2 of 5 = 40% mis-cohering — a strict MINORITY: must be flagged.
+    s.write("c", { subject: "project:leaning", key: "k4", value: "xi omicron pi rho", source: "llm", confidence: 0.8 });
+    s.write("c", { subject: "project:leaning", key: "k5", value: "sigma tau upsilon phi", source: "llm", confidence: 0.8 });
+    const minority = await reverseReconcile(s, { corpus: "c" }, jaccardDeps);
+    const flagged = minority.proposals.find((p) => p.confidence === "medium" && p.subject === "project:leaning");
+    expect(flagged).toBeDefined();
+    expect(flagged?.betterSubject).toBe("project:other");
+    expect(flagged?.affectedClaims).toBe(2);
     s.close();
   });
 });
