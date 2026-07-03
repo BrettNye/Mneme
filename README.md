@@ -87,13 +87,14 @@ claimed: every correction leaves the original in the ledger, queryable.
 ## Ingestion & canonicalization
 
 The layer that turns sources into *canonical* claims — deterministic, propose-only, LLM-free at
-its core. Import from `mneme/surface`.
+its core. The library ops are importable from `mneme/surface`; `audit` and `history` are exposed
+as **MCP tools** (see [How it's used](#how-its-used)).
 
 - **`ingest(session, { corpus, extract }, deps)`** — the enforced *recall-before-write* loop.
   Gathers the corpus's live canonical entities, hands them to your injected `extract` callback
   (an LLM extractor, or pre-structured claims), reconciles the candidates, **auto-remaps only
   high-confidence matches** while routing borderline ones to a ratify bucket (the *over-anchoring
-  guard*), writes each via supersession-aware `remember`, and returns propose-only `audit`
+  guard*), writes each via supersession-aware `remember`, and returns propose-only maintenance
   proposals. Pure composition of the primitives below — no new algebra.
 - **`reconcile`** — the *under-folding* guard: given candidate subjects/keys, returns the existing
   canonical entities to reuse (so you don't mint `project:crewTracks-liner-build` next to
@@ -103,12 +104,13 @@ its core. Import from `mneme/surface`.
   (never asserts, never auto-splits).
 - **`keyCensus` / `subjectCensus`** — enumerate distinct keys/subjects and score near-duplicate
   pairs; surface fragmentation and single-cardinality collisions.
-- **`declareCardinality`** — a `single` key silently deprecates distinct facts (last-write-wins);
-  a `multi` key lets them coexist. Cardinality is *declared*, never guessed.
-- **`audit`** — composes the censuses into one ranked, **propose-only** maintenance report
-  (charter invariant: propose, never apply). `explainRecall` and `history` make the resulting
-  belief changes visible: why each claim was served / merged / deprecated, and the full lineage of
-  any `(subject, key)`.
+- **`session.declareCardinality(corpus, map)`** *(Session method)* — a `single` key silently
+  deprecates distinct facts (last-write-wins); a `multi` key lets them coexist. Cardinality is
+  *declared*, never guessed.
+- **`audit` + `history` (MCP tools)** — `audit` composes the censuses into one ranked,
+  **propose-only** maintenance report (charter invariant: propose, never apply); the `history`
+  tool and `explainRecall` (a `mneme/surface` op) make the resulting belief changes visible — why
+  each claim was served / merged / deprecated, and the full lineage of any `(subject, key)`.
 
 > The primitives are deterministic and offline-testable; the LLM-shaped part (extraction) is an
 > *injected* callback that lives in the consumer, so the substrate stays LLM-free and the source

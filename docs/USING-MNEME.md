@@ -124,7 +124,7 @@ none rewrites your entities silently.
 - **`history(subject, key, [corpus])`** — the full non-destructive lineage of one `(subject, key)`:
   every version, which is served, which are deprecated and *by what*. This is the "un-DELETE" —
   a superseded value is still here, with its reason.
-- **`inspect(id, [corpus])`** — the raw stored fields of one claim by id (provenance handle).
+- **`inspect(claimId, [corpus])`** — the raw stored fields of one claim by id (provenance handle).
 
 ---
 
