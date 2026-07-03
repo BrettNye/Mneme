@@ -30,3 +30,5 @@ export { explainRecall } from "./explain.js";
 export type { RecallTrace, ClaimDisposition, DispositionReason } from "./explain.js";
 export { ingest } from "./ingest.js";
 export type { IngestArgs, IngestContext, CandidateClaim, IngestedClaim, IngestReport } from "./ingest.js";
+export { reverseReconcile } from "./reverse-reconcile.js";
+export type { OverFoldProposal, ReverseReconcileResult } from "./reverse-reconcile.js";
