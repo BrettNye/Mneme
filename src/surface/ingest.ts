@@ -90,8 +90,18 @@ export interface IngestReport {
 }
 
 function buildCanonPrompt(canonicalSubjects: string[], canonicalKeys: string[]): string {
+  // Anti-over-anchoring framing (validated by the 2026-07 real-LLM A/B): a "prefer existing"
+  // instruction collapses distinct entities onto one subject. The rule an extractor needs is
+  // reuse-when-SAME / mint-when-NEW, with an explicit cost asymmetry — over-reuse fuses separate
+  // entities and is hard to undo, so when unsure the extractor should MINT, not fold.
   const lines: string[] = [
-    "## Canonical entities (reuse when the same entity, mint only when genuinely new)",
+    "## Canonical entities already in memory",
+    "",
+    "Reuse an existing subject/key VERBATIM **only** when a fact concerns the SAME entity.",
+    "Mint a NEW subject/key for any genuinely distinct entity — even if its name looks similar.",
+    "Do NOT \"prefer existing\": over-reuse (folding a distinct entity onto an existing subject)",
+    "is WORSE than minting a duplicate — it fuses separate entities and is hard to undo.",
+    "When unsure whether it is the same entity, MINT.",
     "",
     `**Subjects (${canonicalSubjects.length}):**`,
   ];
