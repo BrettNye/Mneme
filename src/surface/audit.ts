@@ -13,8 +13,13 @@
 import type { Session, ReadDeps } from "./types.js";
 import { keyCensus, subjectCensus } from "./census.js";
 import { formatCardinalityCollision } from "./cardinality.js";
+import { reverseReconcile } from "./reverse-reconcile.js";
 
-export type ProposalKind = "key-alias" | "subject-fragmentation" | "cardinality-declare";
+export type ProposalKind =
+  | "key-alias"
+  | "subject-fragmentation"
+  | "cardinality-declare"
+  | "subject-over-merge";
 
 export interface AuditProposal {
   kind: ProposalKind;
@@ -104,6 +109,20 @@ export async function audit(
       claimsAffected: totalClaims, // consistent with key-alias/subject-fragmentation: claim counts
       suggestedAction: `session.declareCardinality("${corpus}", { "${key}": "multi" })`,
       detail: formatCardinalityCollision(collision),
+    });
+  }
+
+  // ── subject-over-merge proposals (from reverseReconcile, low/medium confidence) ──
+  // Deliberately low-signal: claimsAffected is left at 0 so these always sink below
+  // every high-confidence (claimsAffected>0) proposal above in the stable sort below.
+  const overFold = await reverseReconcile(session, { corpus }, deps);
+  for (const p of overFold.proposals) {
+    proposals.push({
+      kind: "subject-over-merge",
+      entities: p.betterSubject ? [p.subject, p.betterSubject] : [p.subject],
+      claimsAffected: 0,
+      suggestedAction: `// review — possible over-merge of \`${p.subject}\`; split into distinct subjects if they are different entities (NEVER auto-applied)`,
+      detail: `${p.detail} (confidence: ${p.confidence})`,
     });
   }
 
