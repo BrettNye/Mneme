@@ -96,6 +96,22 @@ const SEPARATION_MIN = 0.1;
  */
 const MIN_CLUSTER_MEMBERS = 2;
 
+/**
+ * HEURISTIC, pending empirical calibration against labeled over-merge data (which
+ * we do not yet have). Controls the coherent-core gate in Approach B: a subject
+ * only qualifies as a grab-bag (over-merge) when its mis-cohering claims are a
+ * STRICT MINORITY of its live claims — i.e. the subject retains a MAJORITY
+ * coherent core of its own. Real-data finding (2026-07): a subject with 6 of 7
+ * (86%) claims mis-cohering with a bigger subject is effectively a FOLD-IN (the
+ * subject mostly belongs to the bigger one), not an over-merge — the earlier "<
+ * ALL" rule was too weak and flagged it anyway. 0.5 was chosen as the natural
+ * majority/minority split: a subject exactly half or more mis-cohering is
+ * suppressed as a fold-in candidate (reconcile/subjectCensus's job, the opposite
+ * direction), leaving Approach B to fire only on "an otherwise-coherent subject
+ * with SOME leaked foreign claims." Not derived from labeled data.
+ */
+const MAX_MISCOHERE_FRACTION = 0.5;
+
 function valueToString(v: unknown): string {
   return typeof v === "string" ? v : canonicalizeValue(v as never);
 }
@@ -245,13 +261,14 @@ export async function reverseReconcile(
   //
   // DIRECTION-AWARE (Change 1): reverseReconcile detects OVER-MERGE (a subject
   // that has absorbed foreign claims but still has its own coherent core), NOT
-  // FOLD-IN (a small subject entirely absorbed by one other subject — that's a
-  // `reconcile`/`subjectCensus` concern, the opposite direction). A subject where
-  // EVERY claim coheres better elsewhere has no core of its own: emitting an
-  // over-merge proposal for it would tell a reviewer to "split" a subject that
-  // should instead be folded INTO the other one. So a subject only qualifies as
-  // a grab-bag when it is (a) not tiny (>=minClaims) and (b) retains a core
-  // (misCohering.length < its own live claim count) — see gates below.
+  // FOLD-IN (a subject mostly/entirely absorbed by one other subject — that's a
+  // `reconcile`/`subjectCensus` concern, the opposite direction). A subject whose
+  // mis-cohering claims are a MAJORITY (up to and including ALL) has no majority
+  // core of its own: emitting an over-merge proposal for it would tell a reviewer
+  // to "split" a subject that should instead be folded INTO the other one. So a
+  // subject only qualifies as a grab-bag when it is (a) not tiny (>=minClaims)
+  // and (b) retains a MAJORITY core — misCohering.length is a strict MINORITY of
+  // its own live claim count, per MAX_MISCOHERE_FRACTION above — see gates below.
   const mediumProposals: OverFoldProposal[] = [];
   for (const [subject, subjectItems] of bySubject) {
     if (subjectItems.length < 2) continue; // no own-subject cohesion baseline without a sibling
@@ -284,9 +301,10 @@ export async function reverseReconcile(
     }
 
     if (misCohering.length === 0) continue;
-    // No core of its own — every claim coheres better elsewhere: fold-in
-    // candidate, not an over-merge. Suppress regardless of subject size.
-    if (misCohering.length >= subjectItems.length) continue;
+    // No MAJORITY core of its own — mis-cohering claims are half or more of the
+    // subject's live claims: fold-in candidate, not an over-merge. Suppress
+    // regardless of subject size (see MAX_MISCOHERE_FRACTION doc above).
+    if (misCohering.length >= subjectItems.length * MAX_MISCOHERE_FRACTION) continue;
 
     // Mode: most common betterSubject among mis-cohering claims; tie-break by
     // the highest single gap within the tied groups.
