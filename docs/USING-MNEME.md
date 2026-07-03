@@ -2,7 +2,7 @@
 
 Mneme is a **calibrated belief store**: it remembers typed *claims* — `(subject, key, value)` with a **confidence** — and lets you query them back, ranked and composed into a token-bounded context. Think *structured, auditable memory you can reason over*, not a note pile or a document search.
 
-You'll mostly use it through its **MCP server**, which gives an AI agent (Claude Code, etc.) three tools: `remember`, `recall`, `list_corpora`.
+You'll mostly use it through its **MCP server**, which gives an AI agent (Claude Code, etc.) **ten tools**. The two you use constantly are `remember` (capture) and `recall` (retrieve); the rest — `reconcile`, `key_census`, `subject_census`, `declare_cardinality`, `audit`, `history`, `inspect`, `list_corpora` — keep your entities *canonical* and your belief changes *visible* (§3).
 
 ---
 
@@ -71,10 +71,10 @@ Commits a new claim (auto-creating the corpus if needed). Returns structured out
 ### `recall` — retrieve relevant claims *(read-only, idempotent)*
 
 ```
-recall(about, [subject], [key], [limit], [maxTokens], [corpus])
+recall(about, [subject], [key], [limit], [maxTokens], [explain], [recencyAlpha], [asOf], [corpus])
 ```
 
-Filters (by `subject`/`key` if given), similarity-ranks against `about`, and composes the top claims into a token-bounded context. Returns structured output:
+Filters (by `subject`/`key` if given), similarity-ranks against `about` (**semantic by default** — see Limitations), blends in recency (`recencyAlpha=0.5`, 90-day half-life), and composes the top claims into a token-bounded context. Pass `explain: true` to also get a per-claim **trace** — why each candidate was served / merged / deprecated / dropped (best-effort; never changes the served result). Returns structured output:
 
 ```jsonc
 {
@@ -99,16 +99,45 @@ Returns `{ corpora: [{ id, displayName }] }`.
 
 > The tools ship MCP **annotations** (`readOnlyHint`, etc.) and **structured output** (`outputSchema` + `structuredContent`), so an AI client can both reason about which tools are safe to call freely and consume results as *typed data* rather than parsing the text.
 
+### Keeping entities canonical (read-only unless noted)
+
+The failure mode that actually degrades a memory over time isn't retrieval — it's **entity drift**:
+the same fact captured under `project:crewtracks` one day and `project:crew-tracks` the next, so
+nothing accretes. These tools detect and (on your confirmation) fix it. All are **propose-only** —
+none rewrites your entities silently.
+
+- **`reconcile(subjects?, keys?, [corpus])`** — before minting a new subject/key, score it against
+  the corpus's live entities. Returns `reuse | uncertain | new` per candidate. Run it (or let
+  `recall` inform you) *before* `remember` to avoid drift in the first place.
+- **`key_census([corpus])` / `subject_census([corpus])`** — enumerate distinct keys/subjects and
+  flag near-duplicate pairs + single-cardinality collisions (one key holding ≥2 distinct values
+  that are silently deprecating each other).
+- **`declare_cardinality(cardinality, [corpus])`** *(write — schema only, never touches claims)* —
+  mark a key `single` (latest supersedes) or `multi` (values coexist). A `single` key silently
+  drops distinct facts; declare `multi` when they should all survive.
+- **`audit([corpus])`** — one whole-corpus report: ranked, propose-only proposals (key-alias,
+  subject-fragmentation, cardinality-declare, subject-over-merge) with ready-to-run actions. Run
+  it periodically; ratify what's right.
+
+### Seeing belief change (read-only)
+
+- **`history(subject, key, [corpus])`** — the full non-destructive lineage of one `(subject, key)`:
+  every version, which is served, which are deprecated and *by what*. This is the "un-DELETE" —
+  a superseded value is still here, with its reason.
+- **`inspect(claimId, [corpus])`** — the raw stored fields of one claim by id (provenance handle).
+
 ---
 
 ## 4. Patterns that make it work well
 
 1. **Namespace your subjects** (`project:x`, `client:acme`, `ticket:1234`). Consistent subjects make filtered recall sharp.
 2. **Reuse keys as predicates** (`decision`, `status`, `owner`, `risk`). Then "all decisions for project X" is one query.
-3. **🔑 Retrieve with filters, not pure free-text.** This is the single most important habit today (see Limitations). Narrow with `subject`/`key`, then let `about` rank *within* that slice:
+3. **Filter to sharpen (and to cut cost).** Ranking is semantic by default, so free-text `about`
+   works — but narrowing with `subject`/`key` first, then letting `about` rank *within* that slice,
+   is still sharper and cheaper:
    ```
-   recall(about="rollout", subject="project:migration", key="decision")   ✅ sharp
-   recall(about="what did we decide about the rollout")                    ⚠️ unreliable ranking
+   recall(about="rollout", subject="project:migration", key="decision")   ✅ sharpest
+   recall(about="what did we decide about the rollout")                    ✅ works (semantic rank)
    ```
 4. **Set confidence deliberately.** `1.0` for decided facts; lower for tentative observations. It surfaces on recall so you can see how sure past-you was.
 5. **Use tags for cross-cutting pulls** (`sprint-12`, `incident-x`) when subject/key don't capture the grouping.
@@ -160,8 +189,8 @@ That composable, confidence-aware retrieval is what distinguishes Mneme from a f
 
 ## 7. Limitations & gotchas
 
-- **Free-text ranking is lexical today.** The ρ step uses token-overlap (jaccard) similarity, not semantic embeddings — so a natural-language `about` query discriminates weakly (scores cluster near zero, ordering is rough). **Workaround:** use `subject`/`key` filters to narrow, as in Pattern 3. (Semantic ranking — `rho.embedding` — is a known, localized future addition; it lands when real use shows the weak ranking actually blocks you.)
-- **The MCP surface is `remember` / `recall` / `list_corpora` only.** The library also supports belief-revision (`supersede`, `promote`), derivation (`derive`), and reproducibility (`replay`), but those aren't exposed over MCP yet — so via MCP it's *append + read*.
+- **Ranking is semantic by default; `jaccard` is the fallback.** On first recall the server lazily loads a local `bge-base-en-v1.5` model and ranks with `hybrid` (lexical ⊕ cosine); the first call pays a one-time model-load cost. It falls back to pure token-overlap `jaccard` only if the model can't load — notably a production `npm install --omit=dev` won't have `@huggingface/transformers` (it's a devDependency), so semantic ranking silently degrades there. Nothing leaves the machine either way.
+- **The MCP surface is capture + read + canonicalize (10 tools).** `remember` is *supersession-aware* (a new value on a single-cardinality key deprecates the old, reported in the write response). But explicit `supersede`/`promote`, derived writes (`derive`), and bit-for-bit `replay` remain **library/CLI-only** — not yet exposed over MCP.
 - **Append-only + local.** You can deprecate but not hard-delete, and the store is single-machine SQLite (no sync across devices). Don't store secrets/PII you'd need to truly erase.
 - **`remember` is not idempotent over MCP.** Two identical `remember` calls create two claims. Capture deliberately.
 
