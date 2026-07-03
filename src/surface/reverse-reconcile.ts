@@ -1,0 +1,216 @@
+/**
+ * reverse-reconcile.ts — over-anchoring (N entities → 1 subject) detection.
+ *
+ * Symmetric to reconcile.ts's under-folding guard: `reconcile`/`subjectCensus`
+ * protect against minting a redundant subject for an entity that already exists.
+ * `reverseReconcile` protects the opposite failure — a subject that has silently
+ * absorbed claims belonging to MULTIPLE distinct entities. Per
+ * docs/superpowers/specs/2026-07-02-reverse-reconcile-over-anchoring-design.md §3/§5:
+ *
+ *   A. Subject-cohesion audit (low confidence) — cluster each subject's live claim
+ *      VALUES; a subject whose values form >=2 well-separated clusters (above a
+ *      claim-count floor) is flagged as a possible over-merge.
+ *   B. Value-to-subject re-attribution check (medium confidence) — per claim, score
+ *      its value's cohesion to its own subject's OTHER values vs every other live
+ *      subject's values; if a different subject coheres more, the attribution is
+ *      suspect.
+ *
+ * PURE COMPOSITION — reuses distinctEntities/entityScorer machinery, canonicalReadStages,
+ * and the same live-set semantics as keyCensus/subjectCensus. Adds NO new algebra.
+ * I3 propose-only: reverseReconcile NEVER writes; confidence is "low"/"medium" only,
+ * NEVER "high" (heuristic, not an assertion).
+ */
+import type { Session, ReadDeps } from "./types.js";
+import type { Claim } from "../core/claim.js";
+import type { Corpus } from "../algebra/types.js";
+import type { EvalContext } from "../algebra/expression.js";
+import { filterCorpus } from "../algebra/types.js";
+import { CONTRADICTION_FLAG_KEY } from "../algebra/resolution.js";
+import { canonicalizeValue } from "../core/value.js";
+import { canonicalReadStages } from "../retrieval/read-pipeline.js";
+import { isKeyAliasShaped } from "../retrieval/key-alias.js";
+import { entityScorer } from "./entities.js";
+import { loadAliasContext, MCP_EVIDENCE_POOLING_RULE } from "./recall.js";
+import { resolveKeyCardinality } from "./cardinality.js";
+
+export interface OverFoldProposal {
+  kind: "subject-over-merge";
+  subject: string;
+  /** (approach B) the specific suspect claim id. */
+  claim?: string;
+  /** (approach B) the subject its value coheres with more. */
+  betterSubject?: string;
+  /** (approach B) the score gap driving the flag — the winning cohesion score. */
+  cohesion?: number;
+  confidence: "low" | "medium"; // A = low, B = medium — NEVER "high" (heuristic)
+  detail: string; // hedged: "possible over-merge — review", never asserted
+}
+
+export interface ReverseReconcileResult {
+  corpus: string;
+  proposals: OverFoldProposal[]; // ranked: medium (B) before low (A)
+  rankFn: string;
+  content: string;
+}
+
+/** Approach A: values connect into the same cluster when their pairwise score is
+ *  STRICTLY above this edge threshold. Low so genuinely disjoint token sets
+ *  (score 0) never accidentally cluster, while any real token overlap does. */
+const CLUSTER_EDGE_THRESHOLD = 0.1;
+
+function valueToString(v: unknown): string {
+  return typeof v === "string" ? v : canonicalizeValue(v as never);
+}
+
+/** Single-link (union-find) clustering: values connect when scoreOne(a,b) > threshold.
+ *  Returns each connected component as an array of indices into `values`. */
+function clusterValues(
+  values: string[], scoreOne: (a: string, b: string) => number, threshold: number,
+): number[][] {
+  const parent = values.map((_, i) => i);
+  const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x])));
+  const union = (a: number, b: number): void => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      if (scoreOne(values[i], values[j]) > threshold) union(i, j);
+    }
+  }
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < values.length; i++) {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push(i);
+  }
+  return [...groups.values()];
+}
+
+interface SubjectValue { claimId: string; subject: string; value: string }
+
+function renderContent(corpus: string, proposals: OverFoldProposal[]): string {
+  const lines: string[] = [`## Reverse Reconcile: corpus "${corpus}"`];
+  if (proposals.length === 0) {
+    lines.push("", "No over-fold signals detected.");
+    return lines.join("\n");
+  }
+  lines.push("", `**Possible over-merges (${proposals.length}):**`);
+  for (const p of proposals) {
+    const suffix = p.claim
+      ? ` (claim \`${p.claim}\`${p.betterSubject ? ` → \`${p.betterSubject}\`` : ""})`
+      : "";
+    lines.push(`- \`${p.subject}\` [${p.confidence}]${suffix}: ${p.detail}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Read-only over-fold detector. Never writes, never creates a corpus, never
+ * asserts — surfaces propose-only `OverFoldProposal[]` for human review.
+ */
+export async function reverseReconcile(
+  session: Session, args: { corpus: string; minClaims?: number }, deps: ReadDeps,
+): Promise<ReverseReconcileResult> {
+  const corpus = args.corpus;
+  const minClaims = args.minClaims ?? 3;
+  const emptyResult: ReverseReconcileResult = {
+    corpus, proposals: [], rankFn: deps.embeddings.rankFn, content: "",
+  };
+
+  // Read-only: unknown corpus → empty report, no corpus created (I3-adjacent honesty).
+  if (!session.listCorpora().some((c) => c.id === corpus)) return emptyResult;
+
+  const now = Date.now();
+  const effective = resolveKeyCardinality(session, corpus, deps.keyCardinality);
+  const { aliasMap } = loadAliasContext(session, corpus, now, effective);
+
+  // Deliberately stop BEFORE ⊥/resolveDeprecateOlder (canon stage 3): under the default
+  // single-cardinality key, ⊥ is exactly the mechanism that would mass-deprecate all but
+  // the latest of an over-merged subject's distinct values — collapsing the very signal
+  // this detector exists to surface. Apply only τ_valid + ⊕_dedupe (mirrors the
+  // "preContra" pattern behind cardinalitySafetyWarnings in recall.ts/census.ts), then the
+  // same non-⊥ drop filter (deprecated / contradiction-flag / alias-shaped infrastructure).
+  const raw: Corpus = { claims: session.mneme.read(corpus, { corpusId: corpus }) as Claim[] };
+  const [tauValidStage, dedupeStage] = canonicalReadStages({
+    evaluationInstant: now, keyCardinality: effective,
+    keyAliases: aliasMap, evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
+  });
+  const deduped = dedupeStage(tauValidStage(raw, {} as EvalContext) as Corpus, {} as EvalContext) as Corpus;
+  const live: Corpus = filterCorpus(
+    deduped,
+    (cl) => cl.status !== "deprecated" && cl.key !== CONTRADICTION_FLAG_KEY && !isKeyAliasShaped(cl),
+  );
+
+  if (live.claims.length === 0) return emptyResult;
+
+  const items: SubjectValue[] = live.claims.map((c) => ({
+    claimId: c.id, subject: c.subject, value: valueToString(c.value),
+  }));
+
+  const { rankFn, scoreOne } = await entityScorer(items.map((i) => i.value), deps);
+
+  const bySubject = new Map<string, SubjectValue[]>();
+  for (const item of items) {
+    if (!bySubject.has(item.subject)) bySubject.set(item.subject, []);
+    bySubject.get(item.subject)!.push(item);
+  }
+
+  // ── Approach A (low): per-subject value clustering ─────────────────────────
+  const lowProposals: OverFoldProposal[] = [];
+  for (const [subject, subjectItems] of bySubject) {
+    if (subjectItems.length < minClaims) continue;
+    const clusters = clusterValues(subjectItems.map((i) => i.value), scoreOne, CLUSTER_EDGE_THRESHOLD);
+    if (clusters.length >= 2) {
+      lowProposals.push({
+        kind: "subject-over-merge",
+        subject,
+        confidence: "low",
+        detail:
+          `subject "${subject}" holds ${clusters.length} well-separated value clusters ` +
+          `across ${subjectItems.length} claims — possible over-merge — review`,
+      });
+    }
+  }
+
+  // ── Approach B (medium): per-claim value→subject re-attribution check ──────
+  const mediumProposals: OverFoldProposal[] = [];
+  for (const [subject, subjectItems] of bySubject) {
+    if (subjectItems.length < 2) continue; // no own-subject cohesion baseline without a sibling
+    for (const item of subjectItems) {
+      const ownOthers = subjectItems.filter((o) => o.claimId !== item.claimId).map((o) => o.value);
+      const ownCohesion = ownOthers.length > 0
+        ? Math.max(...ownOthers.map((v) => scoreOne(item.value, v)))
+        : 0;
+
+      let bestOtherSubject: string | undefined;
+      let bestOtherCohesion = -Infinity;
+      for (const [otherSubject, otherItems] of bySubject) {
+        if (otherSubject === subject) continue;
+        const cohesion = Math.max(...otherItems.map((o) => scoreOne(item.value, o.value)));
+        if (cohesion > bestOtherCohesion) {
+          bestOtherCohesion = cohesion;
+          bestOtherSubject = otherSubject;
+        }
+      }
+
+      if (bestOtherSubject !== undefined && bestOtherCohesion > ownCohesion) {
+        mediumProposals.push({
+          kind: "subject-over-merge",
+          subject,
+          claim: item.claimId,
+          betterSubject: bestOtherSubject,
+          cohesion: bestOtherCohesion,
+          confidence: "medium",
+          detail:
+            `claim on subject "${subject}" coheres more with "${bestOtherSubject}" ` +
+            `(${bestOtherCohesion.toFixed(3)} vs ${ownCohesion.toFixed(3)}) — possible over-merge — review`,
+        });
+      }
+    }
+  }
+
+  const proposals = [...mediumProposals, ...lowProposals];
+
+  return { corpus, proposals, rankFn, content: renderContent(corpus, proposals) };
+}
