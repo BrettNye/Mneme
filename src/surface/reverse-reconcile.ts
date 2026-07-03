@@ -280,7 +280,7 @@ export async function reverseReconcile(
       // cohesion describes modeSubject's OWN evidence (its max gap), not the max gap
       // across ALL mis-cohering claims — when votes split across MULTIPLE other
       // subjects, a different subject's larger gap must never be reported under
-      // modeSubject's name (see docs/superpowers/specs/... quality review).
+      // modeSubject's name.
       cohesion: modeGap,
       affectedClaims: misCohering.length,
       confidence: "medium",
