@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+.npmrc
 
 # Mneme CLI local store (created in cwd by the default dbPath ./mneme.db)
 mneme.db
