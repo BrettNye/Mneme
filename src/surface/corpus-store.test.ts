@@ -43,4 +43,12 @@ describe("corpus-store", () => {
     writeFileSync(sidecarPath, "this is not valid json {{{{", "utf8");
     expect(() => loadCorpora(db)).toThrow(sidecarPath);
   });
+
+  it("saveCorpora is a no-op for :memory: (writes no sidecar, does not throw)", () => {
+    expect(() =>
+      saveCorpora(":memory:", [{ id: "m", displayName: "M" } as CorpusDef]),
+    ).not.toThrow();
+    expect(existsSync(":memory:.corpora.json")).toBe(false);
+    expect(loadCorpora(":memory:")).toEqual([]);
+  });
 });

@@ -16,6 +16,7 @@ export function ensureDir(dbPath: string): void {
 
 /** Load persisted corpus defs for a db; empty array if the sidecar is absent. */
 export function loadCorpora(dbPath: string): CorpusDef[] {
+  if (dbPath === ":memory:") return []; // ephemeral DB: nothing persisted
   const p = sidecarFor(dbPath);
   if (!existsSync(p)) return [];
   const raw = readFileSync(p, "utf8");
@@ -30,6 +31,7 @@ export function loadCorpora(dbPath: string): CorpusDef[] {
 
 /** Persist the full set of corpus defs for a db atomically. */
 export function saveCorpora(dbPath: string, defs: CorpusDef[]): void {
+  if (dbPath === ":memory:") return; // ephemeral DB: do not write a sidecar
   const sidecar = sidecarFor(dbPath);
   const tmp = `${sidecar}.tmp`;
   try {
