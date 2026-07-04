@@ -9,17 +9,19 @@ default_review_mode: split
 
 ```mermaid
 flowchart TD
-    task-build-config["task-build-config: build config<br/>files: tsconfig.build.json"]
-    task-bin-entrypoints["task-bin-entrypoints: compiled bin entrypoints<br/>files: src/bin/mneme.ts +1 more"]
-    task-vitest-alias["task-vitest-alias: vitest self-ref alias<br/>files: vitest.config.ts"]
-    task-gitignore["task-gitignore: ignore .npmrc<br/>files: .gitignore"]
-    task-package-manifest["task-package-manifest: publishable manifest<br/>files: package.json +1 more"]
-    task-verify["task-verify: verify external consumability<br/>files: scripts/smoke-external-consumer.mjs"]
+    task-build-config["task-build-config: build config<br/>files: tsconfig.build.json"]:::done
+    task-bin-entrypoints["task-bin-entrypoints: compiled bin entrypoints<br/>files: src/bin/mneme.ts +1 more"]:::done
+    task-vitest-alias["task-vitest-alias: vitest self-ref alias<br/>files: vitest.config.ts"]:::done
+    task-gitignore["task-gitignore: ignore .npmrc<br/>files: .gitignore"]:::done
+    task-package-manifest["task-package-manifest: publishable manifest<br/>files: package.json +1 more"]:::done
+    task-fix-memory-corpus["task-fix-memory-corpus: :memory: corpus sidecar fix<br/>files: src/surface/corpus-store.ts +1 more"]:::done
+    task-verify["task-verify: verify external consumability<br/>files: scripts/smoke-external-consumer.mjs"]:::done
 
     task-vitest-alias --> task-package-manifest
     task-build-config --> task-verify
     task-bin-entrypoints --> task-verify
     task-package-manifest --> task-verify
+    task-fix-memory-corpus --> task-verify
 
     classDef done fill:#90ee90,stroke:#333
     classDef ready fill:#fffacd,stroke:#333
@@ -47,7 +49,7 @@ id: task-build-config
 depends_on: []
 files:
   - tsconfig.build.json
-status: pending
+status: done
 ```
 
 Add a dedicated `tsconfig.build.json` that extends the base config and emits `dist` with `.d.ts` + declaration/source maps, excluding the 123 colocated test files and swapping `vitest/globals` types for `node` (spec §3.1; audit A1 — `types: []` breaks the build because non-test `src` has ~54 bare Node-global uses).
@@ -97,7 +99,7 @@ depends_on: []
 files:
   - src/bin/mneme.ts
   - src/bin/mneme-mcp.ts
-status: pending
+status: done
 ```
 
 Add `node`-shebang bin sources under `src/bin/` (so they compile to `dist/bin/*.js` under `rootDir: src`) that the published `package.json` `bin` will point at. The existing tsx-dev `bin/*.ts` (used by the repo `.mcp.json` and the user's global MCP config) are left untouched — these are the compiled twins (spec §3.3).
@@ -149,7 +151,7 @@ id: task-vitest-alias
 depends_on: []
 files:
   - vitest.config.ts
-status: pending
+status: done
 ```
 
 Pin the package self-reference `mneme/mcp` to `src/mcp/index.ts` in vitest's resolver so the openclaw integration tests keep resolving to source after `package.json` `exports` flips to `dist` (audit A4). Must land before `task-package-manifest`. Uses `fileURLToPath(new URL(...))` because `__dirname` is undefined in this ESM (`"type": "module"`) config.
@@ -197,7 +199,7 @@ id: task-gitignore
 depends_on: []
 files:
   - .gitignore
-status: pending
+status: done
 model_hint: cheap
 review_mode: merged
 ```
@@ -235,7 +237,7 @@ depends_on: [task-vitest-alias]
 files:
   - package.json
   - package-lock.json
-status: pending
+status: done
 ```
 
 Turn `package.json` into a publishable manifest: scoped name/version/license/engines, `main`/`types`/`exports` pointed at `dist` (each subpath gets `types`+`import`), `@types/better-sqlite3` promoted devDeps→deps, `bin`→`dist/bin`, `files` allowlist, `repository`, `publishConfig` (private npm), and `build`/`clean`/`prepack` scripts (spec §3.2/§3.4). Depends on `task-vitest-alias` so the exports flip doesn't break the self-reference tests. Regenerate `package-lock.json` via `npm install`.
@@ -307,10 +309,10 @@ Test file: verified via the `node -e` assertion block above (manifest is JSON co
 
 ```yaml
 id: task-verify
-depends_on: [task-build-config, task-bin-entrypoints, task-package-manifest]
+depends_on: [task-build-config, task-bin-entrypoints, task-package-manifest, task-fix-memory-corpus]
 files:
   - scripts/smoke-external-consumer.mjs
-status: pending
+status: done
 spec_reviewer_hint: opus
 quality_reviewer_hint: opus
 ```
@@ -384,3 +386,53 @@ node scripts/smoke-external-consumer.mjs
 - The exact recall-deps shape used by `consumer.ts` is adjusted to the real `RecallDeps` signature at implementation time (read `src/surface/recall.ts`); the harness asserts a written belief is recalled, not a specific internal shape.
 
 Test file: `scripts/smoke-external-consumer.mjs` (the harness is the test; run via the shell block above).
+
+## Task: memory corpus sidecar fix
+
+```yaml
+id: task-fix-memory-corpus
+depends_on: []
+files:
+  - src/surface/corpus-store.ts
+  - src/surface/corpus-store.test.ts
+status: done
+```
+
+Pre-existing mneme bug surfaced by the external-consumer smoke (acceptance gate requires `openSession({ dbPath: ":memory:" })`). `ensureDir` special-cases the `":memory:"` sentinel but `saveCorpora`/`loadCorpora` do not, so `ensureCorpus` on an in-memory session writes a `:memory:.corpora.json` sidecar — invalid path (ENOENT) on Windows, and a stray junk file in cwd on Linux/Mac. An in-memory DB is ephemeral, so it must not persist/read a sidecar at all.
+
+## Implementation
+
+```typescript
+// src/surface/corpus-store.ts — no-op sidecar for the in-memory sentinel (mirror ensureDir)
+export function loadCorpora(dbPath: string): CorpusDef[] {
+  if (dbPath === ":memory:") return [];           // ephemeral DB: nothing persisted
+  const p = sidecarFor(dbPath);
+  if (!existsSync(p)) return [];
+  // ...unchanged...
+}
+
+export function saveCorpora(dbPath: string, defs: CorpusDef[]): void {
+  if (dbPath === ":memory:") return;              // ephemeral DB: do not write a sidecar
+  const sidecar = sidecarFor(dbPath);
+  // ...unchanged...
+}
+```
+
+```typescript
+// src/surface/corpus-store.test.ts — the in-memory sentinel must not touch the filesystem
+it("saveCorpora is a no-op for :memory: (writes no sidecar, does not throw)", () => {
+  expect(() => saveCorpora(":memory:", [/* a valid CorpusDef */] as any)).not.toThrow();
+  expect(existsSync(":memory:.corpora.json")).toBe(false);
+  expect(loadCorpora(":memory:")).toEqual([]);
+});
+```
+
+## Acceptance criteria
+
+- `saveCorpora(":memory:", defs)` returns without throwing and writes NO `:memory:.corpora.json` file.
+- `loadCorpora(":memory:")` returns `[]` without touching the filesystem.
+- Non-`:memory:` behavior is unchanged (existing corpus-store persistence tests still pass).
+- `openSession({ dbPath: ":memory:" })` followed by `ensureCorpus(session, "x")` no longer throws (regression the smoke depends on).
+- Full suite green: `npm test` passes; no stray `:memory:.corpora.json` left in the repo root after the run.
+
+Test file: `src/surface/corpus-store.test.ts`.

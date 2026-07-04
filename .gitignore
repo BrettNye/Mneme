@@ -3,6 +3,9 @@ dist/
 .env
 .npmrc
 
+# Packed publish tarballs (from `npm pack` / the external-consumer smoke)
+*.tgz
+
 # Mneme CLI local store (created in cwd by the default dbPath ./mneme.db)
 mneme.db
 mneme.db-shm
