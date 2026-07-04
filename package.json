@@ -15,7 +15,7 @@
   "files": [
     "dist",
     "src",
-    "bin",
+    "!src/**/*.test.ts",
     "README.md"
   ],
   "repository": {
