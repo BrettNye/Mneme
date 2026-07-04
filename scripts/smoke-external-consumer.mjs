@@ -84,14 +84,7 @@ void createSqliteAdapter;
 void createMneme;
 
 async function main(): Promise<void> {
-  // Note: a real (scratch-local) file path rather than the literal ":memory:"
-  // sentinel — on Windows, openSession({ dbPath: ":memory:" }) currently throws
-  // from saveCorpora() building a sidecar path of ":memory:.corpora.json.tmp"
-  // (invalid: colon outside the drive-letter position). ensureDir() special-
-  // cases ":memory:" but saveCorpora() does not. This is a pre-existing
-  // surface/corpus-store.ts bug, out of scope for this harness to fix; a real
-  // file path exercises the exact same public API and avoids it.
-  const session: Session = openSession({ dbPath: "./smoke-store.db" });
+  const session: Session = openSession({ dbPath: ":memory:" });
   const corpus = "smoke";
   ensureCorpus(session, corpus);
 
