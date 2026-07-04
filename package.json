@@ -1,19 +1,61 @@
 {
-  "name": "mneme",
+  "name": "@quarry-systems/mneme",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
-    "mneme": "./bin/mneme.ts",
-    "mneme-mcp": "./bin/mneme-mcp.ts"
+    "mneme": "./dist/bin/mneme.js",
+    "mneme-mcp": "./dist/bin/mneme-mcp.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "bin",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BrettNye/Mneme.git"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./surface": "./src/surface/index.ts",
-    "./cli": "./src/cli/index.ts",
-    "./mcp": "./src/mcp/index.ts",
-    "./audit": "./src/audit/index.ts",
-    "./audit/aws": "./src/audit/aws/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./surface": {
+      "types": "./dist/surface/index.d.ts",
+      "import": "./dist/surface/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    },
+    "./audit": {
+      "types": "./dist/audit/index.d.ts",
+      "import": "./dist/audit/index.js"
+    },
+    "./audit/aws": {
+      "types": "./dist/audit/aws/index.d.ts",
+      "import": "./dist/audit/aws/index.js"
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepack": "npm run clean && npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "example": "tsx examples/quickstart.ts",
@@ -34,12 +76,12 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/better-sqlite3": "^7.6.0",
     "better-sqlite3": "^11.0.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@huggingface/transformers": "^4.2.0",
-    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^20.0.0",
     "fast-check": "^4.8.0",
     "tsx": "^4.19.0",
