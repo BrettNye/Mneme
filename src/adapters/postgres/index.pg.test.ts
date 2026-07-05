@@ -4,6 +4,7 @@ import { startPg, sampleClaim } from "./test-support.js";
 import { createPostgresAdapter } from "./index.js";
 import { dbPerTenantRouter } from "./tenant-router.js";
 import type { ClaimEvent } from "../adapter-types.js";
+import type { ClaimId } from "../../core/ids.js";
 import { createHash } from "node:crypto";
 
 let pool: Pool;
@@ -140,6 +141,48 @@ describe("createPostgresAdapter", () => {
     ).rejects.toThrow("boom");
 
     const rows = await scoped.query({ corpusId: "c-rb", subject: "project:rb" });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rolls back an entire standalone base insertBatch when a row fails mid-batch", async () => {
+    const adapter = makeAdapter();
+    // First row is valid; the second carries a non-numeric recorded_seq that
+    // the `bigint` column rejects, forcing a mid-batch throw. There is no
+    // ambient transaction() here, so atomicity must come from insertBatch.
+    const good = sampleClaim({
+      id: "batch-atomic-base" as ClaimId,
+      subject: "project:batch-base",
+    });
+    const bad = sampleClaim({
+      id: "batch-atomic-base-bad" as ClaimId,
+      subject: "project:batch-base",
+      recordedSeq: "not-a-bigint" as unknown as number,
+    });
+
+    await expect(adapter.insertBatch([good, bad])).rejects.toThrow();
+
+    // Self-atomic: the first (valid) row must NOT have been committed.
+    expect(await adapter.getClaim("batch-atomic-base" as ClaimId)).toBeUndefined();
+  });
+
+  it("rolls back an entire standalone scoped insertBatch when a row fails mid-batch", async () => {
+    const adapter = makeAdapter();
+    const scoped = adapter.scoped!({ corpus: "c-batch-atomic" });
+    const good = sampleClaim({
+      id: "batch-atomic-scoped" as ClaimId,
+      subject: "project:batch-scoped",
+    });
+    const bad = sampleClaim({
+      id: "batch-atomic-scoped-bad" as ClaimId,
+      subject: "project:batch-scoped",
+      recordedSeq: "not-a-bigint" as unknown as number,
+    });
+
+    await expect(scoped.insertBatch([good, bad])).rejects.toThrow();
+
+    // Self-atomic (via the per-corpus transaction path): nothing persisted.
+    expect(await scoped.getClaim("batch-atomic-scoped" as ClaimId)).toBeUndefined();
+    const rows = await scoped.query({ corpusId: "c-batch-atomic", subject: "project:batch-scoped" });
     expect(rows).toHaveLength(0);
   });
 

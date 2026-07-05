@@ -237,7 +237,10 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
 
   async function transaction<T>(corpusId: string, fn: () => Promise<T>): Promise<T> {
     // REENTRANT JOIN: an inner transaction runs on the already-held client. Do
-    // NOT acquire a second client (pool-deadlock risk).
+    // NOT acquire a second client (pool-deadlock risk). This join assumes the
+    // nested corpusId equals the outer one (single-corpus-per-tx usage): a
+    // differently-scoped nested transaction() will NOT take its own advisory
+    // lock -- it simply rides the enclosing tx's lock.
     if (txClient.getStore()) return fn();
 
     const c = await rc.connect();
@@ -292,12 +295,49 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
     await withConn((conn) => conn.query(insertClaimSql(prefix), toRow(c, corpusId)));
   }
 
+  async function insertLoop(conn: PoolClient, cs: Claim[], corpusId: string | null): Promise<void> {
+    for (const cl of cs) {
+      await conn.query(insertClaimSql(prefix), toRow(cl, corpusId));
+    }
+  }
+
   async function insertMany(cs: Claim[], corpusId: string | null): Promise<void> {
-    await withConn(async (conn) => {
-      for (const cl of cs) {
-        await conn.query(insertClaimSql(prefix), toRow(cl, corpusId));
+    // Inside an ambient transaction(): the enclosing tx already provides
+    // atomicity (and, for scoped writes, the per-corpus advisory lock). Loop
+    // the inserts on the held client.
+    const ambient = txClient.getStore();
+    if (ambient) {
+      await insertLoop(ambient, cs, corpusId);
+      return;
+    }
+    // No ambient tx. Make the batch SELF-ATOMIC so a mid-batch failure cannot
+    // leave a partially-committed batch in the hash-chained store (parity with
+    // sqlite's IMMEDIATE-wrapped insertBatch).
+    if (corpusId != null) {
+      // Scoped batch: borrow transaction() for BOTH atomicity AND the
+      // per-corpus advisory lock -- mirroring the single-claim scoped write.
+      await transaction(corpusId, () => insertLoop(txClient.getStore()!, cs, corpusId));
+      return;
+    }
+    // Base (unscoped) batch: no corpus to key an advisory lock on. Wrap the
+    // loop in a plain BEGIN/COMMIT with the same release/rollback discipline
+    // as transaction() (single release on every path; poisoned-client
+    // release(err) if ROLLBACK throws).
+    const c = await rc.connect();
+    try {
+      await c.query("BEGIN");
+      await insertLoop(c, cs, corpusId);
+      await c.query("COMMIT");
+      c.release();
+    } catch (e) {
+      try {
+        await c.query("ROLLBACK");
+        c.release();
+      } catch {
+        c.release(e as Error);
       }
-    });
+      throw e;
+    }
   }
 
   async function readEventsImpl(filter?: {
