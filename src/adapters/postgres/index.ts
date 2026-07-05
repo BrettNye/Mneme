@@ -243,10 +243,16 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
     const c = await rc.connect();
     try {
       await c.query("BEGIN");
+      // Session-config only (no data read) precedes the lock so lock_timeout
+      // bounds the lock-acquisition wait: a wedged lock surfaces as a
+      // retryable error instead of hanging the corpus.
       await c.query("SET LOCAL lock_timeout = '15s'");
       await c.query("SET LOCAL statement_timeout = '30s'");
-      // FIRST real statement after BEGIN: per-corpus serialization. Held until
-      // COMMIT/ROLLBACK so the hash chain for this corpus cannot fork.
+      // The advisory lock is the FIRST statement that READS shared state, and
+      // it precedes every claims/chain read below -- so no writer can act on a
+      // stale per-corpus head. Held until COMMIT/ROLLBACK so the hash chain
+      // for this corpus cannot fork. Per-corpus key => cross-corpus writers
+      // don't contend.
       await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [corpusId]);
       const r = await txClient.run(c, fn);
       await c.query("COMMIT");
