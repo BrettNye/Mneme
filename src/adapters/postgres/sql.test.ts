@@ -12,7 +12,7 @@ describe("buildQuery", () => {
   it("forces corpus_id first and orders by id COLLATE \"C\"", () => {
     const { text, params } = buildQuery("", { corpusId: "c1", subject: "s" }, { corpus: "c1" });
     expect(text).toMatch(/corpus_id = \$1[\s\S]*subject = \$2/i);
-    expect(text.toLowerCase()).toContain('order by recorded_seq asc, id collate "c" asc');
+    expect(text).toContain('ORDER BY recorded_seq ASC, id COLLATE "C" ASC');
     expect(params).toEqual(["c1", "s"]);
   });
 
