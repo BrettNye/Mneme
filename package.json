@@ -56,7 +56,8 @@
     "build": "tsc -p tsconfig.build.json",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepack": "npm run clean && npm run build",
-    "test": "vitest run",
+    "test": "vitest run --exclude \"**/*.pg.test.ts\"",
+    "test:pg": "vitest run --passWithNoTests pg.test.ts",
     "typecheck": "tsc --noEmit",
     "example": "tsx examples/quickstart.ts",
     "example:bio": "tsx examples/bio-quickstart.ts",
@@ -83,20 +84,26 @@
   "devDependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@types/node": "^20.0.0",
+    "@types/pg": "^8.11.0",
     "fast-check": "^4.8.0",
+    "testcontainers": "^10.13.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
   },
   "peerDependencies": {
     "@aws-sdk/client-kms": "*",
-    "@aws-sdk/client-s3": "*"
+    "@aws-sdk/client-s3": "*",
+    "pg": "*"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-s3": {
       "optional": true
     },
     "@aws-sdk/client-kms": {
+      "optional": true
+    },
+    "pg": {
       "optional": true
     }
   }
