@@ -7,7 +7,9 @@ import { now as nowClock, type Instant } from "../core/time.js";
 import { routeValuePredicates, type QueryWarning } from "./value-routing.js";
 import type { Predicate } from "./predicate.js";
 import type { Value } from "../core/value.js";
-import { DEFAULT_FALLBACK_WARN_THRESHOLD } from "../mneme.js";
+
+// Mirrors mneme.ts's DEFAULT_FALLBACK_WARN_THRESHOLD (kept local to avoid an algebra->barrel import cycle).
+const DEFAULT_FALLBACK_WARN_THRESHOLD = 10_000;
 
 import { sigma as sigmaOp } from "./selection.js";
 import {

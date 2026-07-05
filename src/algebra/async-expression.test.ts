@@ -167,6 +167,9 @@ it("gammaAsync produces the SAME ranked output as sync gamma on an identical evi
 
 // ---------- full pipeline equivalence: async vs sync ----------
 
+// Parity claim here is scoped to non-value predicates (subjectEq); the value-predicate
+// capability-routing guarantee (fallback warnings, unsupported-kind throws) is exercised
+// separately by the dedicated asyncSigma warning tests below.
 it("full pipeline leafAsync->asyncSigma->asyncTauNow->asyncRho->asyncKappa matches the sync pipeline", async () => {
   const t0 = Date.now();
   const claim1 = makeClaim("lineage-block", "context about the system");
@@ -339,6 +342,27 @@ it("asyncSigma routes value predicates through ctx.adapter.capabilities() and em
   expect(warnings).toHaveLength(1);
   expect(warnings[0].kind).toBe("fallback_in_memory");
   expect(out.claims).toHaveLength(1);
+});
+
+it("asyncSigma falls back to the local default threshold of 10_000 when ctx.fallbackWarnThreshold is not set", async () => {
+  const claims = Array.from({ length: 10_001 }, (_, i) => makeClaim(`s${i}`, { amount: 1 } as any));
+  const warnings: QueryWarning[] = [];
+  const ctx: AsyncEvalContext = {
+    adapter: {
+      query: async () => claims,
+      capabilities: () => fallbackCapabilities,
+    } as any,
+    catalog: { getCorpus: () => ({}) } as any,
+    onWarning: (w) => warnings.push(w),
+  };
+
+  await evaluateAsync<Corpus>(
+    [leafAsync("workspace:canopy"), asyncSigma({ op: "valueEq", path: "amount", value: 1 })],
+    ctx
+  );
+
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0].threshold).toBe(10_000);
 });
 
 it("asyncSigma with only base predicates triggers no warning even when capabilities() is read", async () => {
