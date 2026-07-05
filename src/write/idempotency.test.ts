@@ -1,4 +1,12 @@
-import { checkIdempotent, recordIdempotent, idempotencyScope, WINDOW_MS } from "./idempotency.js";
+import {
+  checkIdempotent,
+  recordIdempotent,
+  idempotencyScope,
+  WINDOW_MS,
+  checkIdempotentAsync,
+  recordIdempotentAsync,
+} from "./idempotency.js";
+import type { AsyncStorageAdapter } from "../adapters/async-adapter.js";
 
 it("returns the original result within the window, not after", () => {
   const store = new Map<string, any>();
@@ -66,4 +74,30 @@ it("does not collide across different scopes in the store", () => {
 
   expect(checkIdempotent(adapter, scopeA, "k1", 1000)).toBe("result-A");
   expect(checkIdempotent(adapter, scopeB, "k1", 1000)).toBe("result-B");
+});
+
+it("checkIdempotentAsync returns the prior result inside the window and undefined after it", async () => {
+  const rec = { result: "id-1", createdAt: 1000 };
+  const a = { getIdempotencyRecord: async () => rec } as unknown as AsyncStorageAdapter;
+  expect(await checkIdempotentAsync(a, "s", "k", 1000 + WINDOW_MS - 1)).toBe("id-1");
+  expect(await checkIdempotentAsync(a, "s", "k", 1000 + WINDOW_MS + 1)).toBeUndefined();
+});
+
+it("checkIdempotentAsync returns undefined when no async record exists", async () => {
+  const a = { getIdempotencyRecord: async () => undefined } as unknown as AsyncStorageAdapter;
+  expect(await checkIdempotentAsync(a, "s", "k", 1000)).toBeUndefined();
+});
+
+it("recordIdempotentAsync stores a record that checkIdempotentAsync can retrieve via a real async adapter", async () => {
+  const store = new Map<string, any>();
+  const a = {
+    getIdempotencyRecord: async (s: string, k: string) => store.get(`${s}|${k}`),
+    putIdempotencyRecord: async (s: string, k: string, r: any) => {
+      store.set(`${s}|${k}`, r);
+    },
+  } as unknown as AsyncStorageAdapter;
+
+  await recordIdempotentAsync(a, "scopeA", "k1", "claim-async-1", 0);
+  expect(await checkIdempotentAsync(a, "scopeA", "k1", 1000)).toBe("claim-async-1");
+  expect(await checkIdempotentAsync(a, "scopeA", "k1", WINDOW_MS + 1)).toBeUndefined();
 });

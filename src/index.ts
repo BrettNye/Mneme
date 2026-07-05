@@ -115,3 +115,11 @@ export type { ReadDeps } from "./surface/types.js";
 export type { RememberArgs, RememberResult, ListResult } from "./surface/remember.js";
 export { explainRecall } from "./surface/explain.js";
 export type { RecallTrace, ClaimDisposition, DispositionReason } from "./surface/explain.js";
+
+// Async surface — Postgres adapter, tenant routers, async Mneme facade.
+export { createMnemeAsync } from "./mneme-async.js";
+export type { AsyncMneme } from "./mneme-async.js";
+export { createPostgresAdapter } from "./adapters/postgres/index.js";
+export { rowLevelRouter, schemaPerTenantRouter, dbPerTenantRouter } from "./adapters/postgres/tenant-router.js";
+export type { TenantRouter, ResolvedConnection } from "./adapters/postgres/tenant-router.js";
+export type { AsyncStorageAdapter } from "./adapters/async-adapter.js";
