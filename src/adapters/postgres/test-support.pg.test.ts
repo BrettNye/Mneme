@@ -3,8 +3,9 @@
 // Self-test for test-support.ts's OWN startPg/withPostgres/sampleClaim. Uses
 // its own startPg() call (not a shared fixture-of-a-fixture) to prove the
 // bootstrap this module hands to every other pg suite actually works.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type MockInstance } from "vitest";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import type { StartedTestContainer } from "testcontainers";
 import { Pool } from "pg";
 import { startPg, withPostgres, sampleClaim } from "./test-support.js";
 
@@ -34,7 +35,7 @@ describe("pg test-support", () => {
 
   it("startPg tears down the container if a later setup step throws", async () => {
     const originalStart = PostgreSqlContainer.prototype.start;
-    let stopSpy: ReturnType<typeof vi.spyOn> | undefined;
+    let stopSpy: MockInstance<StartedTestContainer["stop"]> | undefined;
     const startSpy = vi
       .spyOn(PostgreSqlContainer.prototype, "start")
       .mockImplementation(async function (this: PostgreSqlContainer) {
@@ -51,6 +52,37 @@ describe("pg test-support", () => {
       expect(stopSpy).toHaveBeenCalledTimes(1);
     } finally {
       connectSpy.mockRestore();
+      startSpy.mockRestore();
+    }
+  }, PG_STARTUP_TIMEOUT_MS);
+
+  it("startPg's stop() still stops the container even if pool.end() rejects", async () => {
+    const originalStart = PostgreSqlContainer.prototype.start;
+    let stopSpy: MockInstance<StartedTestContainer["stop"]> | undefined;
+    const startSpy = vi
+      .spyOn(PostgreSqlContainer.prototype, "start")
+      .mockImplementation(async function (this: PostgreSqlContainer) {
+        const started = await originalStart.call(this);
+        stopSpy = vi.spyOn(started, "stop");
+        return started;
+      });
+
+    try {
+      const { pool, stop } = await startPg();
+      // Actually close the pool's connections (so the container isn't torn
+      // down out from under a live client) but still surface a rejection to
+      // `stop()`, mirroring an `end()` that fails after doing its work.
+      const realEnd = pool.end.bind(pool);
+      const endSpy = vi.spyOn(pool, "end").mockImplementationOnce(async () => {
+        await realEnd();
+        throw new Error("simulated end failure");
+      });
+
+      await expect(stop()).rejects.toThrow("simulated end failure");
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+
+      endSpy.mockRestore();
+    } finally {
       startSpy.mockRestore();
     }
   }, PG_STARTUP_TIMEOUT_MS);
