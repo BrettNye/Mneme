@@ -2,13 +2,18 @@ import type { CandidateClaim, Claim, Status } from "../core/claim.js";
 import { newClaimId, asCorpusId, type ClaimId } from "../core/ids.js";
 import { scopeHash } from "../core/scope.js";
 import { valueHash } from "../core/value.js";
-import { INFINITY } from "../core/time.js";
-import { scalarConfidence } from "../core/confidence.js";
 import { validateScope, type ClaimSchema } from "../catalog/schema.js";
 import { enforce } from "./contradiction.js";
 import { checkIdempotent, recordIdempotent, idempotencyScope } from "./idempotency.js";
 import type { ContradictionPolicy } from "../catalog/corpus.js";
 import type { ClaimEvent, StorageAdapter } from "../adapters/adapter.js";
+import {
+  buildCommittedClaim,
+  contradictionArtifact,
+  buildCommitEvent,
+  buildSupersedeEvent,
+  buildPromoteEvent,
+} from "./claim-build.js";
 
 /**
  * §7.5 batch writes — non-atomic, high-throughput.
@@ -52,7 +57,8 @@ export class Promoter {
   constructor(
     private readonly adapter: StorageAdapter,
     private readonly schema: ClaimSchema,
-    private readonly corpusId = ""
+    private readonly corpusId = "",
+    private readonly clock: () => number = Date.now
   ) {}
 
   /**
@@ -68,7 +74,7 @@ export class Promoter {
     body: (recorded: number, seq: number) => { result: T; id?: string; event?: ClaimEvent }
   ): T {
     if (idem?.key) {
-      const prior = checkIdempotent(this.adapter, idem.scope, idem.key, Date.now());
+      const prior = checkIdempotent(this.adapter, idem.scope, idem.key, this.clock());
       if (prior) {
         // Return a duplicate result carrying the prior id.
         // The generic result type T must accommodate { id, status } so we cast.
@@ -76,53 +82,15 @@ export class Promoter {
       }
     }
     return this.adapter.transaction(() => {
-      const recorded = Date.now();
+      const recorded = this.clock();
       const seq = this.adapter.maxRecordedSeq() + 1;
       const { result, id, event } = body(recorded, seq);
       if (event) this.adapter.appendEvent(event);              // reject path returns no event → nothing logged
       if (idem?.key && id) {
-        recordIdempotent(this.adapter, idem.scope, idem.key, id, Date.now());
+        recordIdempotent(this.adapter, idem.scope, idem.key, id, this.clock());
       }
       return result;
     });
-  }
-
-  /**
-   * Build the `contradiction` artifact claim for the accept_but_mark policy (§7.3).
-   * Records the conflicting pair's ids as its value; a scalar-certain, validated,
-   * verification-sourced claim under the reserved `contradiction` subject so it is
-   * directly queryable. Inserted alongside the accepted claim, not run through enforce().
-   */
-  private contradictionArtifact(
-    accepted: Claim,
-    conflictId: string,
-    recorded: number,
-    seq: number
-  ): Claim {
-    const value = { leftId: accepted.id, rightId: conflictId } as Claim["value"];
-    return {
-      id: newClaimId(),
-      profile: accepted.profile,
-      workspace: accepted.workspace,
-      ...(accepted.corpusId ? { corpusId: accepted.corpusId } : {}),
-      subject: "contradiction" as Claim["subject"],
-      key: "contradiction.mark" as Claim["key"],
-      scope: accepted.scope,
-      scopeHash: accepted.scopeHash,
-      value,
-      valueHash: valueHash(value),
-      confidence: scalarConfidence(1),
-      valid: { from: recorded, to: INFINITY },
-      recorded,
-      recordedSeq: seq,
-      status: "validated",
-      source: "verification",
-      provenance: {},
-      evidence: [],
-      audience: {},
-      tags: [],
-      schema: "contradiction-mark-v1",
-    };
   }
 
   commit(
@@ -166,11 +134,7 @@ export class Promoter {
     return this.write(
       opts.idempotencyKey ? { scope, key: opts.idempotencyKey } : undefined,
       (recorded, seq) => {
-        const claim: Claim = {
-          ...candidateForEnforce,
-          recorded,
-          recordedSeq: seq,
-        };
+        const claim: Claim = buildCommittedClaim(candidateForEnforce, recorded, seq);
 
         outcome.deprecateIds?.forEach((id) => this.adapter.deleteClaim(id as ClaimId));
         this.adapter.insertClaim(claim);
@@ -178,17 +142,10 @@ export class Promoter {
         // accept_but_mark (§7.3): both claims live; write a separate `contradiction`
         // claim recording the conflicting pair so it is queryable for later review.
         if (outcome.markArtifact && outcome.conflictId) {
-          this.adapter.insertClaim(this.contradictionArtifact(claim, outcome.conflictId, recorded, seq));
+          this.adapter.insertClaim(contradictionArtifact(claim, outcome.conflictId, recorded, seq));
         }
 
-        const event: ClaimEvent = {
-          op: "commit",
-          corpusId: this.corpusId,
-          writer: opts.writer,
-          claimId: claim.id,
-          recorded,
-          recordedSeq: seq,
-        };
+        const event: ClaimEvent = buildCommitEvent(this.corpusId, opts.writer, claim.id, recorded, seq);
 
         return { result: { id: claim.id, status: "committed" as const }, id: claim.id, event };
       }
@@ -275,15 +232,7 @@ export class Promoter {
         this.adapter.deleteClaim(deprecateId);
         this.adapter.insertClaim(newClaim);
 
-        const event: ClaimEvent = {
-          op: "supersede",
-          corpusId: this.corpusId,
-          writer: opts.writer,
-          claimId: newId,
-          deprecatedId: deprecateId,
-          recorded,
-          recordedSeq: seq,
-        };
+        const event: ClaimEvent = buildSupersedeEvent(this.corpusId, opts.writer, newId, deprecateId, recorded, seq);
 
         return { result: { id: newId, status: "superseded" as const }, id: newId, event };
       }
@@ -320,16 +269,7 @@ export class Promoter {
         };
         this.adapter.insertClaim(promotedClaim);
 
-        const event: ClaimEvent = {
-          op: "promote",
-          corpusId: this.corpusId,
-          writer: opts.writer,
-          claimId: targetId,
-          toStatus: to,
-          reason: opts.reason,
-          recorded,
-          recordedSeq: seq,
-        };
+        const event: ClaimEvent = buildPromoteEvent(this.corpusId, opts.writer, targetId, to, opts.reason, recorded, seq);
 
         return { result: { id: targetId, status: "promoted" as const }, id: targetId, event };
       }
