@@ -1,4 +1,4 @@
-import { enforce, findValidatedConflict } from "./contradiction.js";
+import { enforce, findValidatedConflict, decideContradiction } from "./contradiction.js";
 import type { Claim } from "../core/claim.js";
 import { asCorpusId } from "../core/ids.js";
 import { scalarConfidence } from "../core/confidence.js";
@@ -179,4 +179,59 @@ it("findValidatedConflict allows an absent or matching candidate corpusId", () =
   expect(() => findValidatedConflict(matching, adapter, "corpus-a")).not.toThrow();
   const absent = makeClaim({ id: "c3", valueHash: "v", confidence: scalarConfidence(1), status: "candidate" }); // no corpusId
   expect(() => findValidatedConflict(absent, adapter, "corpus-a")).not.toThrow();
+});
+
+// ── decideContradiction: pure decision, no I/O ────────────────────────────────
+
+it("decideContradiction is a pure function that takes already-loaded existing claims (no adapter)", () => {
+  // Golden case lifted from "reject_on_contradiction rejects when existing claim has higher confidence"
+  const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
+  const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
+  const outcome = decideContradiction(candidate, [existing], { kind: "reject_on_contradiction" }, "corp");
+  expect(outcome.decision).toBe("reject");
+});
+
+it("decideContradiction: reject_incoming keeps the existing validated conflict", () => {
+  // "reject_incoming" golden case per the task's illustrative example, mapped onto the
+  // real policy kind (reject_on_contradiction) with equal confidence so the existing wins.
+  const validatedA = makeClaim({ id: "A", valueHash: "h1", confidence: equalConfidence, status: "validated" });
+  const candidateB = makeClaim({ id: "B", valueHash: "h2", confidence: equalConfidence, status: "candidate" });
+  const out = decideContradiction(candidateB, [validatedA], { kind: "reject_on_contradiction" }, "corp");
+  expect(out.decision).toBe("reject");
+});
+
+it("decideContradiction returns accept when no claim in existing conflicts (same valueHash filtered out)", () => {
+  const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
+  const candidate = makeClaim({ id: "C", valueHash: "h1", confidence: lowConfidence, status: "candidate" });
+  const outcome = decideContradiction(candidate, [existing], { kind: "reject_on_contradiction" }, "corp");
+  expect(outcome.decision).toBe("accept");
+});
+
+it("decideContradiction accepts when existing is empty, regardless of policy", () => {
+  const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
+  expect(decideContradiction(candidate, [], { kind: "always_accept" }, "corp").decision).toBe("accept");
+  expect(decideContradiction(candidate, [], { kind: "reject_on_contradiction" }, "corp").decision).toBe("accept");
+});
+
+it("decideContradiction throws on corpus mismatch, mirroring findValidatedConflict's guard", () => {
+  const candidate = makeClaim({ id: "c1", valueHash: "v", confidence: scalarConfidence(1), status: "candidate", corpusId: asCorpusId("corpus-a") });
+  expect(() => decideContradiction(candidate, [], { kind: "always_accept" }, "corpus-b")).toThrow(/corpus mismatch/);
+});
+
+it("decideContradiction accept_but_mark sets conflictId to the conflicting existing claim's id", () => {
+  const existing = makeClaim({ id: "E", valueHash: "h1", confidence: highConfidence, status: "validated" });
+  const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
+  const outcome = decideContradiction(candidate, [existing], { kind: "accept_but_mark" }, "corp");
+  expect(outcome.decision).toBe("accept");
+  expect(outcome.markArtifact).toBe(true);
+  expect(outcome.conflictId).toBe("E");
+});
+
+it("enforce delegates to decideContradiction: same outcome as calling it directly with the queried claims", () => {
+  const existing = makeClaim({ id: "E", valueHash: "h1", confidence: lowConfidence, status: "validated" });
+  const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: highConfidence, status: "candidate" });
+  const adapter = { query: () => [existing] } as any;
+  const viaEnforce = enforce(candidate, { kind: "accept_and_resolve", rule: "deprecate_lower" }, adapter, "corp");
+  const viaDecide = decideContradiction(candidate, [existing], { kind: "accept_and_resolve", rule: "deprecate_lower" }, "corp");
+  expect(viaEnforce).toEqual(viaDecide);
 });
