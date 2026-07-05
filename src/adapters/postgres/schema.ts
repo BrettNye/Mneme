@@ -15,6 +15,16 @@
 // the default (`""`). Index names are left unprefixed: an index lives in the
 // schema of the table it indexes, so per-schema prefixing of the table is
 // enough to keep index identifiers from colliding across schemas.
+//
+// TRUST BOUNDARY: `schemaPrefix` is interpolated VERBATIM into DDL/DML as a
+// raw SQL identifier (template-string concatenation, not a parameterized
+// value -- Postgres has no bind-parameter form for identifiers). This module
+// does NOT escape or quote it. `migrate()` runs a cheap allow-list guard
+// (empty string, or a single lowercase identifier followed by a dot) as
+// defense-in-depth, but callers remain responsible for only ever passing
+// `""` or a `schemaPrefix` that was itself validated/allow-listed upstream
+// (e.g. produced by a tenant router from a known-safe tenant id) -- never a
+// raw, unvalidated value from user input.
 import type { PoolClient } from "pg";
 
 export interface Migration {
@@ -105,6 +115,27 @@ export const MIGRATIONS: Migration[] = [
 // runners can both see a version un-applied and both try to insert it).
 const MIGRATION_LOCK_KEY = 0x6d6e656d; // "mnem"
 
+// Defense-in-depth allow-list for `schemaPrefix`: empty, or exactly one
+// lowercase SQL identifier followed by a dot (the form the pg tenant router
+// is expected to produce). This does NOT make raw interpolation "safe" in
+// general -- it just converts an unvalidated caller mistake (or a prefix
+// that leaked unsanitized user input) into a loud, immediate throw instead
+// of silently building attacker-controlled DDL. See the trust-boundary note
+// at the top of this file.
+const SCHEMA_PREFIX_PATTERN = /^[a-z_][a-z0-9_]*\.$/;
+
+function assertValidSchemaPrefix(schemaPrefix: string): void {
+  if (schemaPrefix !== "" && !SCHEMA_PREFIX_PATTERN.test(schemaPrefix)) {
+    throw new Error(
+      `Invalid schemaPrefix ${JSON.stringify(schemaPrefix)}: must be "" or ` +
+        `match ${SCHEMA_PREFIX_PATTERN} (a single lowercase identifier ` +
+        `followed by a dot). schemaPrefix is interpolated verbatim as a SQL ` +
+        `identifier and is NOT escaped -- see the trust-boundary note at the ` +
+        `top of schema.ts.`
+    );
+  }
+}
+
 /**
  * Apply un-applied migrations in ascending version order, serialized across
  * concurrent booting instances via a fixed-key SESSION advisory lock.
@@ -112,16 +143,28 @@ const MIGRATION_LOCK_KEY = 0x6d6e656d; // "mnem"
  * @param client       a `pg` PoolClient (session-scoped so the advisory lock
  *                     is held for the duration of this call).
  * @param schemaPrefix identifier prefix for every table (e.g. `"tenant_a."` or `""`).
+ *                     TRUST BOUNDARY: interpolated verbatim as a raw SQL
+ *                     identifier -- NOT escaped by this module. Callers MUST
+ *                     validate/allow-list it (empty string, or a validated
+ *                     `<schema>.` produced by the tenant router) before
+ *                     calling `migrate`. A cheap runtime guard rejects
+ *                     anything outside that shape, but that is
+ *                     defense-in-depth, not a substitute for caller
+ *                     validation.
  * @param migrations   the migration set to apply (defaults to `MIGRATIONS`).
  *
  * Idempotent: applying twice, or two concurrent runners, yields exactly
  * `migrations.length` rows in `${schemaPrefix}mneme_migrations` with no error.
+ * Corollary: every `Migration.up()` MUST itself be fully re-runnable
+ * (idempotent DDL, e.g. `IF NOT EXISTS`) -- a crash between a migration's
+ * DDL and its tracking-row INSERT replays that same `up()` on next boot.
  */
 export async function migrate(
   client: PoolClient,
   schemaPrefix: string,
   migrations: Migration[] = MIGRATIONS
 ): Promise<void> {
+  assertValidSchemaPrefix(schemaPrefix);
   // SESSION-level lock: blocks until acquired, held until we explicitly unlock
   // in the finally below. Any second runner waits here until the first releases.
   await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);

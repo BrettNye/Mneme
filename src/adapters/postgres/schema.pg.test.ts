@@ -98,6 +98,13 @@ describe("postgres schema migrate", () => {
       const notHere = await pool.query("SELECT to_regclass('public.claims') AS c");
       expect(notHere.rows[0].c).toBeNull();
 
+      // The migration-tracking table itself also lands under the tenant
+      // schema, not just the data tables.
+      const trackingThere = await pool.query(
+        "SELECT to_regclass('tenant_a.mneme_migrations') AS c"
+      );
+      expect(trackingThere.rows[0].c).toBe("tenant_a.mneme_migrations");
+
       // id column is binary-collated text; recorded_seq is bigint.
       const cols = await pool.query(
         `SELECT column_name, data_type FROM information_schema.columns
@@ -116,4 +123,37 @@ describe("postgres schema migrate", () => {
       await container.stop();
     }
   }, 120000);
+
+  it("rejects a schemaPrefix that isn't empty or a validated `<identifier>.` before touching the client", async () => {
+    // No container needed: the guard must throw before any query is issued.
+    // A call-counting stub proves the client was never touched (a generic
+    // throwing stub would pass for the wrong reason -- any error from the
+    // client, guard or not, satisfies a bare `.rejects.toThrow()`).
+    let queryCalls = 0;
+    const untouchedClient = {
+      query: () => {
+        queryCalls++;
+        return Promise.resolve({ rows: [] });
+      },
+    } as unknown as import("pg").PoolClient;
+
+    for (const bad of ["foo; DROP", "Foo.", "foo"]) {
+      await expect(migrate(untouchedClient, bad)).rejects.toThrow(
+        /schemaPrefix/i
+      );
+    }
+    expect(queryCalls).toBe(0);
+  });
+
+  it("accepts an empty schemaPrefix and a validated `<identifier>.` prefix", async () => {
+    // Fake client whose query stub always resolves with an empty row set,
+    // so any rejection surfaced here would have to come from the guard
+    // itself rejecting -- not from real DDL/DB behavior.
+    const okClient = {
+      query: () => Promise.resolve({ rows: [] }),
+    } as unknown as import("pg").PoolClient;
+
+    await expect(migrate(okClient, "")).resolves.toBeUndefined();
+    await expect(migrate(okClient, "tenant_a.")).resolves.toBeUndefined();
+  });
 });
