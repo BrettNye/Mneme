@@ -15,20 +15,30 @@ import { newClaimId } from "../../core/ids.js";
  */
 export async function startPg(): Promise<{ pool: Pool; stop: () => Promise<void> }> {
   const container = await new PostgreSqlContainer("postgres:16").start();
-  const pool = new Pool({ connectionString: container.getConnectionUri() });
-  const client = await pool.connect();
+  let pool: Pool | undefined;
   try {
-    await migrate(client, "", MIGRATIONS);
-  } finally {
-    client.release();
+    pool = new Pool({ connectionString: container.getConnectionUri() });
+    const client = await pool.connect();
+    try {
+      await migrate(client, "", MIGRATIONS);
+    } finally {
+      client.release();
+    }
+    return {
+      pool,
+      stop: async () => {
+        try {
+          await pool!.end();
+        } finally {
+          await container.stop();
+        }
+      },
+    };
+  } catch (err) {
+    await pool?.end().catch(() => {});
+    await container.stop().catch(() => {});
+    throw err;
   }
-  return {
-    pool,
-    stop: async () => {
-      await pool.end();
-      await container.stop();
-    },
-  };
 }
 
 /** Callback sugar over `startPg()` with guaranteed `finally` teardown. */

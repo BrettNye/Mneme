@@ -3,8 +3,12 @@
 // Self-test for test-support.ts's OWN startPg/withPostgres/sampleClaim. Uses
 // its own startPg() call (not a shared fixture-of-a-fixture) to prove the
 // bootstrap this module hands to every other pg suite actually works.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { Pool } from "pg";
 import { startPg, withPostgres, sampleClaim } from "./test-support.js";
+
+const PG_STARTUP_TIMEOUT_MS = 60_000;
 
 describe("pg test-support", () => {
   it("startPg yields a queryable, migrated pool", async () => {
@@ -15,14 +19,41 @@ describe("pg test-support", () => {
     } finally {
       await stop();
     }
-  }, 60000);
+  }, PG_STARTUP_TIMEOUT_MS);
 
   it("withPostgres provides a migrated pool and tears down after", async () => {
+    let poolAfterTeardown: Pool | undefined;
     await withPostgres(async (pool) => {
       const { rows } = await pool.query("SELECT to_regclass('claims') AS t");
       expect(rows[0].t).toBe("claims");
+      poolAfterTeardown = pool;
     });
-  }, 60000);
+    // Teardown actually happened: querying the ended pool rejects.
+    await expect(poolAfterTeardown!.query("SELECT 1")).rejects.toThrow();
+  }, PG_STARTUP_TIMEOUT_MS);
+
+  it("startPg tears down the container if a later setup step throws", async () => {
+    const originalStart = PostgreSqlContainer.prototype.start;
+    let stopSpy: ReturnType<typeof vi.spyOn> | undefined;
+    const startSpy = vi
+      .spyOn(PostgreSqlContainer.prototype, "start")
+      .mockImplementation(async function (this: PostgreSqlContainer) {
+        const started = await originalStart.call(this);
+        stopSpy = vi.spyOn(started, "stop");
+        return started;
+      });
+    const connectSpy = vi
+      .spyOn(Pool.prototype, "connect")
+      .mockRejectedValueOnce(new Error("simulated migration setup failure"));
+
+    try {
+      await expect(startPg()).rejects.toThrow("simulated migration setup failure");
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      connectSpy.mockRestore();
+      startSpy.mockRestore();
+    }
+  }, PG_STARTUP_TIMEOUT_MS);
 
   it("sampleClaim returns a minimal valid Claim, overridable", () => {
     const claim = sampleClaim();
@@ -83,5 +114,5 @@ describe("pg test-support", () => {
     } finally {
       await stop();
     }
-  }, 60000);
+  }, PG_STARTUP_TIMEOUT_MS);
 });
