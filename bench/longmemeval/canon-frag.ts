@@ -33,7 +33,7 @@ import type { Session, ReadDeps } from "../../src/surface/index.js";
 import { simJaccard } from "../../src/algebra/similarity.js";
 import { fragmentation } from "./fragmentation.js";
 import { ingestQuestion, claimsFor } from "./ingest.js";
-import { LmeQuestion } from "./types.js";
+import { LmeQuestion, normalizeQuestion } from "./types.js";
 import type { ClaimRecordT, LmeQuestionT } from "./types.js";
 import {
   buildPrompt, parseLlmClaims, extractClaims, EXTRACTION_MODEL, PROMPT_VERSION,
@@ -63,32 +63,51 @@ export function boundedCanon(
   return { subjects: rank(subjects, opts.kSubjects ?? 8), keys: rank(keys, opts.kKeys ?? 10) };
 }
 
-// ── offline smoke: prove metric + plumbing on the fixture ─────────────────────
+// ── offline: measure fragmentation on any dataset + pre-extracted claims ───────
+// Doubles as (a) the plumbing smoke on the fixture and (b) a FREE headroom diagnostic
+// on a real baseline: how many near-dup subject pairs already exist for the bound to
+// reduce? If ~0, the corpus is clean and --live --go would just reproduce a null.
 async function runSmoke(): Promise<void> {
   const base = new URL(".", import.meta.url);
-  const dataset = JSON.parse(readFileSync(new URL("fixtures/dataset.json", base), "utf8")) as unknown[];
-  const claimsRaw = readFileSync(new URL("fixtures/claims.jsonl", base), "utf8")
-    .split("\n").filter(Boolean).slice(1) // line 0 is the lme-extraction-header
-    .map((l) => JSON.parse(l) as ClaimRecordT);
-  const questions = dataset.map((d) => LmeQuestion.parse(d)); // fixture is already normalized
+  const fileArg = argValue("--file");
+  const claimsArg = argValue("--claims");
+  const raw = process.argv.includes("--raw");
+  const limit = argValue("--limit") ? parseInt(argValue("--limit")!, 10) : fileArg ? 30 : 3;
 
-  console.log(`[smoke/offline] fixture: ${questions.length} question(s), ${claimsRaw.length} pre-extracted claims`);
+  const datasetText = fileArg ? readFileSync(fileArg, "utf8") : readFileSync(new URL("fixtures/dataset.json", base), "utf8");
+  const claimsText = claimsArg ? readFileSync(claimsArg, "utf8") : readFileSync(new URL("fixtures/claims.jsonl", base), "utf8");
+  const questions = (JSON.parse(datasetText) as unknown[]).slice(0, limit).map((d) => (raw ? normalizeQuestion(d) : LmeQuestion.parse(d)));
+  const claimsRaw = claimsText.split("\n").filter(Boolean).slice(1).map((l) => JSON.parse(l) as ClaimRecordT);
+
+  console.log(`[frag/offline] ${questions.length} question(s), ${claimsRaw.length} claims ${fileArg ? `from ${fileArg}` : "(fixture)"}`);
   const session = openSession({ dbPath: ":memory:", writer: "canon-frag-smoke" });
+  let totSubj = 0, totDup = 0, measured = 0;
+  const worstAll: { a: string; b: string; score: number }[] = [];
   for (const q of questions) {
-    const claims = claimsFor(q, claimsRaw); // haystack claims for this question
+    const claims = claimsFor(q, claimsRaw);
     if (claims.length === 0) continue;
     ingestQuestion(session, q, claims);
     const rep = await fragmentation(session, `lme-${q.question_id}`, OFFLINE_DEPS, { threshold: 0.6 });
-    console.log(`  ${q.question_id}: ${rep.distinctSubjects} subjects, ${rep.nearDupPairs} near-dup pairs (rate ${rep.fragmentationRate.toFixed(3)})`);
-    for (const w of rep.worst) console.log(`      ~ ${w.a}  ≈  ${w.b}   ${w.score.toFixed(3)}`);
+    totSubj += rep.distinctSubjects; totDup += rep.nearDupPairs; measured++;
+    worstAll.push(...rep.worst);
   }
   session.close();
+  worstAll.sort((a, b) => b.score - a.score);
 
-  console.log("\n[smoke] metric + ingest plumbing OK. Canon has NO effect offline (claims pre-extracted).");
-  console.log("To measure the real fragmentation→recall delta:");
-  console.log("  1. run --live to produce baseline.claims.jsonl and bounded.claims.jsonl (COST: 1 extraction/session/arm);");
-  console.log("  2. score each: npx tsx bench/longmemeval/run.ts --file <dataset> --claims <arm>.claims.jsonl --k 1,3,10 --rank hybrid;");
-  console.log("  3. compare fragmentationRate (this arm) AND recall@K (run.ts) between baseline and bounded.");
+  console.log(`\n=== fragmentation over ${measured} question corpora ===`);
+  console.log(`  total distinct subjects:              ${totSubj}`);
+  console.log(`  total near-dup subject pairs (>=0.6): ${totDup}`);
+  console.log(`  avg near-dup pairs / question:        ${(totDup / Math.max(1, measured)).toFixed(2)}`);
+  if (worstAll.length) {
+    console.log(`  worst pairs (the headroom a bound could reduce):`);
+    for (const w of worstAll.slice(0, 12)) console.log(`      ~ ${w.a}  ≈  ${w.b}   ${w.score.toFixed(3)}`);
+  }
+  if (!fileArg) {
+    console.log("\n[fixture] canon has no effect offline (pre-extracted). Use --live for the extraction arms.");
+  } else {
+    console.log(`\nHEADROOM READ: ${totDup} near-dup pairs in this baseline. ~0 ⇒ corpus already clean, canon-priming`);
+    console.log(`has little to reduce (don't spend). Substantial ⇒ --live --go is worth the extraction cost.`);
+  }
 }
 
 // ── live: the two extraction arms (COST-GATED) ────────────────────────────────
