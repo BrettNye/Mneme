@@ -26,6 +26,12 @@ import {
   parseExpr,
   // Replay
   replayStatus,
+  // Async surface
+  createMnemeAsync,
+  createPostgresAdapter,
+  rowLevelRouter,
+  schemaPerTenantRouter,
+  dbPerTenantRouter,
 } from "./index.js";
 
 describe("replay re-execution engine barrel re-exports", () => {
@@ -68,5 +74,13 @@ describe("replay re-execution engine barrel re-exports", () => {
     const serialized = serializeExpr(node);
     const parsed = parseExpr(serialized);
     expect(parsed).toEqual(node);
+  });
+});
+
+describe("async surface barrel re-exports", () => {
+  it("re-exports the async surface", () => {
+    for (const f of [createMnemeAsync, createPostgresAdapter, rowLevelRouter, schemaPerTenantRouter, dbPerTenantRouter]) {
+      expect(typeof f).toBe("function");
+    }
   });
 });
