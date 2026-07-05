@@ -21,6 +21,21 @@ import { kappa } from "./composition.js";
 import { override } from "./override.js";
 import { joinSubjectWith } from "./join.js";
 import type { ComposedContext, RankedCorpus, Corpus } from "./types.js";
+import type { QueryWarning } from "./value-routing.js";
+import type { AdapterCapabilities } from "../adapters/adapter.js";
+
+// Capabilities reporting every kind as fallback_in_memory — mirrors the sqlite
+// adapter's real capabilities() shape used by the sync sigma warning test in mneme.test.ts.
+const fallbackCapabilities: AdapterCapabilities = {
+  valuePredicateSupport: {
+    equality: "fallback_in_memory",
+    range: "fallback_in_memory",
+    set_membership: "fallback_in_memory",
+    regex: "fallback_in_memory",
+    structural_pattern: "fallback_in_memory",
+    null_check: "fallback_in_memory",
+  },
+};
 
 // Minimal fake claim matching the Claim interface (mirrors expression.test.ts).
 const makeClaim = (subject: string, value: string) =>
@@ -51,7 +66,7 @@ const makeClaim = (subject: string, value: string) =>
 it("evaluates a leafAsync + asyncSigma against the async adapter", async () => {
   const claim = makeClaim("lineage-block", "x");
   const ctx: AsyncEvalContext = {
-    adapter: { query: async () => [claim] } as any,
+    adapter: { query: async () => [claim], capabilities: () => fallbackCapabilities } as any,
     catalog: { getCorpus: () => ({}) } as any,
   };
   const out = await evaluateAsync<Corpus>(
@@ -166,6 +181,7 @@ it("full pipeline leafAsync->asyncSigma->asyncTauNow->asyncRho->asyncKappa match
     adapter: {
       query: async () => [claim1, claim2],
       getClaim: async (_id: any) => undefined,
+      capabilities: () => fallbackCapabilities,
     } as any,
     catalog: { getCorpus: () => ({}) } as any,
     evaluationClock: t0,
@@ -293,4 +309,55 @@ it("evaluateAsync threads stages in declaration order and awaits async stages", 
 
   await evaluateAsync([leafAsync("x"), s1, s2, s3], ctx);
   expect(order).toEqual([1, 2, 3]);
+});
+
+// ---------- asyncSigma reads ctx.adapter.capabilities() (§10.2 fallback warning) ----------
+
+it("asyncSigma routes value predicates through ctx.adapter.capabilities() and emits a fallback_in_memory warning over threshold", async () => {
+  const claim = makeClaim("s", { amount: 1 } as any);
+  const warnings: QueryWarning[] = [];
+  let capabilitiesCalls = 0;
+  const ctx: AsyncEvalContext = {
+    adapter: {
+      query: async () => [claim],
+      capabilities: () => {
+        capabilitiesCalls++;
+        return fallbackCapabilities;
+      },
+    } as any,
+    catalog: { getCorpus: () => ({}) } as any,
+    fallbackWarnThreshold: 0,
+    onWarning: (w) => warnings.push(w),
+  };
+
+  const out = await evaluateAsync<Corpus>(
+    [leafAsync("workspace:canopy"), asyncSigma({ op: "valueEq", path: "amount", value: 1 })],
+    ctx
+  );
+
+  expect(capabilitiesCalls).toBeGreaterThan(0);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0].kind).toBe("fallback_in_memory");
+  expect(out.claims).toHaveLength(1);
+});
+
+it("asyncSigma with only base predicates triggers no warning even when capabilities() is read", async () => {
+  const claim = makeClaim("subj-a", "value-a");
+  const warnings: QueryWarning[] = [];
+  const ctx: AsyncEvalContext = {
+    adapter: {
+      query: async () => [claim],
+      capabilities: () => fallbackCapabilities,
+    } as any,
+    catalog: { getCorpus: () => ({}) } as any,
+    fallbackWarnThreshold: 0,
+    onWarning: (w) => warnings.push(w),
+  };
+
+  await evaluateAsync<Corpus>(
+    [leafAsync("workspace:canopy"), asyncSigma({ op: "subjectEq", value: "subj-a" })],
+    ctx
+  );
+
+  expect(warnings).toHaveLength(0);
 });

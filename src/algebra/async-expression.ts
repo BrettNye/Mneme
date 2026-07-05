@@ -4,9 +4,10 @@ import type { AsyncStorageAdapter } from "../adapters/async-adapter.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { gammaAsyncTraverse } from "./provenance-traversal.js";
 import { now as nowClock, type Instant } from "../core/time.js";
-import type { QueryWarning } from "./value-routing.js";
+import { routeValuePredicates, type QueryWarning } from "./value-routing.js";
 import type { Predicate } from "./predicate.js";
 import type { Value } from "../core/value.js";
+import { DEFAULT_FALLBACK_WARN_THRESHOLD } from "../mneme.js";
 
 import { sigma as sigmaOp } from "./selection.js";
 import {
@@ -128,8 +129,20 @@ export const joinAsync = {
 // sync EvalContext. The underlying math is imported, never reimplemented.
 // ---------------------------------------------------------------------------
 
-/** σ: wraps the pure sigmaOp core. Reads nothing from ctx (pure filter). */
-export const asyncSigma = (p: Predicate): AsyncStage<Corpus, Corpus> => (c, _ctx) => sigmaOp(p)(c);
+/**
+ * σ: wraps the pure sigmaOp core. Mirrors the sync sigma() in mneme.ts — routes
+ * value predicates through ctx.adapter.capabilities() (the only sync capability
+ * read on the async path) before filtering, so unsupported kinds throw and
+ * fallback_in_memory kinds over threshold emit a §10.2 warning via onWarning.
+ */
+export const asyncSigma = (p: Predicate): AsyncStage<Corpus, Corpus> => (c, ctx) => {
+  routeValuePredicates(p, ctx.adapter.capabilities(), {
+    workingSetSize: c.claims.length,
+    threshold: ctx.fallbackWarnThreshold ?? DEFAULT_FALLBACK_WARN_THRESHOLD,
+    onWarning: ctx.onWarning ?? ((w) => console.warn(w.message)),
+  });
+  return sigmaOp(p)(c);
+};
 
 export const asyncTauNow = (): AsyncStage<Corpus, Corpus> =>
   (c, ctx) => tauNowOp(() => ctx.evaluationClock ?? nowClock())(c);
