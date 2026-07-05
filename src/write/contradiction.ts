@@ -42,9 +42,10 @@ export function findValidatedConflict(
 }
 
 /** PURE: decide accept/reject/mark from the already-loaded validated group. No I/O.
- *  Includes the valueHash-inequality filter and corpus-mismatch guard formerly inside
- *  findValidatedConflict, so callers that have already loaded `existing` (e.g. an async
- *  promoter) can reuse the exact same policy decision without re-querying. */
+ *  Includes the valueHash-inequality filter and corpus-mismatch guard, shared with
+ *  findValidatedConflict via assertCorpusMatch (not removed from there), so callers that
+ *  have already loaded `existing` (e.g. an async promoter) can reuse the exact same policy
+ *  decision without re-querying. */
 export function decideContradiction(
   candidate: Claim,
   existing: Claim[],
@@ -81,20 +82,17 @@ export function decideContradiction(
   }
 }
 
-/** enforce = I/O (adapter.query for the validated (corpus,subject,key,scope) group) -> decide. */
+/** enforce = findValidatedConflict (I/O: the single query-construction site) -> decideContradiction (pure).
+ *  Wrapping the single found conflict (if any) as a one-element array preserves decideContradiction's
+ *  exact outcome, since decideContradiction's policy switch only ever looks at the one entry its own
+ *  `.find` would have matched — which is precisely the entry findValidatedConflict already found. This
+ *  avoids re-issuing (and duplicating) the adapter.query call. */
 export function enforce(
   candidate: Claim,
   policy: ContradictionPolicy,
   adapter: StorageAdapter,
   corpusId: string
 ): ContradictionOutcome {
-  assertCorpusMatch(candidate, corpusId);
-  const existing = adapter.query({
-    corpusId,
-    subject: candidate.subject,
-    key: candidate.key,
-    status: ["validated"],
-    scopeHash: candidate.scopeHash,
-  });
-  return decideContradiction(candidate, existing, policy, corpusId);
+  const conflict = findValidatedConflict(candidate, adapter, corpusId);
+  return decideContradiction(candidate, conflict ? [conflict] : [], policy, corpusId);
 }

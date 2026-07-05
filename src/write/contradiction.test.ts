@@ -72,6 +72,30 @@ it("findValidatedConflict queries the passed corpusId, NOT candidate.workspace (
   expect(capturedPlan.corpusId).toBe("enforcedCorpus");
 });
 
+// ── enforce: query-plan isolation (protects the live path, not just findValidatedConflict) ──
+
+it("enforce queries the passed corpusId, NOT candidate.workspace (isolation)", () => {
+  // Mirrors the findValidatedConflict isolation test above, but exercised through `enforce`
+  // itself — the actual path pipeline.ts calls — so a corpusId/workspace mix-up introduced
+  // inside enforce (e.g. a reintroduced duplicate query) would be caught here too.
+  const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate", subject: "mySubject" as any, key: "myKey" as any, scopeHash: "myScopeHash", workspace: "myWorkspace" as any });
+  let capturedPlan: any;
+  const adapter = { query: (plan: any) => { capturedPlan = plan; return []; } } as any;
+  enforce(candidate, { kind: "always_accept" }, adapter, "enforcedCorpus");
+  expect(capturedPlan.subject).toBe("mySubject");
+  expect(capturedPlan.key).toBe("myKey");
+  expect(capturedPlan.scopeHash).toBe("myScopeHash");
+  expect(capturedPlan.corpusId).toBe("enforcedCorpus");
+});
+
+it("enforce issues exactly one adapter.query call (no duplicate query construction)", () => {
+  const candidate = makeClaim({ id: "C", valueHash: "h2", confidence: lowConfidence, status: "candidate" });
+  let calls = 0;
+  const adapter = { query: () => { calls++; return []; } } as any;
+  enforce(candidate, { kind: "reject_on_contradiction" }, adapter, "corp");
+  expect(calls).toBe(1);
+});
+
 // ── enforce: no conflict ──────────────────────────────────────────────────────
 
 it("enforce returns accept when no conflict exists regardless of policy", () => {
