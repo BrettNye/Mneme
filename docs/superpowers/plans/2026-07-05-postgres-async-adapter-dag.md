@@ -8,25 +8,25 @@ default_quality_reviewer_hint: standard
 
 ```mermaid
 flowchart TD
-    task-deps["task-deps: pg + testcontainers provisioning<br/>files: package.json"]
-    task-pg-test-support["task-pg-test-support: shared pg container/pool fixture<br/>files: src/adapters/postgres/test-support.ts +1 more"]
-    task-adapter-types["task-adapter-types: extract shared value types<br/>files: src/adapters/adapter-types.ts +2 more"]
-    task-async-iface["task-async-iface: AsyncStorageAdapter interface<br/>files: src/adapters/async-adapter.ts +1 more"]
-    task-contradiction-split["task-contradiction-split: split enforce into decideContradiction<br/>files: src/write/contradiction.ts +1 more"]
-    task-claim-build["task-claim-build: extract pure claim/event builders<br/>files: src/write/claim-build.ts +2 more"]
-    task-catalog-facade["task-catalog-facade: shared catalog/staging facade<br/>files: src/catalog/catalog-facade.ts +1 more"]
-    task-pg-sql["task-pg-sql: provider-agnostic SQL builders<br/>files: src/adapters/postgres/sql.ts +1 more"]
-    task-pg-schema["task-pg-schema: DDL + migration runner<br/>files: src/adapters/postgres/schema.ts +1 more"]
-    task-tenant-router["task-tenant-router: TenantRouter routing seam<br/>files: src/adapters/postgres/tenant-router.ts +1 more"]
-    task-pg-adapter["task-pg-adapter: createPostgresAdapter<br/>files: src/adapters/postgres/index.ts +1 more"]
-    task-async-eval["task-async-eval: async evaluation stages<br/>files: src/algebra/async-expression.ts +2 more"]
-    task-async-idempotency["task-async-idempotency: async idempotency helpers<br/>files: src/write/idempotency.ts +1 more"]
-    task-async-promoter["task-async-promoter: AsyncPromoter write path<br/>files: src/write/async-pipeline.ts +1 more"]
-    task-mneme-async["task-mneme-async: createMnemeAsync surface<br/>files: src/mneme-async.ts +1 more"]
-    task-exports["task-exports: public barrel exports<br/>files: src/index.ts +1 more"]
-    task-pg-conformance["task-pg-conformance: adapter conformance suite on pg<br/>files: src/adapters/adapter-contract.ts +1 more"]
-    task-concurrency-tests["task-concurrency-tests: advisory-lock concurrency tests<br/>files: src/adapters/postgres/concurrency.pg.test.ts"]
-    task-parity-harness["task-parity-harness: sync/async cross-backend parity<br/>files: src/adapters/postgres/parity.pg.test.ts"]
+    task-deps["task-deps: pg + testcontainers provisioning<br/>files: package.json"]:::done
+    task-pg-test-support["task-pg-test-support: shared pg container/pool fixture<br/>files: src/adapters/postgres/test-support.ts +1 more"]:::done
+    task-adapter-types["task-adapter-types: extract shared value types<br/>files: src/adapters/adapter-types.ts +2 more"]:::done
+    task-async-iface["task-async-iface: AsyncStorageAdapter interface<br/>files: src/adapters/async-adapter.ts +1 more"]:::done
+    task-contradiction-split["task-contradiction-split: split enforce into decideContradiction<br/>files: src/write/contradiction.ts +1 more"]:::done
+    task-claim-build["task-claim-build: extract pure claim/event builders<br/>files: src/write/claim-build.ts +2 more"]:::done
+    task-catalog-facade["task-catalog-facade: shared catalog/staging facade<br/>files: src/catalog/catalog-facade.ts +1 more"]:::done
+    task-pg-sql["task-pg-sql: provider-agnostic SQL builders<br/>files: src/adapters/postgres/sql.ts +1 more"]:::done
+    task-pg-schema["task-pg-schema: DDL + migration runner<br/>files: src/adapters/postgres/schema.ts +1 more"]:::done
+    task-tenant-router["task-tenant-router: TenantRouter routing seam<br/>files: src/adapters/postgres/tenant-router.ts +1 more"]:::done
+    task-pg-adapter["task-pg-adapter: createPostgresAdapter<br/>files: src/adapters/postgres/index.ts +1 more"]:::done
+    task-async-eval["task-async-eval: async evaluation stages<br/>files: src/algebra/async-expression.ts +2 more"]:::done
+    task-async-idempotency["task-async-idempotency: async idempotency helpers<br/>files: src/write/idempotency.ts +1 more"]:::done
+    task-async-promoter["task-async-promoter: AsyncPromoter write path<br/>files: src/write/async-pipeline.ts +1 more"]:::done
+    task-mneme-async["task-mneme-async: createMnemeAsync surface<br/>files: src/mneme-async.ts +1 more"]:::done
+    task-exports["task-exports: public barrel exports<br/>files: src/index.ts +1 more"]:::done
+    task-pg-conformance["task-pg-conformance: adapter conformance suite on pg<br/>files: src/adapters/adapter-contract.ts +1 more"]:::done
+    task-concurrency-tests["task-concurrency-tests: advisory-lock concurrency tests<br/>files: src/adapters/postgres/concurrency.pg.test.ts"]:::done
+    task-parity-harness["task-parity-harness: sync/async cross-backend parity<br/>files: src/adapters/postgres/parity.pg.test.ts"]:::done
 
     task-adapter-types --> task-async-iface
     task-adapter-types --> task-pg-sql
@@ -140,7 +140,7 @@ id: task-deps
 depends_on: []
 files:
   - package.json
-status: pending
+status: done  # 664c0a8+e78f011 — spec+quality approved
 single_threaded: true
 is_wiring_task: true
 ```
@@ -170,7 +170,7 @@ depends_on: [task-deps, task-pg-schema]
 files:
   - src/adapters/postgres/test-support.ts
   - src/adapters/postgres/test-support.pg.test.ts
-status: pending
+status: done  # c161115+7f4431f+f05e2b4 — spec+quality approved
 ```
 
 The single owner of the Postgres test fixture that every testcontainers suite imports — a `withPostgres`
@@ -228,7 +228,7 @@ files:
   - src/adapters/adapter-types.ts
   - src/adapters/adapter.ts
   - src/adapters/adapter.test.ts
-status: pending
+status: done  # 693ae73 — spec+quality approved
 ```
 
 Move the backend-agnostic value types (`ClaimEvent`, `ExecutionPlan`, `AdapterCapabilities`,
@@ -287,7 +287,7 @@ depends_on: [task-adapter-types]
 files:
   - src/adapters/async-adapter.ts
   - src/adapters/async-adapter.test.ts
-status: pending
+status: done  # e2b5b00 — spec+quality approved
 ```
 
 Define the async twin of `StorageAdapter`: every storage method returns a `Promise`; `capabilities()`
@@ -349,7 +349,7 @@ depends_on: []
 files:
   - src/write/contradiction.ts
   - src/write/contradiction.test.ts
-status: pending
+status: done  # 05503a2+eb6b8fc — spec+quality approved
 ```
 
 Refactor `enforce()` so the policy decision is a pure function `decideContradiction(candidate, existing,
@@ -407,7 +407,7 @@ files:
   - src/write/claim-build.ts
   - src/write/pipeline.ts
   - src/write/claim-build.test.ts
-status: pending
+status: done  # e32d0ab+950d16a — spec+quality approved
 ```
 
 Lift the inline claim/event construction and the `contradictionArtifact` out of `Promoter` into pure
@@ -462,7 +462,7 @@ depends_on: []
 files:
   - src/catalog/catalog-facade.ts
   - src/catalog/catalog-facade.test.ts
-status: pending
+status: done  # 713fbf2 — spec+quality approved
 ```
 
 Provide `createCatalogFacade(catalog, staging)` — the backend-agnostic corpus-catalog + staging methods —
@@ -515,7 +515,7 @@ depends_on: [task-adapter-types]
 files:
   - src/adapters/postgres/sql.ts
   - src/adapters/postgres/sql.test.ts
-status: pending
+status: done  # ff2408c+683acf9 — spec+quality approved
 ```
 
 Pure SQL-string builders (no DB handle) that mirror SQLite's `executeQuery`/insert/event/anchor/idempotency
@@ -566,7 +566,7 @@ depends_on: [task-deps]
 files:
   - src/adapters/postgres/schema.ts
   - src/adapters/postgres/schema.pg.test.ts
-status: pending
+status: done  # 91122c1+2877eb9 — spec+quality approved
 model_hint: opus
 ```
 
@@ -624,7 +624,7 @@ depends_on: [task-deps, task-pg-test-support]
 files:
   - src/adapters/postgres/tenant-router.ts
   - src/adapters/postgres/tenant-router.pg.test.ts
-status: pending
+status: done  # 9db5eea — spec+quality approved
 ```
 
 The routing seam: `resolve(tenantId)` returns a `ResolvedConnection { connect(), schemaPrefix,
@@ -674,7 +674,7 @@ depends_on: [task-deps, task-pg-test-support, task-async-iface, task-pg-sql, tas
 files:
   - src/adapters/postgres/index.ts
   - src/adapters/postgres/index.pg.test.ts
-status: pending
+status: done  # 1746960+d988b8b+47de60b — spec+quality approved
 model_hint: opus
 quality_reviewer_hint: opus
 ```
@@ -751,7 +751,7 @@ files:
   - src/algebra/async-expression.ts
   - src/algebra/provenance-traversal.ts
   - src/algebra/async-expression.test.ts
-status: pending
+status: done  # 6306346+2ed074a+19e6c37 — spec+quality approved
 ```
 
 `evaluateAsync(pipeline, ctx)` awaits the FOUR I/O-touching stage kinds — `leafAsync` (`adapter.query`),
@@ -826,7 +826,7 @@ depends_on: [task-async-iface]
 files:
   - src/write/idempotency.ts
   - src/write/idempotency.test.ts
-status: pending
+status: done  # a8a358a — spec+quality approved
 ```
 
 Add async siblings `checkIdempotentAsync` / `recordIdempotentAsync` that take an `AsyncStorageAdapter`,
@@ -872,7 +872,7 @@ depends_on: [task-async-iface, task-contradiction-split, task-claim-build, task-
 files:
   - src/write/async-pipeline.ts
   - src/write/async-pipeline.test.ts
-status: pending
+status: done  # 8d74b96 — spec+quality approved
 model_hint: opus
 quality_reviewer_hint: opus
 ```
@@ -932,7 +932,7 @@ depends_on: [task-catalog-facade, task-async-promoter, task-async-eval, task-asy
 files:
   - src/mneme-async.ts
   - src/mneme-async.test.ts
-status: pending
+status: done  # 2280b44+fb7f76b — spec+quality approved
 ```
 
 `createMnemeAsync({ adapter, availableTiers })` returns `AsyncMneme` — the async twin of `Mneme` for
@@ -989,7 +989,7 @@ depends_on: [task-mneme-async, task-pg-adapter, task-tenant-router]
 files:
   - src/index.ts
   - src/index.test.ts
-status: pending
+status: done  # 339e4ee — spec+quality approved
 is_wiring_task: true
 ```
 
@@ -1013,7 +1013,7 @@ depends_on: [task-async-iface, task-pg-adapter, task-pg-test-support]
 files:
   - src/adapters/adapter-contract.ts
   - src/adapters/postgres/conformance.pg.test.ts
-status: pending
+status: done  # 21ac3a8 — spec+quality approved
 ```
 
 Factor the backend-agnostic async-adapter behaviors into a reusable `adapter-contract.ts` (parameterized over
@@ -1056,7 +1056,7 @@ id: task-concurrency-tests
 depends_on: [task-pg-adapter, task-mneme-async, task-pg-test-support]
 files:
   - src/adapters/postgres/concurrency.pg.test.ts
-status: pending
+status: done  # 6793a06 — spec+quality approved
 model_hint: opus
 quality_reviewer_hint: opus
 ```
@@ -1103,7 +1103,7 @@ id: task-parity-harness
 depends_on: [task-pg-adapter, task-mneme-async, task-pg-test-support]
 files:
   - src/adapters/postgres/parity.pg.test.ts
-status: pending
+status: done  # fd48a72+2fed20a — spec+quality approved
 model_hint: opus
 ```
 
