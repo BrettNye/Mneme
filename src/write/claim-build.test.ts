@@ -24,7 +24,7 @@ const baseClaim: Claim = {
   recordedSeq: 0,
   status: "validated",
   source: "manual",
-  provenance: { traceId: "t1" },
+  provenance: { runId: "t1" },
   evidence: [],
   audience: {},
   tags: [],
