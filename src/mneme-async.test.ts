@@ -211,3 +211,116 @@ it("promoteStaged commits a previously emitted candidate via the async pipeline"
   const claims = await m.readByIds("fixture:async", [result.id as ClaimId]);
   expect(claims).toHaveLength(1);
 });
+
+// ── wiring-level coverage: supersede / promote / commitBatch / promoteAllStaged ──
+// (mirrors src/mneme.test.ts's sync equivalents — the underlying AsyncPromoter logic
+// is exercised in async-pipeline.test.ts; these verify mneme-async.ts's glue: corpus
+// existence checks, policy defaulting, opts forwarding, and takeAllStaged→commitBatch.)
+
+it("supersede deprecates the named claim and commits the replacement through the async surface", async () => {
+  const adapter = createFakeAsyncAdapter();
+  const m = createMnemeAsync({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  const original = await m.commit("fixture:async", makeCandidate(), { writer: "test-writer" });
+  expect(original.status).toBe("committed");
+
+  const result = await m.supersede(
+    "fixture:async",
+    original.id,
+    { ...makeCandidate(), value: "replacement value" },
+    { writer: "test-writer" }
+  );
+
+  expect(result.status).toBe("superseded");
+  expect(typeof result.id).toBe("string");
+  expect(result.id).not.toBe(original.id);
+
+  const [oldClaim] = await m.readByIds("fixture:async", [original.id as ClaimId]);
+  expect(oldClaim?.status).toBe("deprecated");
+
+  const [newClaim] = await m.readByIds("fixture:async", [result.id as ClaimId]);
+  expect(newClaim?.value).toBe("replacement value");
+});
+
+it("promote transitions a claim's status forward through the async surface", async () => {
+  const adapter = createFakeAsyncAdapter();
+  const m = createMnemeAsync({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  const committed = await m.commit(
+    "fixture:async",
+    { ...makeCandidate(), status: "candidate" },
+    { writer: "test-writer" }
+  );
+  expect(committed.status).toBe("committed");
+
+  const result = await m.promote("fixture:async", committed.id, "validated", {
+    writer: "test-writer",
+    reason: "approved by reviewer",
+  });
+
+  expect(result.status).toBe("promoted");
+  expect(result.id).toBe(committed.id);
+
+  const [promotedClaim] = await m.readByIds("fixture:async", [committed.id as ClaimId]);
+  expect(promotedClaim?.status).toBe("validated");
+});
+
+it("commitBatch returns a BatchResult with per-item statuses", async () => {
+  const adapter = createFakeAsyncAdapter();
+  const m = createMnemeAsync({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  const res = await m.commitBatch(
+    "fixture:async",
+    [
+      { ...makeCandidate(), subject: "s1" },
+      { ...makeCandidate(), subject: "s2" },
+    ],
+    { writer: "test-writer" }
+  );
+
+  expect(res.results).toHaveLength(2);
+  expect(res.results.map((r) => r.index)).toEqual([0, 1]);
+  expect(res.results.every((r) => r.status === "committed")).toBe(true);
+});
+
+it("promoteAllStaged drains the staging buffer and returns a BatchResult", async () => {
+  const adapter = createFakeAsyncAdapter();
+  const m = createMnemeAsync({ adapter, availableTiers: [{ kind: "core" }] });
+  m.createCorpus(corpusDef);
+
+  m.emitCandidate("fixture:async", { ...makeCandidate(), subject: "sA" });
+  m.emitCandidate("fixture:async", { ...makeCandidate(), subject: "sB" });
+
+  const res = await m.promoteAllStaged("fixture:async", { writer: "test-writer" });
+
+  expect(res.results).toHaveLength(2);
+  expect(res.results.every((r) => r.status === "committed")).toBe(true);
+  expect(m.listStaged("fixture:async")).toEqual([]);
+});
+
+it("query rejects an unknown corpus", async () => {
+  const adapter = createFakeAsyncAdapter();
+  const m = createMnemeAsync({ adapter, availableTiers: [{ kind: "core" }] });
+  await expect(
+    m.query("no-such-corpus", [leafAsync("no-such-corpus")])
+  ).rejects.toThrow(/unknown corpus/);
+});
+
+it("supersede rejects an unknown corpus", async () => {
+  const adapter = createFakeAsyncAdapter();
+  const m = createMnemeAsync({ adapter, availableTiers: [{ kind: "core" }] });
+  await expect(
+    m.supersede("no-such-corpus", "some-id", makeCandidate(), { writer: "test-writer" })
+  ).rejects.toThrow(/unknown corpus/);
+});
+
+it("promote rejects an unknown corpus", async () => {
+  const adapter = createFakeAsyncAdapter();
+  const m = createMnemeAsync({ adapter, availableTiers: [{ kind: "core" }] });
+  await expect(
+    m.promote("no-such-corpus", "some-id", "validated", { writer: "test-writer" })
+  ).rejects.toThrow(/unknown corpus/);
+});
