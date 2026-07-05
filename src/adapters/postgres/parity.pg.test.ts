@@ -183,6 +183,8 @@ describe("cross-backend parity: sync-SQLite vs async-Postgres", () => {
     expect(project(pgClaims)).toEqual(project(syncClaims));
 
     // confidence.raw is bit-identical (Object.is via toEqual on the sorted raws).
+    // Redundant with the project(...) equality above (raw is already projected);
+    // kept as intentional re-emphasis of the confidence invariant, not extra coverage.
     const syncRaws = project(syncClaims).map((p) => p.raw);
     const pgRaws = project(pgClaims).map((p) => p.raw);
     expect(pgRaws).toEqual(syncRaws);
@@ -301,9 +303,26 @@ describe("cross-backend parity: sync-SQLite vs async-Postgres", () => {
   it("text round-trip: float / >2^53 int / unicode+duplicate-ish keys survive byte-exactly", async () => {
     // A jsonb column would re-canonicalize numbers and key order; the pg adapter
     // stores values in a `text` column so the exact JSON round-trips.
+    //
+    // NOTE ON `bigish`: it must be an UNSAFE integer that also survives the JS
+    // source-literal parse unchanged. 9007199254740993 (=2^53+1) is silently
+    // rounded to 2^53 by the engine at parse time, so it would NOT exercise an
+    // unsafe int. 9007199254740994 (=2^53+2) is even, hence exactly
+    // representable AND > Number.MAX_SAFE_INTEGER. Guard both properties below so
+    // a future edit can't quietly reintroduce a value that no longer tests this.
+    const BIGISH = 9007199254740994; // 2^53 + 2
+    expect(BIGISH).toBe(9007199254740994); // parse survived unchanged
+    expect(BIGISH > Number.MAX_SAFE_INTEGER).toBe(true);
+    expect(Number.isSafeInteger(BIGISH)).toBe(false);
+
+    // Keys are DELIBERATELY not in sorted order, so a jsonb-style key
+    // canonicalization WOULD reorder them and the stringify check below WOULD
+    // catch it. (Sorted order would be: café, dup.key, dup.key␠, emoji-🎉,
+    // floaty, negFloat, zebra.)
     const value = {
+      zebra: "last-alphabetically-but-written-first",
       floaty: 0.1 + 0.2, // 0.30000000000000004 -- exact IEEE-754 double
-      bigish: 9007199254740993, // > 2^53
+      bigish: BIGISH, // > 2^53, unsafe integer (see guards above)
       negFloat: -1.5e-10,
       café: "naïve", // unicode key + value
       "emoji-🎉": "值 unicode value",
@@ -318,6 +337,12 @@ describe("cross-backend parity: sync-SQLite vs async-Postgres", () => {
     const got = await pgAdapter.getClaim("text-roundtrip" as ClaimId);
 
     expect(got).toBeDefined();
+    // Structural equality (key-order-INSENSITIVE).
     expect(got!.value).toEqual(value);
+    // Order-SENSITIVE checks: prove the `text` column preserved insertion key
+    // order byte-for-byte. A jsonb canonicalization would reorder keys and fail
+    // these even though `toEqual` above would still pass.
+    expect(Object.keys(got!.value as object)).toEqual(Object.keys(value));
+    expect(JSON.stringify(got!.value)).toBe(JSON.stringify(value));
   }, 60_000);
 });
