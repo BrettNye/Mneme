@@ -1,68 +1,29 @@
 import type { Claim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
+import type {
+  ClaimEvent,
+  ExecutionPlan,
+  AdapterCapabilities,
+  IdempotencyRecord,
+  AnchoredRootRow,
+  AdapterScope,
+} from "./adapter-types.js";
 
-export interface AdapterScope {
-  corpus: string;
-  profile?: string;
-}
-
-export interface ClaimEvent {
-  op: "commit" | "supersede" | "promote";
-  corpusId: string;
-  writer: string;
-  claimId: string;
-  deprecatedId?: string;   // supersede
-  toStatus?: string;       // promote
-  reason?: string;         // promote
-  recorded: number;
-  recordedSeq: number;
-  /** SHA-256 hash of canonical(event) + prevHash, hex-encoded. Set by the adapter on write. */
-  entryHash?: string;
-  /** The entryHash of the previous event in the same corpus, or "" for the genesis event. */
-  prevHash?: string;
-}
-
-export interface AnchoredRootRow {
-  corpusId: string;
-  epochId: string;
-  root: string;
-  signature: string | null;
-  guarantee: string;
-  at: number;
-}
-
-export type PredicateKind =
-  | "equality"
-  | "range"
-  | "set_membership"
-  | "regex"
-  | "structural_pattern"
-  | "null_check";
-
-export type ValuePredicateLevel =
-  | "native_indexed"
-  | "native_unindexed"
-  | "fallback_in_memory"
-  | "unsupported";
-
-export interface AdapterCapabilities {
-  valuePredicateSupport: Record<PredicateKind, ValuePredicateLevel>;
-}
-
-export interface ExecutionPlan {
-  corpusId: string;
-  subject?: string;
-  key?: string;
-  status?: string[];
-  scopeHash?: string;
-  recordedAtMost?: number;
-  runIds?: string[];   // match claims whose provenance.runId is in this set
-}
-
-export interface IdempotencyRecord {
-  result: string;
-  createdAt: number;
-}
+// Backend-agnostic value types now live in ./adapter-types.js so the sync
+// (StorageAdapter, below) and async adapter contracts can share one
+// definition without drift. Re-exported here for byte-compatibility with
+// existing importers.
+export type {
+  ClaimEvent,
+  ExecutionPlan,
+  AdapterCapabilities,
+  IdempotencyRecord,
+  AnchoredRootRow,
+  AdapterScope,
+  PredicateKind,
+  ValuePredicateLevel,
+} from "./adapter-types.js";
+export { valuePredicateLevel } from "./adapter-types.js";
 
 export interface StorageAdapter {
   insertClaim(claim: Claim): void;
@@ -86,8 +47,3 @@ export interface StorageAdapter {
   /** Release any underlying resources (e.g. file handles). Optional; in-memory adapters may omit it. */
   close?(): void;
 }
-
-export const valuePredicateLevel = (
-  c: AdapterCapabilities,
-  k: PredicateKind
-): ValuePredicateLevel => c.valuePredicateSupport[k];

@@ -1,4 +1,5 @@
 import { valuePredicateLevel, type AdapterCapabilities, type StorageAdapter, type ExecutionPlan, type IdempotencyRecord, type ClaimEvent } from "./adapter.js";
+import type { ExecutionPlan as ExecutionPlanFromNewHome } from "./adapter-types.js";
 import type { Claim } from "../core/claim.js";
 import type { ClaimId } from "../core/ids.js";
 
@@ -66,4 +67,15 @@ it("ExecutionPlan carries pushable leaf filters", () => {
   expect(plan.corpusId).toBe("corpus-1");
   expect(plan.subject).toBe("person:123");
   expect(plan.status).toEqual(["validated", "provisional"]);
+});
+
+it("re-exports valuePredicateLevel byte-compatibly", () => {
+  expect(valuePredicateLevel({ valuePredicateSupport: { equality: "unsupported" } as any }, "equality"))
+    .toBe("unsupported");
+});
+
+it("ExecutionPlan resolves identically whether imported from adapter.ts or adapter-types.ts", () => {
+  const plan: ExecutionPlanFromNewHome = { corpusId: "corpus-2" };
+  const same: ExecutionPlan = plan;
+  expect(same.corpusId).toBe("corpus-2");
 });
