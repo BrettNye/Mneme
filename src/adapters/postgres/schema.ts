@@ -107,6 +107,21 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    up: (p) => `
+      ALTER TABLE ${p}claims        ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT '';
+      ALTER TABLE ${p}claim_events  ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT '';
+      ALTER TABLE ${p}idempotency   ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT '';
+      ALTER TABLE ${p}audit_anchors ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_claims_tenant_identity ON ${p}claims(tenant_id, corpus_id, subject, key, scope_hash);
+      CREATE INDEX IF NOT EXISTS idx_events_tenant_corpus_seq ON ${p}claim_events(tenant_id, corpus_id, seq_pk);
+      ALTER TABLE ${p}idempotency   DROP CONSTRAINT IF EXISTS idempotency_pkey;
+      ALTER TABLE ${p}idempotency   ADD CONSTRAINT idempotency_pkey PRIMARY KEY (scope, key, tenant_id);
+      ALTER TABLE ${p}audit_anchors DROP CONSTRAINT IF EXISTS audit_anchors_pkey;
+      ALTER TABLE ${p}audit_anchors ADD CONSTRAINT audit_anchors_pkey PRIMARY KEY (tenant_id, corpus_id, epoch_id);
+    `,
+  },
 ];
 
 // Fixed, constant key for the session advisory lock. All booting instances take

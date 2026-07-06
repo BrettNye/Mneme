@@ -11,22 +11,25 @@ export interface SqlText {
 
 /**
  * Build a parameterized SELECT against `${prefix}claims` matching
- * sqlite.ts's executeQuery ordering: forced scope (corpus_id, then profile)
- * FIRST, then plan predicates (subject, key, scopeHash, recordedAtMost,
- * status IN (...), runIds IN (...)), then the optional tenantPredicate LAST.
- * ORDER BY recorded_seq ASC, id COLLATE "C" ASC to match SQLite's binary
- * (byte-order) `id ASC` collation.
+ * sqlite.ts's executeQuery ordering: `tenant_id` FIRST (always -- "" when not
+ * row-level), then forced scope (corpus_id, then profile), then plan
+ * predicates (subject, key, scopeHash, recordedAtMost, status IN (...),
+ * runIds IN (...)). ORDER BY recorded_seq ASC, id COLLATE "C" ASC to match
+ * SQLite's binary (byte-order) `id ASC` collation.
  */
 export function buildQuery(
   prefix: string,
   plan: ExecutionPlan,
-  force?: AdapterScope,
-  tenantPredicate?: { sql: string; params: unknown[] }
+  force: AdapterScope | undefined,
+  tenantId: string
 ): SqlText {
   const conditions: string[] = [];
   const params: unknown[] = [];
   let n = 0;
   const next = () => ++n;
+
+  conditions.push(`tenant_id = $${next()}`);
+  params.push(tenantId);
 
   if (force !== undefined) {
     conditions.push(`corpus_id = $${next()}`);
@@ -64,25 +67,24 @@ export function buildQuery(
     params.push(...plan.runIds);
   }
 
-  if (tenantPredicate !== undefined) {
-    // Renumber the caller-supplied placeholder(s) so they follow the
-    // preceding conditions' numbering (the caller writes `$N` as a
-    // placeholder marker since it doesn't know the final offset).
-    let sql = tenantPredicate.sql;
-    for (const _ of tenantPredicate.params) {
-      sql = sql.replace("$N", `$${next()}`);
-    }
-    conditions.push(sql);
-    params.push(...tenantPredicate.params);
-  }
-
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const text = `SELECT * FROM ${prefix}claims ${where} ORDER BY recorded_seq ASC, id COLLATE "C" ASC`.trim();
 
   return { text, params };
 }
 
-/** Claim upsert: on primary-key conflict, overwrite the row (mirrors SQLite's INSERT OR REPLACE). */
+/**
+ * Claim upsert: on primary-key conflict, overwrite the row (mirrors SQLite's INSERT OR REPLACE).
+ *
+ * TENANT-ISOLATION INVARIANT: the claims PK is `id` alone (not tenant-composite
+ * like idempotency/audit_anchors), so claims-table row-level isolation relies on
+ * claim ids being GLOBALLY UNIQUE across tenants. This holds because ids are
+ * `crypto.randomUUID()` (see core/ids.ts) — two tenants cannot mint the same id,
+ * so the `ON CONFLICT (id)` path is unreachable across tenants and the
+ * `tenant_id = EXCLUDED.tenant_id` reassignment never crosses a tenant boundary.
+ * If the id scheme ever changes to content-addressing (non-globally-unique),
+ * the claims PK must become tenant-composite `(tenant_id, id)`.
+ */
 export function insertClaimSql(prefix: string): string {
   return `
     INSERT INTO ${prefix}claims (
@@ -90,13 +92,13 @@ export function insertClaimSql(prefix: string): string {
       value_json, value_hash, conf_distribution, conf_params, conf_raw,
       conf_effective, valid_from, valid_to, recorded, recorded_seq,
       status, source, provenance_json, evidence_json, audience_json, tags_json, schema,
-      run_id, corpus_id
+      run_id, corpus_id, tenant_id
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7,
       $8, $9, $10, $11, $12,
       $13, $14, $15, $16, $17,
       $18, $19, $20, $21, $22, $23, $24,
-      $25, $26
+      $25, $26, $27
     )
     ON CONFLICT (id) DO UPDATE SET
       profile = EXCLUDED.profile,
@@ -123,13 +125,18 @@ export function insertClaimSql(prefix: string): string {
       tags_json = EXCLUDED.tags_json,
       schema = EXCLUDED.schema,
       run_id = EXCLUDED.run_id,
-      corpus_id = EXCLUDED.corpus_id
+      corpus_id = EXCLUDED.corpus_id,
+      tenant_id = EXCLUDED.tenant_id
   `.trim();
 }
 
-/** Head-of-chain lookup for hash-chain computation: most recent event's entry_hash for a corpus. */
+/**
+ * Head-of-chain lookup for hash-chain computation: most recent event's
+ * entry_hash for a (corpus, tenant). The `tenant_id` filter PARTITIONS the
+ * hash chain so two tenants sharing a corpus never fork a single chain.
+ */
 export function headHashSql(prefix: string): string {
-  return `SELECT entry_hash FROM ${prefix}claim_events WHERE corpus_id = $1 ORDER BY seq_pk DESC LIMIT 1`;
+  return `SELECT entry_hash FROM ${prefix}claim_events WHERE corpus_id = $1 AND tenant_id = $2 ORDER BY seq_pk DESC LIMIT 1`;
 }
 
 /** Append a claim event (hash-chain link) to the append-only event log. */
@@ -137,29 +144,29 @@ export function appendEventSql(prefix: string): string {
   return `
     INSERT INTO ${prefix}claim_events (
       op, corpus_id, writer, claim_id, deprecated_id, to_status, reason,
-      recorded, recorded_seq, entry_hash, prev_hash
+      recorded, recorded_seq, entry_hash, prev_hash, tenant_id
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7,
-      $8, $9, $10, $11
+      $8, $9, $10, $11, $12
     )
   `.trim();
 }
 
-/** Idempotency-record insert: first writer for (scope, key) wins; later writes are no-ops. */
+/** Idempotency-record insert: first writer for (scope, key, tenant) wins; later writes are no-ops. */
 export function putIdempotencySql(prefix: string): string {
   return `
-    INSERT INTO ${prefix}idempotency (scope, key, result, created_at)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (scope, key) DO NOTHING
+    INSERT INTO ${prefix}idempotency (scope, key, result, created_at, tenant_id)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (scope, key, tenant_id) DO NOTHING
   `.trim();
 }
 
-/** Anchored-Merkle-root upsert: re-anchoring the same (corpus_id, epoch_id) overwrites. */
+/** Anchored-Merkle-root upsert: re-anchoring the same (tenant_id, corpus_id, epoch_id) overwrites. */
 export function putAnchorSql(prefix: string): string {
   return `
-    INSERT INTO ${prefix}audit_anchors (corpus_id, epoch_id, root, signature, guarantee, at)
-    VALUES ($1, $2, $3, $4, $5, $6)
-    ON CONFLICT (corpus_id, epoch_id) DO UPDATE SET
+    INSERT INTO ${prefix}audit_anchors (corpus_id, epoch_id, root, signature, guarantee, at, tenant_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (tenant_id, corpus_id, epoch_id) DO UPDATE SET
       root = EXCLUDED.root,
       signature = EXCLUDED.signature,
       guarantee = EXCLUDED.guarantee,

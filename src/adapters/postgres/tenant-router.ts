@@ -1,13 +1,13 @@
 // The routing seam that resolves a tenantId to a scoped connection. Pure
 // routing -- migration is schema.ts's concern, not here.
 //
-// SCHEMA CAVEAT: the base `MIGRATIONS` in `./schema.js` mirror the SQLite
-// schema and DO NOT include a `tenant_id` column. So `rowLevelRouter`'s
-// `tenant_id` predicate targets a column a ROW-LEVEL DEPLOYMENT must add via
-// an augmented schema; the base public schema (as shipped by `MIGRATIONS`)
-// is used by the schema/db-per-tenant providers instead, which isolate by
-// routing (a distinct schema or a distinct pool/database), not by an
-// injected row predicate.
+// Row-level isolation works against the BASE schema: Migration v2 adds a
+// `tenant_id text NOT NULL DEFAULT ''` column to every table. `rowLevelRouter`
+// exposes the resolved tenant VALUE (`tenantId`); the adapter uniformly stamps
+// and filters `tenant_id` on every write/read. The schema/db-per-tenant
+// providers leave `tenantId` undefined -> the adapter uses "" -> behavior is
+// identical to a single-tenant deployment, while they isolate by routing (a
+// distinct schema or a distinct pool/database).
 import type { Pool, PoolClient } from "pg";
 
 export interface ResolvedConnection {
@@ -15,8 +15,11 @@ export interface ResolvedConnection {
   connect(): Promise<PoolClient>;
   /** "" | validated "tenant_acme." schema-qualified identifier prefix (NOT via SET search_path). */
   schemaPrefix: string;
-  /** Row-level isolation predicate only; absent for routing-based providers. */
-  tenantPredicate?: { sql: string; params: unknown[] };
+  /**
+   * The row-level tenant VALUE the adapter stamps/filters as `tenant_id`;
+   * absent for routing-based providers (adapter then uses "").
+   */
+  tenantId?: string;
 }
 
 export interface TenantRouter {
@@ -27,10 +30,9 @@ export interface TenantRouter {
 
 /**
  * Row-level isolation: every tenant shares the same pool/schema; isolation
- * is enforced by an injected `tenant_id = $` predicate that the caller (e.g.
- * sql.ts's `buildQuery`) renumbers into the final query. Requires the
- * consuming schema to actually have a `tenant_id` column -- the base
- * `MIGRATIONS` do not (see the file-header caveat).
+ * is enforced by the adapter uniformly stamping/filtering the resolved
+ * `tenantId` as the `tenant_id` column (added by Migration v2 to the base
+ * schema).
  */
 export function rowLevelRouter(pool: Pool): TenantRouter {
   return {
@@ -41,7 +43,7 @@ export function rowLevelRouter(pool: Pool): TenantRouter {
       return {
         connect: () => pool.connect(),
         schemaPrefix: "",
-        tenantPredicate: { sql: "tenant_id = $", params: [tenantId] },
+        tenantId,
       };
     },
     closeAll: () => pool.end(),
