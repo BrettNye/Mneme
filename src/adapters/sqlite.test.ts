@@ -996,6 +996,16 @@ it("creates idx_claims_corpus_key idempotently, covering key-only pushed queries
   const names = (raw.pragma("index_list(claims)") as Array<{ name: string }>).map(
     (r) => r.name
   );
-  raw.close();
   expect(names).toContain("idx_claims_corpus_key");
+
+  // Also confirm the column order (corpus_id, key) by proving the planner actually
+  // chooses this index as an index seek for a key-only pushed query — index_list()
+  // alone can't distinguish (corpus_id, key) from an accidental (key, corpus_id).
+  const plan = raw
+    .prepare(
+      "EXPLAIN QUERY PLAN SELECT * FROM claims WHERE corpus_id=? AND key=? AND status IN ('validated')"
+    )
+    .all("c", "k") as Array<{ detail: string }>;
+  raw.close();
+  expect(plan.map((p) => p.detail).join(" ")).toContain("idx_claims_corpus_key");
 });
