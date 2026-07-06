@@ -43,6 +43,17 @@ export function leaf(corpusId: string, hints?: LeafHints): Stage<void, Corpus> {
 }
 
 /**
+ * fromCorpus: starts a pipeline from an already-materialized corpus (spec §5,
+ * amendment A7). A physical seam, not an algebra operator — leaf() with the
+ * I/O already done. No new algebra semantics, so it needs no AST node and
+ * never appears in replay provenance. Returns the corpus by reference (no
+ * copy); downstream stages already treat inputs as immutable.
+ */
+export function fromCorpus(c: Corpus): Stage<void, Corpus> {
+  return () => c;
+}
+
+/**
  * liftOp: wraps a ctx-ignoring operator (σ, τ, δ, π, ρ, κ) into a Stage so it
  * can be included in a pipeline evaluated by evaluate().
  */
