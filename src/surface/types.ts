@@ -5,9 +5,10 @@ import type { Scope } from "../core/scope.js";
 import type { Interval } from "../core/time.js";
 import type { Corpus, RankedCorpus, ComposedContext } from "../algebra/types.js";
 import type { AggregateResult } from "../algebra/aggregation.js";
-import type { ContradictionPolicy } from "../catalog/corpus.js";
+import type { ContradictionPolicy, Corpus as CorpusDef } from "../catalog/corpus.js";
 import type { Mneme } from "../mneme.js";
 import type { EmbeddingState } from "./recall.js";
+import { validateKeyCardinality } from "../catalog/schema.js";
 
 /** Boilerplate-free write input; the session fills the rest of CandidateClaim. */
 export interface WriteRecord {
@@ -66,6 +67,57 @@ export interface CorpusSpec {
   /** Per-key cardinality declaration. Undeclared keys default to "single" (⊥-eligible).
    *  Persisted into ClaimSchema.keyCardinality; honored per-corpus by the read path. */
   keyCardinality?: Record<string, "single" | "multi">;
+}
+
+/** Pure CorpusSpec→CorpusDef expansion — the ONE home for corpus-shape defaults.
+ *  Throws on invalid scalarPseudocount overrides (finite, >= 0) and bad keyCardinality. */
+export function corpusDefFromSpec(spec: CorpusSpec): CorpusDef {
+  // Validate override values before merging (principles-audit finding 13):
+  // NaN/Infinity survive the undefined-strip but JSON.stringify persists them as
+  // null — a non-empty map the backfill can't repair, slipping pseudocountFor's
+  // `=== undefined` check; negatives survive round-trip and produce negative α/β.
+  // 0 is legal (trust-the-prior-only, well-defined in scalarToBeta).
+  for (const [src, v] of Object.entries(spec.scalarPseudocount ?? {})) {
+    if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
+      throw new Error(
+        `invalid scalarPseudocount for source "${src}": ${v} (must be a finite number >= 0)`
+      );
+    }
+  }
+  // Strip explicit-undefined entries BEFORE spreading: a naive spread copies
+  // `{ llm: undefined }` over the default (re-arming pseudocountFor's throw) and
+  // JSON.stringify then drops the key — persisting a 5-key NON-EMPTY map the
+  // load-time backfill predicate can never repair. (Spec audit finding 2.5.)
+  const pcOverrides = Object.fromEntries(
+    Object.entries(spec.scalarPseudocount ?? {}).filter(([, v]) => v !== undefined)
+  );
+  if (spec.keyCardinality) validateKeyCardinality(spec.keyCardinality);
+  const version = spec.schemaVersion ?? SURFACE_DEFAULTS.schemaVersion;
+  return {
+    id: spec.id,
+    displayName: spec.displayName ?? spec.id,
+    schema: {
+      version,
+      subjects: spec.subjects ?? [],
+      // CorpusSpec.scopeFields is Record<string, unknown>; ClaimSchema.scopeFields is
+      // Record<string, "string">. Cast via unknown to satisfy both: the surface layer
+      // only accepts valid string-typed scope field descriptors anyway.
+      scopeFields: (spec.scopeFields ?? {}) as Record<string, "string">,
+      required: [],
+      scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT, ...pcOverrides },
+      ...(spec.keyCardinality ? { keyCardinality: spec.keyCardinality } : {}),
+    },
+    defaults: {
+      decayPolicy: { kind: "none" },
+      confidenceThreshold: 0,
+      contradictionPolicy: spec.contradictionPolicy ?? { kind: "always_accept" },
+      defaultStatus: ["validated"],
+    },
+    requiredTiers: [{ kind: "core" }],
+    metadata: {},
+    createdAt: 0,
+    updatedAt: 0,
+  } as CorpusDef;
 }
 
 export interface SessionOptions {

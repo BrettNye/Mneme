@@ -4,7 +4,7 @@ import { scalarConfidence } from "../core/confidence.js";
 import { validateKeyCardinality } from "../catalog/schema.js";
 import { parseDsl, normalizeDsl } from "./dsl.js";
 import { loadCorpora, saveCorpora, ensureDir } from "./corpus-store.js";
-import { SURFACE_DEFAULTS, defaultConfidence, DEFAULT_SCALAR_PSEUDOCOUNT } from "./types.js";
+import { SURFACE_DEFAULTS, defaultConfidence, DEFAULT_SCALAR_PSEUDOCOUNT, corpusDefFromSpec } from "./types.js";
 import type {
   Session,
   SessionOptions,
@@ -76,54 +76,9 @@ export function openSession(opts: SessionOptions = {}): Session {
     mneme,
 
     createCorpus(spec: CorpusSpec): void {
-      // Validate override values before merging (principles-audit finding 13):
-      // NaN/Infinity survive the undefined-strip but JSON.stringify persists them as
-      // null — a non-empty map the backfill can't repair, slipping pseudocountFor's
-      // `=== undefined` check; negatives survive round-trip and produce negative α/β.
-      // 0 is legal (trust-the-prior-only, well-defined in scalarToBeta).
-      for (const [src, v] of Object.entries(spec.scalarPseudocount ?? {})) {
-        if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
-          throw new Error(
-            `invalid scalarPseudocount for source "${src}": ${v} (must be a finite number >= 0)`
-          );
-        }
-      }
-      // Strip explicit-undefined entries BEFORE spreading: a naive spread copies
-      // `{ llm: undefined }` over the default (re-arming pseudocountFor's throw) and
-      // JSON.stringify then drops the key — persisting a 5-key NON-EMPTY map the
-      // load-time backfill predicate can never repair. (Spec audit finding 2.5.)
-      const pcOverrides = Object.fromEntries(
-        Object.entries(spec.scalarPseudocount ?? {}).filter(([, v]) => v !== undefined)
-      );
-      if (spec.keyCardinality) validateKeyCardinality(spec.keyCardinality);
-      const version = spec.schemaVersion ?? SURFACE_DEFAULTS.schemaVersion;
-      const def: CorpusDef = {
-        id: spec.id,
-        displayName: spec.displayName ?? spec.id,
-        schema: {
-          version,
-          subjects: spec.subjects ?? [],
-          // CorpusSpec.scopeFields is Record<string, unknown>; ClaimSchema.scopeFields is
-          // Record<string, "string">. Cast via unknown to satisfy both: the surface layer
-          // only accepts valid string-typed scope field descriptors anyway.
-          scopeFields: (spec.scopeFields ?? {}) as Record<string, "string">,
-          required: [],
-          scalarPseudocount: { ...DEFAULT_SCALAR_PSEUDOCOUNT, ...pcOverrides },
-          ...(spec.keyCardinality ? { keyCardinality: spec.keyCardinality } : {}),
-        },
-        defaults: {
-          decayPolicy: { kind: "none" },
-          confidenceThreshold: 0,
-          contradictionPolicy: spec.contradictionPolicy ?? { kind: "always_accept" },
-          defaultStatus: ["validated"],
-        },
-        requiredTiers: [{ kind: "core" }],
-        metadata: {},
-        createdAt: 0,
-        updatedAt: 0,
-      };
+      const def = corpusDefFromSpec(spec);
       mneme.createCorpus(def);
-      versionOf.set(spec.id, version);
+      versionOf.set(spec.id, def.schema.version);
       saveCorpora(dbPath, mneme.listCorpora());
     },
 
