@@ -19,6 +19,8 @@ export type { Corpus as CorpusDef, DecayPolicy, ContradictionPolicy, CorpusDefau
 export type { ClaimSchema } from "./catalog/schema.js";
 export type { TierRequirement } from "./catalog/tiers.js";
 export type { Predicate } from "./algebra/predicate.js";
+export type { LeafHints } from "./algebra/pushdown.js";
+export { leafHintsOf } from "./algebra/pushdown.js";
 export type { ComposedContext, RankedCorpus, Corpus } from "./algebra/types.js";
 export type { EvalContext, Stage } from "./algebra/expression.js";
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Predicate } from "./predicate.js";
 import { leafHintsOf } from "./pushdown.js";
+import { leafHintsOf as leafHintsOfBarrel, type LeafHints } from "../index.js";
 
 describe("leafHintsOf", () => {
   it("subjectEq folds into subject", () => {
@@ -104,5 +105,10 @@ describe("leafHintsOf", () => {
 
   it("valueEq (a value predicate) contributes nothing", () => {
     expect(leafHintsOf([{ op: "valueEq", path: "$", value: "x" }])).toEqual({});
+  });
+
+  it("is importable via the root barrel (../index.js)", () => {
+    const hints: LeafHints = leafHintsOfBarrel([{ op: "subjectEq", value: "s" }]);
+    expect(hints).toEqual({ subject: "s" });
   });
 });
