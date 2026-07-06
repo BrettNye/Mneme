@@ -7,6 +7,7 @@ import { now as nowClock, type Instant } from "../core/time.js";
 import { routeValuePredicates, type QueryWarning } from "./value-routing.js";
 import type { Predicate } from "./predicate.js";
 import type { Value } from "../core/value.js";
+import type { LeafHints } from "./pushdown.js";
 
 // Mirrors mneme.ts's DEFAULT_FALLBACK_WARN_THRESHOLD (kept local to avoid an algebra->barrel import cycle).
 const DEFAULT_FALLBACK_WARN_THRESHOLD = 10_000;
@@ -75,13 +76,15 @@ export async function evaluateAsync<O>(
 // ---------------------------------------------------------------------------
 
 /**
- * leafAsync(corpusId): validates corpus existence in the catalog (sync, same
- * as the sync leaf), then awaits claims from the adapter. Ignores its input.
+ * leafAsync(corpusId, hints?): validates corpus existence in the catalog (sync,
+ * same as the sync leaf), then awaits claims from the adapter. Ignores its
+ * input. Optional LeafHints (subject/key/keys) are spread into the adapter
+ * plan as-is, identical to the sync leaf.
  */
-export function leafAsync(corpusId: string): AsyncStage<void, Corpus> {
+export function leafAsync(corpusId: string, hints?: LeafHints): AsyncStage<void, Corpus> {
   return async (_input, ctx) => {
     ctx.catalog.getCorpus(corpusId); // throws for unknown corpus
-    return corpusOf(await ctx.adapter.query({ corpusId }));
+    return corpusOf(await ctx.adapter.query({ corpusId, ...hints }));
   };
 }
 

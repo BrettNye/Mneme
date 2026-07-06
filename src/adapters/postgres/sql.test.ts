@@ -79,6 +79,25 @@ describe("buildQuery", () => {
     expect(text).not.toContain("run_id IN");
     expect(params).toEqual([""]);
   });
+
+  it("compiles keys as key IN (...) positioned after key and before scope_hash", () => {
+    const { text, params } = buildQuery(
+      "",
+      { corpusId: "c", key: "k0", keys: ["k1", "k2"], scopeHash: "h" },
+      undefined,
+      "t"
+    );
+    expect(text).toMatch(/key = \$\d+ AND key IN \(\$\d+, \$\d+\) AND scope_hash = \$\d+/);
+    expect(params).toEqual(["t", "k0", "k1", "k2", "h"]); // tenant_id is always $1
+  });
+
+  it("emits no keys condition when keys is an empty array (identical SQL to plan without keys)", () => {
+    const withEmptyKeys = buildQuery("", { corpusId: "c", key: "k0", keys: [], scopeHash: "h" }, undefined, "t");
+    const withoutKeys = buildQuery("", { corpusId: "c", key: "k0", scopeHash: "h" }, undefined, "t");
+    expect(withEmptyKeys.text).toBe(withoutKeys.text);
+    expect(withEmptyKeys.text).not.toContain("key IN");
+    expect(withEmptyKeys.params).toEqual(withoutKeys.params);
+  });
 });
 
 describe("insertClaimSql", () => {

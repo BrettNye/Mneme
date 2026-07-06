@@ -122,6 +122,12 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE ${p}audit_anchors ADD CONSTRAINT audit_anchors_pkey PRIMARY KEY (tenant_id, corpus_id, epoch_id);
     `,
   },
+  {
+    version: 3,
+    up: (p) => `
+      CREATE INDEX IF NOT EXISTS idx_claims_tenant_corpus_key ON ${p}claims(tenant_id, corpus_id, key);
+    `,
+  },
 ];
 
 // Fixed, constant key for the session advisory lock. All booting instances take

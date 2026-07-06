@@ -1185,3 +1185,49 @@ describe("mneme MCP server (inspect wiring)", () => {
     await client.close();
   });
 });
+
+// ── subject/key-scoped recall pushdown pin (§8.4) ───────────────────────────────
+// Guards the wired path server → surface → hinted leaf → adapter: a scoped recall
+// must serve exactly the subject+key-scoped survivor, never leak other-subject claims,
+// and coverage/warnings behavior over the sigma-scoped set must be unchanged.
+
+describe("mneme MCP server (scoped recall pushdown pin)", () => {
+  it("scoped recall serves identical structuredContent after pushdown", async () => {
+    const { client } = await connected();
+
+    await client.callTool({ name: "remember", arguments: { subject: "project:a", key: "status", value: "green" } });
+    await client.callTool({ name: "remember", arguments: { subject: "project:b", key: "status", value: "red" } });
+    await client.callTool({ name: "remember", arguments: { subject: "project:b", key: "owner", value: "kim" } });
+
+    const res = (await client.callTool({
+      name: "recall",
+      arguments: { about: "status", subject: "project:a", key: "status" },
+    })) as StructuredRecall;
+
+    expect(res.structuredContent?.matches).toEqual([
+      expect.objectContaining({ subject: "project:a", key: "status", value: "green" }),
+    ]);
+
+    await client.close();
+  });
+
+  it("scoped recall still reports coverage over the sigma-scoped survivors", async () => {
+    const { client } = await connected();
+
+    await client.callTool({ name: "remember", arguments: { subject: "project:a", key: "status", value: "green" } });
+    // "Kim" is a capitalized entity token present only on project:b's claim — the
+    // coverage check must still flag it as missing when the recall is scoped to
+    // project:a, proving coverage runs over the sigma-scoped survivors (not the
+    // whole corpus), unchanged by the pushdown.
+    await client.callTool({ name: "remember", arguments: { subject: "project:b", key: "owner", value: "Kim" } });
+
+    const res = (await client.callTool({
+      name: "recall",
+      arguments: { about: "Kim", subject: "project:a" },
+    })) as StructuredRecall;
+
+    expect(res.structuredContent?.warnings?.join(" ")).toContain("no claim available");
+
+    await client.close();
+  });
+});

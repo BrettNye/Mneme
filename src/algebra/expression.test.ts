@@ -1,10 +1,12 @@
-import { leaf, evaluate, pipe, liftOp, gammaStage } from "./expression.js";
+import { leaf, evaluate, pipe, liftOp, gammaStage, fromCorpus } from "./expression.js";
 import { type EvalContext } from "./expression.js";
 import { sigma } from "./selection.js";
 import { delta } from "./decay.js";
 import { rho } from "./similarity.js";
 import { kappa } from "./composition.js";
-import type { ComposedContext, RankedCorpus } from "./types.js";
+import type { ComposedContext, RankedCorpus, Corpus } from "./types.js";
+import { corpusOf } from "./types.js";
+import { evaluateAsync, type AsyncEvalContext, type AsyncStage } from "./async-expression.js";
 
 // Minimal fake claim matching the Claim interface
 const makeClaim = (subject: string, value: string) =>
@@ -84,6 +86,30 @@ it("leaf passes corpusId to adapter.query", () => {
   };
   evaluate([leaf("test:corpus")], ctx);
   expect(plans[0]).toMatchObject({ corpusId: "test:corpus" });
+});
+
+it("leaf passes hints into the adapter plan; no-hints call passes corpusId only", () => {
+  const plans: any[] = [];
+  const ctx = {
+    adapter: { query: (plan: any) => { plans.push(plan); return []; } } as any,
+    catalog: { getCorpus: () => ({}) } as any,
+  };
+  evaluate([leaf("c", { subject: "s", keys: ["k1", "k2"] })], ctx);
+  evaluate([leaf("c")], ctx);
+  expect(plans[0]).toEqual({ corpusId: "c", subject: "s", keys: ["k1", "k2"] });
+  expect(plans[1]).toEqual({ corpusId: "c" });
+});
+
+it("leaf throws when catalog.getCorpus throws (unknown corpus), even with hints supplied", () => {
+  const ctx = {
+    adapter: { query: () => [] } as any,
+    catalog: {
+      getCorpus: () => {
+        throw new Error('unknown corpus "bad:id"');
+      },
+    } as any,
+  };
+  expect(() => evaluate([leaf("bad:id", { subject: "s" })], ctx)).toThrow("unknown corpus");
 });
 
 // ---------- pipe helper ----------
@@ -202,4 +228,61 @@ it("evaluate threads stages in declaration order", () => {
 
   evaluate(pipe(leaf("x"), s1, s2, s3), ctx);
   expect(order).toEqual([1, 2, 3]);
+});
+
+// ---------- fromCorpus ----------
+
+it("fromCorpus starts a pipeline from the given corpus without touching the adapter", () => {
+  const queries: unknown[] = [];
+  const catalog = { getCorpus: () => ({}) } as any;
+  const adapter = { query: (p: unknown) => { queries.push(p); return []; } } as any;
+  const ctx = { adapter, catalog } as EvalContext;
+  const c = corpusOf([makeClaim("s", "v")]);
+  const out = evaluate<any>(
+    pipe(fromCorpus(c), liftOp(sigma({ op: "subjectEq", value: "s" }))),
+    ctx
+  );
+  expect(out.claims).toHaveLength(1);
+  expect(queries).toHaveLength(0);
+});
+
+it("fromCorpus produces the same result as running stages over the corpus directly", () => {
+  const catalog = { getCorpus: () => ({}) } as any;
+  const adapter = { query: () => [] } as any;
+  const ctx = { adapter, catalog } as EvalContext;
+  const c = corpusOf([makeClaim("s", "v"), makeClaim("other", "x")]);
+  const viaFromCorpus = evaluate<any>(
+    pipe(fromCorpus(c), liftOp(sigma({ op: "subjectEq", value: "s" }))),
+    ctx
+  );
+  const direct = sigma({ op: "subjectEq", value: "s" })(c);
+  expect(viaFromCorpus).toEqual(direct);
+});
+
+it("fromCorpus returns the corpus by reference, not a copy", () => {
+  const catalog = { getCorpus: () => ({}) } as any;
+  const adapter = { query: () => [] } as any;
+  const ctx = { adapter, catalog } as EvalContext;
+  const c = corpusOf([makeClaim("s", "v")]);
+  const out = evaluate<Corpus>(pipe(fromCorpus(c)), ctx);
+  expect(out).toBe(c);
+});
+
+it("fromCorpus works in an evaluateAsync pipeline", async () => {
+  const queries: unknown[] = [];
+  const catalog = { getCorpus: () => ({}) } as any;
+  const adapter = { query: (p: unknown) => { queries.push(p); return Promise.resolve([]); } } as any;
+  const ctx = { adapter, catalog } as AsyncEvalContext;
+  const c = corpusOf([makeClaim("s", "v")]);
+  // Cast is safe here ONLY because fromCorpus and liftOp-wrapped ops ignore
+  // their `ctx` argument entirely — see fromCorpus's JSDoc "Async-pipeline
+  // note" in expression.ts. Never copy this cast to smuggle ctx-aware stages
+  // (leaf, gammaStage) into an async pipeline; they read ctx.adapter/
+  // ctx.catalog and require their dedicated *Async twins instead.
+  const out = await evaluateAsync<any>(
+    [fromCorpus(c), liftOp(sigma({ op: "subjectEq", value: "s" }))] as unknown as AsyncStage<any, any>[],
+    ctx
+  );
+  expect(out.claims).toHaveLength(1);
+  expect(queries).toHaveLength(0);
 });

@@ -3,10 +3,12 @@ import { openSession } from "./session.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { recall } from "./recall.js";
+import { recall, buildFilterPlan } from "./recall.js";
 import { remember, listCorpora, ensureCorpus } from "./remember.js";
-import { freshSession, jaccardDeps, makeFakeHybridDeps } from "./test-support.js";
+import { freshSession, jaccardDeps, makeFakeHybridDeps, makeSpySession } from "./test-support.js";
 import { _resetEmbeddingsForTest } from "./embeddings.js";
+import { KEY_ALIAS_KEY } from "../retrieval/key-alias.js";
+import type { Session } from "./types.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -411,19 +413,14 @@ describe("recall — alias-aware key matching", () => {
     expect(allEmbedded).toContain("vim");
     expect(allEmbedded).toContain("emacs");
 
-    // 2. Every warm-up read must carry an explicit key filter (no unfiltered read).
-    //    Alias reads use key === "alias-of"; exclude those. The remaining reads are
-    //    warm-up reads. Each must carry an explicit key value, and together they must
-    //    cover every family member ("editor" and "preferred_editor").
+    // 2. Warm-up collapses to ONE read carrying `keys: family` (amendment A9) —
+    //    not one read per family member. Alias reads use key === "alias-of"; exclude those.
     const warmupReadOpts = readSpy.mock.calls
-      .map(([, opts]) => opts as { key?: string; corpusId: string })
+      .map(([, opts]) => opts as { key?: string; keys?: string[]; corpusId: string })
       .filter((opts) => opts.key !== "alias-of");
-    const warmupReadKeys = warmupReadOpts.map((opts) => opts.key);
-    // Every warm-up read must have an explicit key (not undefined — no unfiltered read).
-    expect(warmupReadKeys.every((k) => k !== undefined)).toBe(true);
-    // There must be one read per family member — "editor" and "preferred_editor".
-    expect(warmupReadKeys).toContain("editor");
-    expect(warmupReadKeys).toContain("preferred_editor");
+    expect(warmupReadOpts.length).toBe(1);
+    expect(warmupReadOpts[0].keys).toEqual(expect.arrayContaining(["editor", "preferred_editor"]));
+    expect(warmupReadOpts[0].keys?.length).toBe(2);
   });
 });
 
@@ -586,5 +583,135 @@ describe("recall recency", () => {
     await expect(
       recall(s, { about: "v", corpus, asOf: "not-a-date" }, jaccardDeps),
     ).rejects.toThrow(/asOf/);
+  });
+});
+
+// ── buildFilterPlan / leaf hint pushdown (task-recall-callsites, spec §4 A1) ──
+
+describe("buildFilterPlan — the sealed σ+hint pair", () => {
+  it("subject only → hints = { subject }", () => {
+    const plan = buildFilterPlan({ about: "x", corpus: "c", subject: "a" });
+    expect(plan.hints).toEqual({ subject: "a" });
+    expect(plan.sigmas.length).toBe(1);
+  });
+
+  it("key only (no family) → hints = { key }", () => {
+    const plan = buildFilterPlan({ about: "x", corpus: "c", key: "k" });
+    expect(plan.hints).toEqual({ key: "k" });
+    expect(plan.sigmas.length).toBe(1);
+  });
+
+  it("subject+key → hints = { subject, key }", () => {
+    const plan = buildFilterPlan({ about: "x", corpus: "c", subject: "a", key: "k" });
+    expect(plan.hints).toEqual({ subject: "a", key: "k" });
+    expect(plan.sigmas.length).toBe(2);
+  });
+
+  it("subject+family (>1 keys) → hints = { subject, keys: family }", () => {
+    const plan = buildFilterPlan({ about: "x", corpus: "c", subject: "a", key: "k" }, ["k", "k2"]);
+    expect(plan.hints).toEqual({ subject: "a", keys: ["k", "k2"] });
+    expect(plan.sigmas.length).toBe(2);
+  });
+});
+
+describe("recall — leaf hint pushdown", () => {
+  const CORPUS = "hint-pushdown";
+
+  function seedClaims(
+    s: Session,
+    entries: { subject: string; key: string; value?: string }[],
+    corpus = CORPUS,
+  ): void {
+    for (const e of entries) {
+      remember(s, { subject: e.subject, key: e.key, value: e.value ?? `${e.subject}-${e.key}`, corpus });
+    }
+  }
+
+  it("scoped recall serves identical results while hydrating only matching rows", async () => {
+    const { session, plansSeen } = makeSpySession();
+    seedClaims(session, [
+      { subject: "a", key: "k" },
+      { subject: "b", key: "k" },
+      { subject: "b", key: "x" },
+    ]);
+    // Only inspect plans issued BY recall() itself — writes (via remember()'s
+    // supersessionOutcome attribution) issue their own unrelated {corpusId}-only reads.
+    const before = plansSeen.length;
+    const res = await recall(
+      session,
+      { about: "k", corpus: CORPUS, subject: "a", key: "k" },
+      jaccardDeps,
+    );
+    const recallPlans = plansSeen.slice(before);
+    expect(res.matches.map((m) => m.subject)).toEqual(["a"]);
+    // Every plan except the alias-key read carries the subject/key scope.
+    expect(
+      recallPlans
+        .filter((p) => p.key !== KEY_ALIAS_KEY)
+        .every((p) => p.subject === "a" && p.key === "k"),
+    ).toBe(true);
+    // No plan is corpusId-only (i.e. the hint was actually threaded to leaf()).
+    expect(
+      recallPlans
+        .filter((p) => p.key !== KEY_ALIAS_KEY)
+        .every((p) => p.subject !== undefined || p.key !== undefined || p.keys !== undefined),
+    ).toBe(true);
+  });
+
+  it("hints-off transformPlan strips scoping — differential arm still serves correct results", async () => {
+    const { session } = makeSpySession({ transformPlan: (p) => ({ corpusId: p.corpusId }) });
+    seedClaims(session, [
+      { subject: "a", key: "k" },
+      { subject: "b", key: "k" },
+    ]);
+    const res = await recall(
+      session,
+      { about: "k", corpus: CORPUS, subject: "a", key: "k" },
+      jaccardDeps,
+    );
+    // σ re-filters in memory regardless of the (stripped) adapter hint — same result.
+    expect(res.matches.map((m) => m.subject)).toEqual(["a"]);
+  });
+
+  it("recall issues exactly ONE non-alias adapter query after the shared-prefix restructure (was 2)", async () => {
+    const { session, plansSeen } = makeSpySession();
+    seedClaims(session, [
+      { subject: "s0", key: "k0" },
+      { subject: "s1", key: "k0" },
+    ]);
+    const before = plansSeen.length;
+    await recall(session, { about: "q", corpus: CORPUS, subject: "s0", key: "k0" }, jaccardDeps);
+    const recallPlans = plansSeen.slice(before).filter((p) => p.key !== KEY_ALIAS_KEY);
+    expect(recallPlans).toHaveLength(1);
+  });
+
+  it("warmRecallValues issues exactly ONE read for an N-key family, carrying keys: family", async () => {
+    const { session } = makeSpySession();
+    const corpus = "warm-family-hint";
+    remember(session, {
+      subject: "user:x", key: "editor", value: "vim", corpus,
+      validFrom: "2026-01-01T00:00:00Z",
+    });
+    remember(session, {
+      subject: "user:x", key: "preferred_editor", value: "emacs", corpus,
+      validFrom: "2026-03-01T00:00:00Z",
+    });
+    remember(session, { subject: "key:editor", key: KEY_ALIAS_KEY, value: "preferred_editor", corpus });
+
+    const deps = await makeFakeHybridDeps();
+    const readSpy = vi.spyOn(session.mneme, "read");
+    try {
+      await recall(session, { about: "editor", key: "editor", corpus }, deps);
+    } catch (_) {
+      // stale-closure scoring may throw (see test-support.ts note); warm-up spy data
+      // is captured before scoring regardless.
+    }
+
+    const warmupReadCalls = readSpy.mock.calls
+      .map(([, opts]) => opts as { key?: string; keys?: string[] })
+      .filter((opts) => opts.key !== KEY_ALIAS_KEY);
+    expect(warmupReadCalls.length).toBe(1);
+    expect(warmupReadCalls[0].keys).toEqual(expect.arrayContaining(["editor", "preferred_editor"]));
+    expect(warmupReadCalls[0].keys?.length).toBe(2);
   });
 });

@@ -13,8 +13,8 @@ export interface SqlText {
  * Build a parameterized SELECT against `${prefix}claims` matching
  * sqlite.ts's executeQuery ordering: `tenant_id` FIRST (always -- "" when not
  * row-level), then forced scope (corpus_id, then profile), then plan
- * predicates (subject, key, scopeHash, recordedAtMost, status IN (...),
- * runIds IN (...)). ORDER BY recorded_seq ASC, id COLLATE "C" ASC to match
+ * predicates (subject, key, keys IN (...), scopeHash, recordedAtMost,
+ * status IN (...), runIds IN (...)). ORDER BY recorded_seq ASC, id COLLATE "C" ASC to match
  * SQLite's binary (byte-order) `id ASC` collation.
  */
 export function buildQuery(
@@ -47,6 +47,11 @@ export function buildQuery(
   if (plan.key !== undefined) {
     conditions.push(`key = $${next()}`);
     params.push(plan.key);
+  }
+  if (plan.keys !== undefined && plan.keys.length > 0) {
+    const placeholders = plan.keys.map(() => `$${next()}`).join(", ");
+    conditions.push(`key IN (${placeholders})`);
+    params.push(...plan.keys);
   }
   if (plan.scopeHash !== undefined) {
     conditions.push(`scope_hash = $${next()}`);

@@ -382,6 +382,60 @@ it("query filters by multiple runIds (IN set)", () => {
   expect(results.map((r) => r.provenance.runId).sort()).toEqual(["r1", "r3"]);
 });
 
+// --- keys filter tests ---
+
+it("query({keys}) returns exactly the claims whose key is in the set, in recorded_seq order", () => {
+  const a = createSqliteAdapter();
+  ["k1", "k2", "k3"].forEach((key, i) =>
+    a.insertClaim(makeValidatedClaim({ subject: "s", key, recordedSeq: i + 1 }))
+  );
+  const rows = a.query({ corpusId: "c1", keys: ["k1", "k3"] });
+  expect(rows.map((r) => r.key)).toEqual(["k1", "k3"]);
+});
+
+it("query({keys: []}) returns the same rows as query({}) (empty array = no condition)", () => {
+  const a = createSqliteAdapter();
+  ["k1", "k2", "k3"].forEach((key, i) =>
+    a.insertClaim(makeValidatedClaim({ subject: "s", key, recordedSeq: i + 1 }))
+  );
+  const withEmptyKeys = a.query({ corpusId: "c1", keys: [] });
+  const withoutKeys = a.query({ corpusId: "c1" });
+  expect(withEmptyKeys.map((r) => r.id)).toEqual(withoutKeys.map((r) => r.id));
+  expect(withEmptyKeys).toHaveLength(3);
+});
+
+it("query({key, keys}) ANDs both together (key + keys narrows to key alone when key is in keys)", () => {
+  const a = createSqliteAdapter();
+  ["k1", "k2", "k3"].forEach((key, i) =>
+    a.insertClaim(makeValidatedClaim({ subject: "s", key, recordedSeq: i + 1 }))
+  );
+  const results = a.query({ corpusId: "c1", key: "k1", keys: ["k1", "k2"] });
+  expect(results.map((r) => r.key)).toEqual(["k1"]);
+});
+
+it("query({subject, keys}) composes subject and keys filters", () => {
+  const a = createSqliteAdapter();
+  a.insertClaim(makeValidatedClaim({ subject: "repo", key: "k1", recordedSeq: 1 }));
+  a.insertClaim(makeValidatedClaim({ subject: "repo", key: "k2", recordedSeq: 2 }));
+  a.insertClaim(makeValidatedClaim({ subject: "ci", key: "k1", recordedSeq: 3 }));
+  const results = a.query({ corpusId: "c1", subject: "repo", keys: ["k1"] });
+  expect(results).toHaveLength(1);
+  expect(results[0].subject).toBe("repo");
+  expect(results[0].key).toBe("k1");
+});
+
+it("scoped adapter with keys never returns another corpus's claims", () => {
+  const a = createSqliteAdapter();
+  a.scoped!({ corpus: "A" }).insertClaim(
+    makeValidatedClaim({ key: "k1", recordedSeq: 1 })
+  );
+  a.scoped!({ corpus: "B" }).insertClaim(
+    makeValidatedClaim({ key: "k1", recordedSeq: 2 })
+  );
+  const results = a.scoped!({ corpus: "A" }).query({ keys: ["k1"] } as any);
+  expect(results).toHaveLength(1);
+});
+
 // --- New write-primitives tests ---
 
 it("maxRecordedSeq returns 0 on empty db", () => {
@@ -925,4 +979,33 @@ it("migration adds entry_hash/prev_hash columns and audit_anchors table to a pre
   // Should be able to use anchor store
   adapter!.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
   expect(adapter!.getAnchoredRoots!("c1")).toHaveLength(1);
+});
+
+// --- Key-only pushed-query covering index (task-key-indexes) ---
+
+it("creates idx_claims_corpus_key idempotently, covering key-only pushed queries", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mneme-idx-"));
+  const dbPath = join(dir, "s.db");
+
+  // First open: creates the schema + index.
+  createSqliteAdapter(dbPath).close!();
+  // Second open on the same file must not throw (idempotent CREATE INDEX IF NOT EXISTS).
+  expect(() => createSqliteAdapter(dbPath).close!()).not.toThrow();
+
+  const raw = new Database(dbPath, { readonly: true });
+  const names = (raw.pragma("index_list(claims)") as Array<{ name: string }>).map(
+    (r) => r.name
+  );
+  expect(names).toContain("idx_claims_corpus_key");
+
+  // Also confirm the column order (corpus_id, key) by proving the planner actually
+  // chooses this index as an index seek for a key-only pushed query — index_list()
+  // alone can't distinguish (corpus_id, key) from an accidental (key, corpus_id).
+  const plan = raw
+    .prepare(
+      "EXPLAIN QUERY PLAN SELECT * FROM claims WHERE corpus_id=? AND key=? AND status IN ('validated')"
+    )
+    .all("c", "k") as Array<{ detail: string }>;
+  raw.close();
+  expect(plan.map((p) => p.detail).join(" ")).toContain("idx_claims_corpus_key");
 });

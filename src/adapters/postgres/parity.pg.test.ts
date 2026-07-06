@@ -300,6 +300,30 @@ describe("cross-backend parity: sync-SQLite vs async-Postgres", () => {
     expect(pgOrder).toEqual(sqOrder);
   }, 60_000);
 
+  it("sqlite and pg return identical results for a keys plan (+ subject)", async () => {
+    // Same shape as the COLLATE "C" test above: fixed ids + scoped handles, so
+    // full deep-equality is well-defined (mneme-minted ids would differ per
+    // backend and break a byte-comparison).
+    const corpus = "parity:keys";
+    const subject = sampleClaim({}).subject;
+
+    const sqScoped = createSqliteAdapter().scoped!({ corpus });
+    const pgScoped = makePgAdapter().scoped!({ corpus });
+
+    for (const [i, key] of ["k1", "k2", "k3"].entries()) {
+      const claim = sampleClaim({ id: `parity-keys-${i}` as ClaimId, key, recordedSeq: i + 1 });
+      sqScoped.insertClaim(claim);
+      await pgScoped.insertClaim(claim);
+    }
+
+    const plan = { corpusId: corpus, subject, keys: ["k1", "k3"] };
+    const sqRows = sqScoped.query(plan);
+    const pgRows = await pgScoped.query(plan);
+
+    expect(pgRows).toEqual(sqRows);
+    expect(pgRows.map((c) => c.key)).toEqual(["k1", "k3"]);
+  }, 60_000);
+
   it("text round-trip: float / >2^53 int / unicode+duplicate-ish keys survive byte-exactly", async () => {
     // A jsonb column would re-canonicalize numbers and key order; the pg adapter
     // stores values in a `text` column so the exact JSON round-trips.
