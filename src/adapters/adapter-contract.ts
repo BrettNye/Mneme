@@ -173,5 +173,91 @@ export function runAsyncAdapterContract(
       await adapter.transaction(corpusId, () => adapter.insertClaim(lower));
       expect(await adapter.maxRecordedSeq(corpusId)).toBe(baseline + 10);
     });
+
+    it("keys plan equals the in-memory keyIn filter for non-empty keys, order preserved", async () => {
+      const adapter = await make();
+      const subject = "project:contract-keys";
+      await adapter.transaction("t-keys", async () => {
+        for (const [i, key] of ["k1", "k2", "k3"].entries()) {
+          await adapter.insertClaim(fixtureClaim({ subject, key, recordedSeq: i + 1 }));
+        }
+      });
+
+      const all = await adapter.query({ corpusId: "unused-by-scoped-adapters", subject });
+      const filtered = await adapter.query({
+        corpusId: "unused-by-scoped-adapters",
+        subject,
+        keys: ["k1", "k3"],
+      });
+      expect(filtered).toEqual(all.filter((c) => ["k1", "k3"].includes(c.key)));
+    });
+
+    it("keys: [] equals the unfiltered query (plan-level empty array is NOT keyIn-equivalent)", async () => {
+      const adapter = await make();
+      const subject = "project:contract-keys-empty";
+      await adapter.transaction("t-keys-empty", async () => {
+        for (const [i, key] of ["k1", "k2"].entries()) {
+          await adapter.insertClaim(fixtureClaim({ subject, key, recordedSeq: i + 1 }));
+        }
+      });
+
+      const all = await adapter.query({ corpusId: "unused-by-scoped-adapters", subject });
+      const emptyKeys = await adapter.query({
+        corpusId: "unused-by-scoped-adapters",
+        subject,
+        keys: [],
+      });
+      expect(emptyKeys).toEqual(all);
+    });
+
+    it("keys composes (ANDs) with subject and with key", async () => {
+      const adapter = await make();
+      const subjectA = "project:contract-keys-and-a";
+      const subjectB = "project:contract-keys-and-b";
+      await adapter.transaction("t-keys-and", async () => {
+        await adapter.insertClaim(fixtureClaim({ subject: subjectA, key: "k1", recordedSeq: 1 }));
+        await adapter.insertClaim(fixtureClaim({ subject: subjectA, key: "k2", recordedSeq: 2 }));
+        await adapter.insertClaim(fixtureClaim({ subject: subjectB, key: "k1", recordedSeq: 3 }));
+      });
+
+      // keys ANDs with subject: subject alone would also match subjectA/k2, but
+      // keys=["k1"] narrows it away -- a real (discriminating) AND, not a subset
+      // that subject-alone would already produce.
+      const bySubjectAndKeys = await adapter.query({
+        corpusId: "unused-by-scoped-adapters",
+        subject: subjectA,
+        keys: ["k1"],
+      });
+      expect(bySubjectAndKeys.map((c) => `${c.subject}/${c.key}`)).toEqual([`${subjectA}/k1`]);
+
+      // keys ANDs with key: key="k1" plus a DISJOINT keys=["k2","k3"] must match
+      // NOTHING -- if `keys` were silently ignored, key="k1" alone would still
+      // return rows, so this discriminates a broken/ignored `keys` branch.
+      const byKeyAndDisjointKeys = await adapter.query({
+        corpusId: "unused-by-scoped-adapters",
+        key: "k1",
+        keys: ["k2", "k3"],
+      });
+      expect(byKeyAndDisjointKeys).toEqual([]);
+    });
+
+    it("a keys query through corpus A's scope never returns corpus B's claims", async () => {
+      const adapterA = await make();
+      const adapterB = await make();
+      const subject = "project:contract-keys-scope";
+
+      const claimA = fixtureClaim({ subject, key: "shared-key" });
+      const claimB = fixtureClaim({ subject, key: "shared-key" });
+      await adapterA.transaction("t-keys-scope-a", () => adapterA.insertClaim(claimA));
+      await adapterB.transaction("t-keys-scope-b", () => adapterB.insertClaim(claimB));
+
+      const rowsA = await adapterA.query({
+        corpusId: "unused-by-scoped-adapters",
+        subject,
+        keys: ["shared-key"],
+      });
+      expect(rowsA.map((c) => c.id)).toEqual([claimA.id]);
+      expect(rowsA.some((c) => c.id === claimB.id)).toBe(false);
+    });
   });
 }
