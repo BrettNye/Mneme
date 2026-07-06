@@ -1,12 +1,11 @@
 // Docker-only (gated by the `.pg.test.ts` suffix -> `npm run test:pg`).
 //
-// The rowLevel-isolation test proves the injected `tenantPredicate` actually
-// isolates rows end-to-end against a real Postgres, using an AD-HOC table
-// (`t_iso`) because the base `MIGRATIONS` claims schema has no `tenant_id`
-// column -- see the caveat documented at the top of tenant-router.ts.
+// rowLevelRouter now exposes the resolved tenant VALUE (`tenantId`); the
+// adapter stamps/filters it as the base schema's `tenant_id` column (added by
+// Migration v2). End-to-end row-level isolation against the REAL tables is
+// proven in row-level.pg.test.ts -- these are the pure routing-contract tests.
 import { describe, it, expect, vi } from "vitest";
 import { Pool } from "pg";
-import { startPg } from "./test-support.js";
 import {
   rowLevelRouter,
   schemaPerTenantRouter,
@@ -14,43 +13,14 @@ import {
 } from "./tenant-router.js";
 
 describe("rowLevelRouter", () => {
-  it("isolates rows end-to-end via the injected tenantPredicate", async () => {
-    const { pool, stop } = await startPg();
-    try {
-      const setup = await pool.connect();
-      try {
-        await setup.query("CREATE TABLE t_iso (tenant_id text, v text)");
-        await setup.query(
-          "INSERT INTO t_iso (tenant_id, v) VALUES ($1, $2), ($3, $4), ($5, $6)",
-          ["A", "a1", "A", "a2", "B", "b1"]
-        );
-      } finally {
-        setup.release();
-      }
-
-      const router = rowLevelRouter(pool);
-      const resolved = router.resolve("B");
-      expect(resolved.schemaPrefix).toBe("");
-      expect(resolved.tenantPredicate).toBeDefined();
-
-      // Renumber the caller-supplied `$` marker to `$1`, matching how
-      // sql.ts's buildQuery consumes tenantPredicate.
-      const sql = resolved.tenantPredicate!.sql.replace("$", "$1");
-      const client = await resolved.connect();
-      try {
-        const { rows } = await client.query(
-          `SELECT v FROM t_iso WHERE ${sql}`,
-          resolved.tenantPredicate!.params
-        );
-        expect(rows.map((r) => r.v).sort()).toEqual(["b1"]);
-      } finally {
-        client.release();
-        await setup_drop(pool);
-      }
-    } finally {
-      await stop();
-    }
-  }, 60_000);
+  it("exposes the resolved tenant VALUE as tenantId, with empty schemaPrefix", () => {
+    const pool = new Pool();
+    const router = rowLevelRouter(pool);
+    const resolved = router.resolve("acme");
+    expect(resolved.schemaPrefix).toBe("");
+    expect(resolved.tenantId).toBe("acme");
+    return pool.end();
+  });
 
   it("throws on empty/blank tenantId", async () => {
     const pool = new Pool();
@@ -60,26 +30,14 @@ describe("rowLevelRouter", () => {
     await pool.end();
   });
 
-  it("throws on unknown tenant handling is not applicable (row-level accepts any non-blank id) -- sanity: valid id resolves", async () => {
+  it("resolves any non-blank id (row-level accepts any tenant string)", async () => {
     const pool = new Pool();
     const router = rowLevelRouter(pool);
     const resolved = router.resolve("some-tenant");
-    expect(resolved.tenantPredicate).toEqual({
-      sql: "tenant_id = $",
-      params: ["some-tenant"],
-    });
+    expect(resolved.tenantId).toBe("some-tenant");
     await pool.end();
   });
 });
-
-async function setup_drop(pool: Pool): Promise<void> {
-  const c = await pool.connect();
-  try {
-    await c.query("DROP TABLE IF EXISTS t_iso");
-  } finally {
-    c.release();
-  }
-}
 
 describe("schemaPerTenantRouter", () => {
   it("resolves a known tenant to a validated schema prefix", () => {
@@ -88,7 +46,7 @@ describe("schemaPerTenantRouter", () => {
     const router = schemaPerTenantRouter(pool, schemaFor);
     const resolved = router.resolve("acme");
     expect(resolved.schemaPrefix).toBe("tenant_acme.");
-    expect(resolved.tenantPredicate).toBeUndefined();
+    expect(resolved.tenantId).toBeUndefined();
     return pool.end();
   });
 
@@ -139,7 +97,7 @@ describe("dbPerTenantRouter", () => {
       .mockResolvedValue({} as never);
     const resolvedA = router.resolve("a");
     expect(resolvedA.schemaPrefix).toBe("");
-    expect(resolvedA.tenantPredicate).toBeUndefined();
+    expect(resolvedA.tenantId).toBeUndefined();
     await resolvedA.connect();
     expect(connectASpy).toHaveBeenCalledTimes(1);
 

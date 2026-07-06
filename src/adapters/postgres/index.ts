@@ -70,6 +70,7 @@ interface PgClaimRow {
   tags_json: string;
   schema: string;
   run_id: string | null;
+  tenant_id: string;
 }
 
 interface PgEventRow {
@@ -114,8 +115,8 @@ const CAPABILITIES: AdapterCapabilities = {
   },
 };
 
-/** Ordered parameter list matching insertClaimSql's column order (26 columns). */
-function toRow(c: Claim, corpusId: string | null): unknown[] {
+/** Ordered parameter list matching insertClaimSql's column order (27 columns). */
+function toRow(c: Claim, corpusId: string | null, tenantId: string): unknown[] {
   return [
     c.id,
     c.profile,
@@ -143,6 +144,7 @@ function toRow(c: Claim, corpusId: string | null): unknown[] {
     c.schema,
     c.provenance.runId ?? null,
     corpusId,
+    tenantId,
   ];
 }
 
@@ -221,6 +223,10 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
   // Throws on invalid/unknown tenant.
   const rc = opts.router.resolve(opts.tenantId);
   const prefix = rc.schemaPrefix;
+  // ONE effective tenant string. Routing providers leave rc.tenantId undefined
+  // -> "" -> every row is "" and every filter is "" -> behavior is IDENTICAL to
+  // a single-tenant deployment. Row-level routing yields a real tenant id.
+  const tenantId = rc.tenantId ?? "";
   // Carries the active transaction client so autocommit reads/writes JOIN the tx.
   const txClient = new AsyncLocalStorage<PoolClient>();
 
@@ -256,7 +262,10 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
       // stale per-corpus head. Held until COMMIT/ROLLBACK so the hash chain
       // for this corpus cannot fork. Per-corpus key => cross-corpus writers
       // don't contend.
-      await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [corpusId]);
+      // Compose tenant + corpus so per-(tenant,corpus) chains lock
+      // independently. tenantId==="" keeps today's key = corpusId exactly.
+      const lockKey = tenantId ? `${tenantId}:${corpusId}` : corpusId;
+      await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
       const r = await txClient.run(c, fn);
       await c.query("COMMIT");
       c.release();
@@ -275,7 +284,7 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
 
   async function runQuery(plan: ExecutionPlan, force: AdapterScope | undefined): Promise<Claim[]> {
     return withConn(async (c) => {
-      const { text, params } = buildQuery(prefix, plan, force, rc.tenantPredicate);
+      const { text, params } = buildQuery(prefix, plan, force, tenantId);
       const { rows } = await c.query<PgClaimRow>(text, params);
       return rows.map(fromRow);
     });
@@ -284,20 +293,20 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
   async function getClaimById(id: ClaimId): Promise<PgClaimRow | undefined> {
     return withConn(async (c) => {
       const { rows } = await c.query<PgClaimRow>(
-        `SELECT * FROM ${prefix}claims WHERE id = $1`,
-        [id]
+        `SELECT * FROM ${prefix}claims WHERE id = $1 AND tenant_id = $2`,
+        [id, tenantId]
       );
       return rows[0];
     });
   }
 
   async function insertRow(c: Claim, corpusId: string | null): Promise<void> {
-    await withConn((conn) => conn.query(insertClaimSql(prefix), toRow(c, corpusId)));
+    await withConn((conn) => conn.query(insertClaimSql(prefix), toRow(c, corpusId, tenantId)));
   }
 
   async function insertLoop(conn: PoolClient, cs: Claim[], corpusId: string | null): Promise<void> {
     for (const cl of cs) {
-      await conn.query(insertClaimSql(prefix), toRow(cl, corpusId));
+      await conn.query(insertClaimSql(prefix), toRow(cl, corpusId, tenantId));
     }
   }
 
@@ -349,6 +358,8 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
       const conditions: string[] = [];
       const params: unknown[] = [];
       let n = 0;
+      conditions.push(`tenant_id = $${++n}`);
+      params.push(tenantId);
       if (filter?.corpusId !== undefined) {
         conditions.push(`corpus_id = $${++n}`);
         params.push(filter.corpusId);
@@ -390,7 +401,7 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
 
     async deleteClaim(id: ClaimId): Promise<void> {
       await withConn((c) =>
-        c.query(`UPDATE ${prefix}claims SET status = 'deprecated' WHERE id = $1`, [id])
+        c.query(`UPDATE ${prefix}claims SET status = 'deprecated' WHERE id = $1 AND tenant_id = $2`, [id, tenantId])
       );
     },
 
@@ -401,8 +412,8 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
     async getIdempotencyRecord(scope: string, key: string): Promise<IdempotencyRecord | undefined> {
       return withConn(async (c) => {
         const { rows } = await c.query<PgIdempRow>(
-          `SELECT * FROM ${prefix}idempotency WHERE scope = $1 AND key = $2`,
-          [scope, key]
+          `SELECT * FROM ${prefix}idempotency WHERE scope = $1 AND key = $2 AND tenant_id = $3`,
+          [scope, key, tenantId]
         );
         const row = rows[0];
         return row ? { result: row.result, createdAt: Number(row.created_at) } : undefined;
@@ -411,7 +422,7 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
 
     async putIdempotencyRecord(scope: string, key: string, rec: IdempotencyRecord): Promise<void> {
       await withConn((c) =>
-        c.query(putIdempotencySql(prefix), [scope, key, rec.result, rec.createdAt])
+        c.query(putIdempotencySql(prefix), [scope, key, rec.result, rec.createdAt, tenantId])
       );
     },
 
@@ -422,8 +433,8 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
     async maxRecordedSeq(corpusId: string): Promise<number> {
       return withConn(async (c) => {
         const { rows } = await c.query<{ m: string | number }>(
-          `SELECT COALESCE(MAX(recorded_seq), 0) AS m FROM ${prefix}claims WHERE corpus_id = $1`,
-          [corpusId]
+          `SELECT COALESCE(MAX(recorded_seq), 0) AS m FROM ${prefix}claims WHERE corpus_id = $1 AND tenant_id = $2`,
+          [corpusId, tenantId]
         );
         return Number(rows[0].m);
       });
@@ -431,7 +442,7 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
 
     async appendEvent(e: ClaimEvent): Promise<void> {
       await withConn(async (c) => {
-        const head = await c.query<{ entry_hash: string | null }>(headHashSql(prefix), [e.corpusId]);
+        const head = await c.query<{ entry_hash: string | null }>(headHashSql(prefix), [e.corpusId, tenantId]);
         const prevHash = head.rows[0]?.entry_hash ?? "";
         const entryHash = createHash("sha256")
           .update(canonicalEvent(e) + prevHash)
@@ -448,6 +459,7 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
           e.recordedSeq,
           entryHash,
           prevHash,
+          tenantId,
         ]);
       });
     },
@@ -465,6 +477,7 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
           row.signature,
           row.guarantee,
           row.at,
+          tenantId,
         ])
       );
     },
@@ -474,9 +487,9 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
       range?: { epochId?: string; since?: number }
     ): Promise<AnchoredRootRow[]> {
       return withConn(async (c) => {
-        const conditions: string[] = ["corpus_id = $1"];
-        const params: unknown[] = [corpusId];
-        let n = 1;
+        const conditions: string[] = ["corpus_id = $1", "tenant_id = $2"];
+        const params: unknown[] = [corpusId, tenantId];
+        let n = 2;
         if (range?.epochId !== undefined) {
           conditions.push(`epoch_id = $${++n}`);
           params.push(range.epochId);
@@ -516,8 +529,8 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
         async deleteClaim(id: ClaimId): Promise<void> {
           await withConn((c) =>
             c.query(
-              `UPDATE ${prefix}claims SET status = 'deprecated' WHERE id = $1 AND corpus_id = $2`,
-              [id, scope.corpus]
+              `UPDATE ${prefix}claims SET status = 'deprecated' WHERE id = $1 AND corpus_id = $2 AND tenant_id = $3`,
+              [id, scope.corpus, tenantId]
             )
           );
         },
