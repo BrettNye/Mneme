@@ -9,12 +9,14 @@
  */
 import type { Session } from "./types.js";
 import type { Claim } from "../core/claim.js";
+import type { ClaimId } from "../core/ids.js";
 import { corpusOf } from "../algebra/types.js";
 import { tauValid } from "../algebra/temporal.js";
 import { dedupeGroups } from "../algebra/combination.js";
 import { pairsOf, type KeyAliasMap } from "../algebra/contradiction.js";
-import { resolveKeyCardinality } from "./cardinality.js";
-import { loadAliasContext, MCP_EVIDENCE_POOLING_RULE } from "./recall.js";
+import { resolveKeyCardinality, effectiveKeyCardinality } from "./cardinality.js";
+import { loadAliasContext, aliasContextFrom, MCP_EVIDENCE_POOLING_RULE, type RecallSource } from "./recall.js";
+import { KEY_ALIAS_KEY } from "../retrieval/key-alias.js";
 import { DEDUPE_DEFAULTS } from "../retrieval/read-pipeline.js";
 
 // MOVED from explain.ts (charter vocabulary home). explain.ts now re-exports this.
@@ -86,26 +88,17 @@ export function groupDispositions(
   return out;
 }
 
-/** What did the just-written claim `claimId` do to its (subject,key) group? Embeddings-free:
- *  reads the group, applies τ_valid + ⊕_dedupe + ⊥(effective cardinality) and attributes the
- *  new claim. Reuses dedupeGroups (merge map) + pairsOf (deprecations). */
-export function supersessionOutcome(session: Session, corpus: string, claimId: string): SupersessionOutcome {
-  const now = Date.now();
-  const keyCardinality = resolveKeyCardinality(session, corpus, undefined);
-  const { aliasMap } = loadAliasContext(session, corpus, now, keyCardinality);
-  const written = session.mneme.read(corpus, { corpusId: corpus }).find((c) => c.id === claimId);
-  // written-not-found: e.g. a stale/foreign id. No group to attribute against — "committed" by
-  // design (this also covers the OLDER member of a ⊥ pair, which is dead-on-arrival and never
-  // itself the "newer" side below, so it naturally falls through to "committed" too).
-  if (!written) return { action: "committed", deprecatedIds: [] };
-  // Scoped to the exact (subject, key) of `written`; alias-family expansion across related keys
-  // is a documented v1 limitation (not handled here).
-  const group = session.mneme.read(corpus, {
-    corpusId: corpus,
-    subject: written.subject,
-    key: written.key,
-  }) as Claim[];
-  const dispositions = groupDispositions(group, keyCardinality, aliasMap, now);
+/** Pure attribution core (task-attribution, extracted from supersessionOutcome verbatim):
+ *  given the just-written claim, its raw (subject,key) group, and the group's dispositions,
+ *  what did the write do? No session/mneme/Date.now — callers supply an already-computed
+ *  `dispositions` map (via groupDispositions). Reused byte-identically by both the sync
+ *  `supersessionOutcome` and the async `supersessionOutcomeAsync`. */
+export function attributeSupersession(
+  written: Claim,
+  group: Claim[],
+  dispositions: Map<string, { disposition: GroupDisposition; reason: DispositionReason }>,
+): SupersessionOutcome {
+  const claimId = written.id;
   const own = dispositions.get(claimId);
   if (own?.disposition === "merged") {
     const reason = own.reason as Extract<DispositionReason, { kind: "merged-into" }>;
@@ -132,4 +125,58 @@ export function supersessionOutcome(session: Session, corpus: string, claimId: s
       };
   }
   return { action: "committed", deprecatedIds: [] };
+}
+
+/** What did the just-written claim `claimId` do to its (subject,key) group? Embeddings-free:
+ *  reads the group, applies τ_valid + ⊕_dedupe + ⊥(effective cardinality) and attributes the
+ *  new claim. Reuses dedupeGroups (merge map) + pairsOf (deprecations). */
+export function supersessionOutcome(session: Session, corpus: string, claimId: string): SupersessionOutcome {
+  const now = Date.now();
+  const keyCardinality = resolveKeyCardinality(session, corpus, undefined);
+  const { aliasMap } = loadAliasContext(session, corpus, now, keyCardinality);
+  const written = session.mneme.read(corpus, { corpusId: corpus }).find((c) => c.id === claimId);
+  // written-not-found: e.g. a stale/foreign id. No group to attribute against — "committed" by
+  // design (this also covers the OLDER member of a ⊥ pair, which is dead-on-arrival and never
+  // itself the "newer" side below, so it naturally falls through to "committed" too).
+  if (!written) return { action: "committed", deprecatedIds: [] };
+  // Scoped to the exact (subject, key) of `written`; alias-family expansion across related keys
+  // is a documented v1 limitation (not handled here).
+  const group = session.mneme.read(corpus, {
+    corpusId: corpus,
+    subject: written.subject,
+    key: written.key,
+  }) as Claim[];
+  const dispositions = groupDispositions(group, keyCardinality, aliasMap, now);
+  return attributeSupersession(written, group, dispositions);
+}
+
+/** Async twin of supersessionOutcome (task-attribution, B8): awaited reads over the SAME pure
+ *  attribution core. Locates the written claim via `readByIds` (a targeted point read) rather
+ *  than a full-corpus read — avoids a per-write O(corpus) read against a Postgres adapter;
+ *  outcome-identical to the sync path for every corpus state. Alias-load degrades exactly like
+ *  sync `loadAliasContext` (empty aliasMap on a `source.read` throw) — no try-less read here,
+ *  which would otherwise throw where sync yields a real outcome. */
+export async function supersessionOutcomeAsync(
+  source: RecallSource & { readByIds(corpusId: string, ids: ClaimId[]): Promise<Claim[]> | Claim[] },
+  corpus: string,
+  claimId: string,
+): Promise<SupersessionOutcome> {
+  const now = Date.now();
+  const keyCardinality = effectiveKeyCardinality(source, corpus, undefined);
+  let aliasMap: KeyAliasMap = {};
+  try {
+    const aliasClaims = await source.read(corpus, { corpusId: corpus, key: KEY_ALIAS_KEY });
+    aliasMap = aliasContextFrom(aliasClaims as Claim[], now, keyCardinality).aliasMap;
+  } catch {
+    // degrade exactly like sync loadAliasContext — proceed alias-less rather than throw
+  }
+  const written = (await source.readByIds(corpus, [claimId as ClaimId]))[0];
+  if (!written) return { action: "committed", deprecatedIds: [] };
+  const group = (await source.read(corpus, {
+    corpusId: corpus,
+    subject: written.subject,
+    key: written.key,
+  })) as Claim[];
+  const dispositions = groupDispositions(group, keyCardinality, aliasMap, now);
+  return attributeSupersession(written, group, dispositions);
 }

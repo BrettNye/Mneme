@@ -1,6 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { freshSession } from "./test-support.js";
-import { supersessionOutcome, groupDispositions } from "./belief-change.js";
+import { freshSession, makeSpySession } from "./test-support.js";
+import { supersessionOutcome, supersessionOutcomeAsync, groupDispositions } from "./belief-change.js";
+import { KEY_ALIAS_KEY } from "../retrieval/key-alias.js";
+import type { Session } from "./types.js";
+import type { ExecutionPlan } from "../adapters/adapter-types.js";
+import type { Claim } from "../core/claim.js";
+import type { ClaimId } from "../core/ids.js";
+
+/** Wraps a Session's `mneme` facade in the async `RecallSource & { readByIds }` seam
+ *  supersessionOutcomeAsync expects — awaited reads over the SAME sync store. */
+function asyncSourceOver(s: Session) {
+  return {
+    listCorpora: (f?: (c: { id: string }) => boolean) => s.mneme.listCorpora(f),
+    read: async (c: string, p: ExecutionPlan): Promise<Claim[]> => s.mneme.read(c, p),
+    readByIds: async (c: string, ids: ClaimId[]): Promise<Claim[]> => s.mneme.readByIds(c, ids),
+  };
+}
 
 describe("supersessionOutcome", () => {
   it("reports superseded on a single-cardinality distinct-value write", () => {
@@ -130,5 +145,112 @@ describe("groupDispositions", () => {
     expect(alphaReason.byId).toBe(charlie.id);
     void bravo;
     s.close();
+  });
+});
+
+describe("supersessionOutcomeAsync", () => {
+  it("equals sync attribution for a superseded write (distinct validFroms)", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    const a = s.write("c", { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    const b = s.write("c", { subject: "p", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const syncOut = supersessionOutcome(s, "c", b.id);
+    const asyncOut = await supersessionOutcomeAsync(asyncSourceOver(s), "c", b.id);
+    expect(asyncOut).toEqual(syncOut);
+    expect(asyncOut.action).toBe("superseded");
+    expect(asyncOut.deprecatedIds).toContain(a.id);
+    s.close();
+  });
+
+  it("equals sync attribution for a merged write", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { note: "single" } });
+    s.write("c", { subject: "p", key: "note", value: "deploy the api now", valid: { from: 2, to: Infinity } });
+    const b = s.write("c", { subject: "p", key: "note", value: "deploy the api", valid: { from: 1, to: Infinity } });
+    const syncOut = supersessionOutcome(s, "c", b.id);
+    const asyncOut = await supersessionOutcomeAsync(asyncSourceOver(s), "c", b.id);
+    expect(asyncOut).toEqual(syncOut);
+    expect(asyncOut.action).toBe("merged");
+    s.close();
+  });
+
+  it("equals sync attribution for a duplicate write", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { note: "single" } });
+    const a = s.write("c", { subject: "p", key: "note", value: "deploy the api", valid: { from: 2, to: Infinity } });
+    const b = s.write("c", { subject: "p", key: "note", value: "deploy the api", valid: { from: 1, to: Infinity } });
+    const syncOut = supersessionOutcome(s, "c", b.id);
+    const asyncOut = await supersessionOutcomeAsync(asyncSourceOver(s), "c", b.id);
+    expect(asyncOut).toEqual(syncOut);
+    expect(asyncOut.action).toBe("duplicate");
+    expect(asyncOut.mergedInto).toBe(a.id);
+    s.close();
+  });
+
+  it("equals sync attribution for a committed write under multi-cardinality (no group deprecation)", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { tag: "multi" } });
+    s.write("c", { subject: "p", key: "tag", value: "alpha", valid: { from: 1, to: Infinity } });
+    const b = s.write("c", { subject: "p", key: "tag", value: "bravo", valid: { from: 2, to: Infinity } });
+    const syncOut = supersessionOutcome(s, "c", b.id);
+    const asyncOut = await supersessionOutcomeAsync(asyncSourceOver(s), "c", b.id);
+    expect(asyncOut).toEqual(syncOut);
+    expect(asyncOut.action).toBe("committed");
+    expect(asyncOut.deprecatedIds).toEqual([]);
+    s.close();
+  });
+
+  it("equals sync attribution when claimId is a foreign/stale id (written-not-found)", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    s.write("c", { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    const syncOut = supersessionOutcome(s, "c", "nonexistent-id");
+    const asyncOut = await supersessionOutcomeAsync(asyncSourceOver(s), "c", "nonexistent-id");
+    expect(asyncOut).toEqual(syncOut);
+    expect(asyncOut).toEqual({ action: "committed", deprecatedIds: [] });
+    s.close();
+  });
+
+  it("degrades exactly like sync loadAliasContext when the alias read throws (empty aliasMap, no throw)", async () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    const a = s.write("c", { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    const b = s.write("c", { subject: "p", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    const syncOut = supersessionOutcome(s, "c", b.id);
+
+    const failingAliasSource = {
+      listCorpora: (f?: (c: { id: string }) => boolean) => s.mneme.listCorpora(f),
+      read: async (c: string, p: ExecutionPlan): Promise<Claim[]> => {
+        if ((p as { key?: string }).key === KEY_ALIAS_KEY) throw new Error("alias read boom");
+        return s.mneme.read(c, p);
+      },
+      readByIds: async (c: string, ids: ClaimId[]): Promise<Claim[]> => s.mneme.readByIds(c, ids),
+    };
+
+    const asyncOut = await supersessionOutcomeAsync(failingAliasSource, "c", b.id);
+    expect(asyncOut).toEqual(syncOut); // sync's aliasMap is {} too (no alias claims ever written)
+    expect(asyncOut.action).toBe("superseded");
+    expect(asyncOut.deprecatedIds).toContain(a.id);
+    s.close();
+  });
+
+  it("locates the written claim via readByIds, not a full-corpus read (plan-shape)", async () => {
+    const { session, plansSeen } = makeSpySession();
+    session.createCorpus({ id: "c", keyCardinality: { plan: "single" } });
+    session.write("c", { subject: "p", key: "plan", value: "alpha", valid: { from: 1, to: Infinity } });
+    const b = session.write("c", { subject: "p", key: "plan", value: "bravo", valid: { from: 2, to: Infinity } });
+    plansSeen.length = 0; // only care about plans seen during the async attribution call itself
+
+    await supersessionOutcomeAsync(asyncSourceOver(session), "c", b.id);
+
+    // A full-corpus read to locate `written` (session.mneme.read(corpus, { corpusId: corpus }),
+    // as sync supersessionOutcome does) would surface as an adapter query plan with no
+    // subject/key predicate. readByIds bypasses adapter.query entirely (mneme.ts's readByIds
+    // uses scoped.getClaim, never .query) — so no such unfiltered plan should appear.
+    const fullCorpusRead = plansSeen.some(
+      (p) => p.corpusId === "c" && !("subject" in p) && !("key" in p) && !("keys" in p),
+    );
+    expect(fullCorpusRead).toBe(false);
+    session.close();
   });
 });
