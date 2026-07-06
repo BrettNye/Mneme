@@ -53,7 +53,8 @@ export const DEFAULT_SCALAR_PSEUDOCOUNT: Record<Source, number> = {
   imported: 2,
 };
 
-/** Ergonomic corpus creation input; the session expands it to a full CorpusDef. */
+/** Ergonomic corpus creation input; `corpusDefFromSpec` expands it to a full
+ *  CorpusDef, and the session delegates to that function. */
 export interface CorpusSpec {
   id: string;
   displayName?: string;
@@ -117,7 +118,7 @@ export function corpusDefFromSpec(spec: CorpusSpec): CorpusDef {
     metadata: {},
     createdAt: 0,
     updatedAt: 0,
-  } as CorpusDef;
+  };
 }
 
 export interface SessionOptions {
