@@ -360,6 +360,7 @@ npm run eval:lme       # LongMemEval retrieval benchmark
 
 ## Where to go next
 
+- Postgres / async surface (hosted, multi-tenant): [docs/postgres-async-adapter.md](docs/postgres-async-adapter.md)
 - Day-to-day MCP usage: [docs/USING-MNEME.md](docs/USING-MNEME.md)
 - Ingestion loop spec: `docs/superpowers/specs/2026-07-02-ingest-loop-sdk-design.md`
 - Over-anchoring / reverse-reconcile spec: `docs/superpowers/specs/2026-07-02-reverse-reconcile-over-anchoring-design.md`

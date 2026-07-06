@@ -1902,6 +1902,22 @@ The fallback-mode classification means backend choice matters. Guidance for cons
 
 Choosing a similarity-optimized adapter for a structured-query workload, or vice versa, produces queries that work correctly but perform pathologically. The optimizer cannot fix a backend-choice mismatch.
 
+### 10.4 Synchronous and asynchronous adapter profiles
+
+The `StorageAdapter` protocol above is the **synchronous embedded profile** (returns values directly; the reference implementation is SQLite over a blocking driver). A parallel **asynchronous server profile**, `AsyncStorageAdapter`, exists for networked, multi-writer backends: it is a member-for-member mirror in which every storage method returns a `Promise`, `transaction` takes an explicit `corpusId` and an async body, and `capabilities()` remains synchronous (static metadata). Both profiles share one set of value types (`ClaimEvent`, `ExecutionPlan`, `AdapterCapabilities`, `IdempotencyRecord`, …), so the two contracts cannot drift. The reference asynchronous adapter is Postgres over `pg`.
+
+The query algebra (§4) is **backend-agnostic** because I/O is confined to a small, enumerated set of seams — the `leaf` load, the provenance-traversal (γ) claim lookups, and the binary operators' sub-pipeline evaluation. Every other operator is a pure `Corpus → Corpus` transform. The asynchronous evaluation path awaits those seams and reuses the identical pure operator cores; it does not re-implement the algebra. A conformance suite runs one backend-agnostic contract against both profiles, and a parity harness asserts the two backends produce identical served claims and bit-identical confidence for the same inputs.
+
+**Multi-tenant isolation composes *around* corpus isolation.** The per-corpus `scoped()` boundary (§6, §9) is unchanged. On top of it, a `TenantRouter` resolves a tenant identity to a scoped connection via one of three mechanisms, none of which trusts caller-supplied input — the same bypass-proof property as `scoped()`:
+
+- **Schema-per-tenant** — schema-qualified identifiers built from a validated allow-list (never `SET search_path` on a pooled connection, whose session state can leak across tenants).
+- **Database-per-tenant** — a per-tenant connection pool.
+- **Row-level** — a forced `tenant_id` predicate injected into every query (requires a `tenant_id`-bearing schema; the base schema mirrors the single-tenant tables).
+
+Corpus isolation and tenant isolation are independent, composable enforcement layers.
+
+**Hash-chain serialization is a per-corpus write invariant.** The append-only event log (§7, used by replay and audit) maintains a per-corpus hash chain: each entry hashes its canonical event plus the prior entry's hash. Correctness requires that concurrent writers to the same corpus serialize, so no writer computes its entry from a stale chain head. The synchronous SQLite profile achieves this with `IMMEDIATE` transactions (single writer). The asynchronous Postgres profile achieves it with a **lock-first per-corpus advisory transaction lock** — `pg_advisory_xact_lock` keyed on the corpus, acquired before any chain/claims read — under `READ COMMITTED` isolation (sufficient, because the xact lock releases at COMMIT and a waiting writer's post-lock head read takes a fresh snapshot). The lock is keyed per corpus, so writers to different corpora (and different tenants) never contend, and `recordedSeq` is monotonic per corpus.
+
 ---
 
 ## 11. Worked queries
