@@ -9,22 +9,20 @@
  * and reusable outside the MCP transport.
  */
 import type { Predicate, RankedCorpus } from "../index.js";
-import { pipe, leaf } from "../mneme.js";
 import { sigma as sigmaOp } from "../algebra/selection.js";
 import { rho as rhoOp } from "../algebra/similarity.js";
 import { rankBlend } from "../algebra/ranking.js";
 import { leafHintsOf, type LeafHints } from "../algebra/pushdown.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Stage } from "../algebra/expression.js";
-import { fromCorpus } from "../algebra/expression.js";
-import type { Corpus } from "../algebra/types.js";
+import { corpusOf, type Corpus } from "../algebra/types.js";
 import type { Session, ReadDeps } from "./types.js";
 import type { Claim } from "../core/claim.js";
 import type { ExecutionPlan } from "../adapters/adapter-types.js";
 import { pointEstimate } from "../core/confidence.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
 import { RULE } from "../distribution/rules.js";
-import { resolveKeyCardinality, cardinalitySafetyWarnings } from "./cardinality.js";
+import { effectiveKeyCardinality, cardinalitySafetyWarnings } from "./cardinality.js";
 
 /**
  * MCP corpora carry SCALAR confidences (remember writes scalarConfidence), and
@@ -273,13 +271,25 @@ export async function warmRecallValues(
   return warmRecallValuesOver(session.mneme, args, embeddings, family);
 }
 
-export async function recall(
-  session: Session,
+/**
+ * The centerpiece: recall's full orchestration, over the `RecallSource` read seam
+ * (task-recall-core). `recall()` (sync, `Session`-facing) and `recallAsync()` (any
+ * `RecallSource`) are both thin delegations to this one function — signature and
+ * behavior otherwise unchanged from the prior `session.mneme`-only body.
+ *
+ * The former two `session.mneme.query` pipeline evaluations (shared τ_valid+dedupe
+ * prefix, then the ⊥/resolve+ranker tail) are now ONE hinted `source.read` feeding
+ * pure stage application: σ(s) and canon[0..3] (task-pure-helpers B4) are
+ * `(c: Corpus) => Corpus` folds applied directly, with no `leaf`/`pipe`/`evaluate`
+ * ctx machinery — recall never touches `mneme.query` or `leaf` anymore.
+ */
+async function recallCore(
+  source: RecallSource,
   args: RecallArgs,
   deps: RecallDeps,
 ): Promise<RecallResult> {
   const embeddings: EmbeddingState = deps.embeddings;
-  const keyCardinality = resolveKeyCardinality(session, args.corpus, deps.keyCardinality);
+  const keyCardinality = effectiveKeyCardinality(source, args.corpus, deps.keyCardinality);
 
   const maxTokens = args.maxTokens ?? 2000;
   const limit = args.limit ?? 5;
@@ -299,7 +309,8 @@ export async function recall(
 
   // Read-only: a recall against an unknown corpus returns empty — it MUST NOT create the
   // corpus (so the tool can honestly advertise readOnlyHint). remember() still ensures-on-write.
-  if (!session.listCorpora().some((c) => c.id === args.corpus)) {
+  // BEFORE any read (unknown-corpus check never touches the adapter).
+  if (!source.listCorpora().some((c) => c.id === args.corpus)) {
     const coverage = coverageOf(entities, []); // unknown corpus: nothing available
     return {
       ...emptyResult,
@@ -308,13 +319,27 @@ export async function recall(
     };
   }
 
-  // ── Alias map loading ────────────────────────────────────────────────────────
-  // Fetch alias claims (index-backed: adapter pushdown via key predicate).
-  // On failure: degrade gracefully — recall proceeds alias-less with a warning.
   const now = parseAsOf(args.asOf) ?? Date.now();
-  // selfAliases is keyCensus-only; recall only needs aliasMap + warnings.
-  const { aliasMap, warnings: aliasWarnings } = loadAliasContext(session, args.corpus, now, keyCardinality);
-  const allWarnings: string[] = [...aliasWarnings];
+
+  // ── Alias map loading ────────────────────────────────────────────────────────
+  // Fetch alias claims over the read seam, then build the pure post-read context
+  // (task-pure-helpers). On failure — the read throwing OR aliasContextFrom
+  // throwing, same try boundary as sync's loadAliasContext — degrade gracefully:
+  // recall proceeds alias-less with a warning (exact text preserved).
+  let aliasMap: KeyAliasMap = {};
+  const allWarnings: string[] = [];
+  try {
+    const aliasClaims = await source.read(args.corpus, {
+      corpusId: args.corpus,
+      key: KEY_ALIAS_KEY,
+    });
+    const aliasCtx = aliasContextFrom(aliasClaims, now, keyCardinality);
+    aliasMap = aliasCtx.aliasMap;
+    allWarnings.push(...aliasCtx.warnings);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    allWarnings.push(`alias load failed — proceeding without alias expansion: ${msg}`);
+  }
 
   // ── Key family expansion ─────────────────────────────────────────────────────
   // Expand the requested key to the full family (canonical + all variants).
@@ -325,7 +350,9 @@ export async function recall(
   // Warm claim values scoped to the same subject/key predicates as the σ stages,
   // using the FAMILY-expanded key set so variant-key claims are cosine-scored, not
   // jaccard-fallback (which would happen if they were not in the warm-up cache).
-  await warmRecallValues(session, args, embeddings, family);
+  // Under jaccardDeps this is a no-op — warmRecallValuesOver early-returns before
+  // issuing any read (see the read-order test in recall.test.ts).
+  await warmRecallValuesOver(source, args, embeddings, family);
 
   // ── σ filter stages + leaf hints (sealed pair, spec §4 A1) ───────────────────
   // Build filter predicates. When the key has a multi-key alias family, use keyIn
@@ -336,8 +363,9 @@ export async function recall(
 
   // Recency-aware ranking (on by default at alpha=0.5/90d). alpha=1 ⇒ pure rho.by,
   // byte-identical to prior behavior. `now` (asOf or Date.now) anchors both tauValid
-  // (canonicalReadStages.evaluationInstant) and the recency term (ctx.evaluationClock).
-  const ranker = buildRecallRanker(args, embeddings.rankFn);
+  // (canonicalReadStages.evaluationInstant) and the recency term — pure, clock-free
+  // at application time (task-pure-helpers B10).
+  const ranker = buildRecallRankerPure(args, embeddings.rankFn, now);
 
   // canon = [τ_valid, ⊕_dedupe, ⊥/resolve, drop] — captured so the τ_valid+dedupe prefix
   // (canon[0], canon[1]) can be reused by the cardinality safety check below.
@@ -348,17 +376,17 @@ export async function recall(
     evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
   });
 
-  // ── Shared prefix (Phase 2, spec §5): ONE I/O pass ──────────────────────────
-  // leaf → σ(s) → τ_valid → ⊕_dedupe evaluated ONCE. `preContra` (pre-⊥/resolve)
-  // feeds BOTH the cardinality-safety check below AND the ranked main query
-  // (via fromCorpus, zero further adapter I/O) — replacing the former two
-  // racing adapter reads with a single shared read. Snapshot consistency is an
-  // intended improvement: warnings and the ranked result now derive from the
-  // same read instead of two separate ones.
-  const preContra = session.mneme.query<Corpus>(
-    args.corpus,
-    pipe(leaf(args.corpus, hints), ...sigmas, canon[0], canon[1]),
-    { evaluationClock: now },
+  // ── Shared prefix (task-recall-core): ONE hinted read + pure stages ─────────
+  // σ(s) → τ_valid → ⊕_dedupe folded directly over the ONE hinted read — no adapter
+  // pipeline/evaluate() ctx is involved. `preContra` (pre-⊥/resolve) feeds BOTH the
+  // cardinality-safety check below AND the ranked main result, purely in-memory —
+  // replacing the former two racing adapter reads with a single shared read.
+  // Snapshot consistency holds only within this single prefix read (B13) — the
+  // alias read and warm-up read above are each their own separate reads.
+  const rawClaims = await source.read(args.corpus, { corpusId: args.corpus, ...hints });
+  const preContra = [...sigmas, canon[0], canon[1]].reduce(
+    (acc, stage) => (stage as (c: Corpus) => Corpus)(acc),
+    corpusOf(rawClaims),
   );
 
   // ── Cardinality safety check (best-effort; never throws into recall) ────────
@@ -372,12 +400,10 @@ export async function recall(
     safetyWarnings = [`cardinality-safety check failed: ${e instanceof Error ? e.message : String(e)}`];
   }
 
-  // Main result: fromCorpus(preContra) → ⊥/resolve → drop → ranker. No adapter
-  // I/O here — leaf() has already run as part of the shared prefix above.
-  const ranked = session.mneme.query<RankedCorpus>(
-    args.corpus,
-    pipe(fromCorpus(preContra), canon[2], canon[3], ranker),
-    { evaluationClock: now },
+  // Main result: ⊥/resolve → drop → ranker, folded directly over preContra.
+  // No adapter I/O here — the shared prefix read has already run above.
+  const ranked = ranker(
+    (canon[3] as (c: Corpus) => Corpus)((canon[2] as (c: Corpus) => Corpus)(preContra)),
   );
 
   // topScore: pre-knob, extracted immediately after canonical resolution + ranking.
@@ -431,5 +457,32 @@ export async function recall(
     coverage,
     warnings: allWarnings.length > 0 ? allWarnings : undefined,
   };
+}
+
+export async function recall(
+  session: Session,
+  args: RecallArgs,
+  deps: RecallDeps,
+): Promise<RecallResult> {
+  return recallCore(session.mneme, args, deps);
+}
+
+/**
+ * Async twin of `recall` — takes a `RecallSource` directly instead of a `Session`,
+ * for callers whose storage lives behind an async boundary (e.g. a Postgres adapter).
+ *
+ * NOTE (B8): the async catalog is in-memory per-process — recall against a populated
+ * pg corpus never re-declared in THIS process returns EMPTY, not an error.
+ *
+ * NOTE (B13): reads are not a transaction; snapshot consistency holds only within the
+ * single prefix read (the alias read and the warm-up read are each their own separate
+ * reads and may race a concurrent write).
+ */
+export async function recallAsync(
+  source: RecallSource,
+  args: RecallArgs,
+  deps: RecallDeps,
+): Promise<RecallResult> {
+  return recallCore(source, args, deps);
 }
 
