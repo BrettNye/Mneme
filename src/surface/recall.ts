@@ -13,6 +13,7 @@ import { pipe, leaf, sigma, rho } from "../mneme.js";
 import { leafHintsOf, type LeafHints } from "../algebra/pushdown.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Stage } from "../algebra/expression.js";
+import { fromCorpus } from "../algebra/expression.js";
 import type { Corpus } from "../algebra/types.js";
 import type { Session, ReadDeps } from "./types.js";
 import { pointEstimate } from "../core/confidence.js";
@@ -284,16 +285,35 @@ export async function recall(
     evidencePoolingRule: MCP_EVIDENCE_POOLING_RULE,
   });
 
-  // SINGLE query execution:
-  // leaf → σ(s) → canonicalReadStages (τ_valid + ⊕_dedupe + ⊥(keyAliases) + drop) → ranker
+  // ── Shared prefix (Phase 2, spec §5): ONE I/O pass ──────────────────────────
+  // leaf → σ(s) → τ_valid → ⊕_dedupe evaluated ONCE. `preContra` (pre-⊥/resolve)
+  // feeds BOTH the cardinality-safety check below AND the ranked main query
+  // (via fromCorpus, zero further adapter I/O) — replacing the former two
+  // racing adapter reads with a single shared read. Snapshot consistency is an
+  // intended improvement: warnings and the ranked result now derive from the
+  // same read instead of two separate ones.
+  const preContra = session.mneme.query<Corpus>(
+    args.corpus,
+    pipe(leaf(args.corpus, hints), ...sigmas, canon[0], canon[1]),
+    { evaluationClock: now },
+  );
+
+  // ── Cardinality safety check (best-effort; never throws into recall) ────────
+  // Computed FIRST from the shared preContra, but BUFFERED — appended to
+  // allWarnings only after the coverage warning below, preserving today's
+  // alias → coverage → cardinality order byte-identically.
+  let safetyWarnings: string[];
+  try {
+    safetyWarnings = cardinalitySafetyWarnings(preContra, keyCardinality, aliasMap);
+  } catch (e) {
+    safetyWarnings = [`cardinality-safety check failed: ${e instanceof Error ? e.message : String(e)}`];
+  }
+
+  // Main result: fromCorpus(preContra) → ⊥/resolve → drop → ranker. No adapter
+  // I/O here — leaf() has already run as part of the shared prefix above.
   const ranked = session.mneme.query<RankedCorpus>(
     args.corpus,
-    pipe(
-      leaf(args.corpus, hints),
-      ...sigmas,
-      ...canon,
-      ranker,
-    ),
+    pipe(fromCorpus(preContra), canon[2], canon[3], ranker),
     { evaluationClock: now },
   );
 
@@ -307,20 +327,8 @@ export async function recall(
     allWarnings.push(coverageWarning(coverage.missing));
   }
 
-  // ── Cardinality safety check (best-effort; never throws into recall) ────────
-  // One extra lightweight query over the pre-⊥ (τ_valid + ⊕_dedupe) corpus — no
-  // ranking/warm-up — so a single-cardinality key holding ≥2 distinct values is
-  // surfaced as a mass-deprecation safety warning before ⊥ silently drops one.
-  try {
-    const preContra = session.mneme.query<Corpus>(
-      args.corpus,
-      pipe(leaf(args.corpus, hints), ...sigmas, canon[0], canon[1]),
-      { evaluationClock: now },
-    );
-    allWarnings.push(...cardinalitySafetyWarnings(preContra, keyCardinality, aliasMap));
-  } catch (e) {
-    allWarnings.push(`cardinality-safety check failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  // Buffered cardinality-safety warnings, appended AFTER coverage (today's order).
+  allWarnings.push(...safetyWarnings);
 
   // In-memory knobs (pure RankedCorpus fns — NO second query):
   const abstainThreshold = args.abstainBelowTop ?? 0;

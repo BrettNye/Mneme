@@ -673,6 +673,18 @@ describe("recall — leaf hint pushdown", () => {
     expect(res.matches.map((m) => m.subject)).toEqual(["a"]);
   });
 
+  it("recall issues exactly ONE non-alias adapter query after the shared-prefix restructure (was 2)", async () => {
+    const { session, plansSeen } = makeSpySession();
+    seedClaims(session, [
+      { subject: "s0", key: "k0" },
+      { subject: "s1", key: "k0" },
+    ]);
+    const before = plansSeen.length;
+    await recall(session, { about: "q", corpus: CORPUS, subject: "s0", key: "k0" }, jaccardDeps);
+    const recallPlans = plansSeen.slice(before).filter((p) => p.key !== KEY_ALIAS_KEY);
+    expect(recallPlans).toHaveLength(1);
+  });
+
   it("warmRecallValues issues exactly ONE read for an N-key family, carrying keys: family", async () => {
     const { session } = makeSpySession();
     const corpus = "warm-family-hint";
