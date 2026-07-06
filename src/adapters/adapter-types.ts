@@ -54,6 +54,12 @@ export interface ExecutionPlan {
   corpusId: string;
   subject?: string;
   key?: string;
+  /** Match claims whose key is in this set (SQL: key IN (...)). May be combined
+   *  with `key` — all plan fields AND together. CAUTION: an EMPTY array emits NO
+   *  condition (matches everything, mirroring status/runIds), whereas the in-memory
+   *  σ predicate keyIn([]) matches NOTHING — hint builders must OMIT the field
+   *  instead of passing []. */
+  keys?: string[];
   status?: string[];
   scopeHash?: string;
   recordedAtMost?: number;

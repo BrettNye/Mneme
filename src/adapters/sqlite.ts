@@ -337,6 +337,11 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
       conditions.push("key = ?");
       params.push(plan.key);
     }
+    if (plan.keys !== undefined && plan.keys.length > 0) {
+      const placeholders = plan.keys.map(() => "?").join(", ");
+      conditions.push(`key IN (${placeholders})`);
+      params.push(...plan.keys);
+    }
     if (plan.scopeHash !== undefined) {
       conditions.push("scope_hash = ?");
       params.push(plan.scopeHash);
