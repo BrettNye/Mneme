@@ -10,6 +10,7 @@
  */
 import type { Predicate, RankedCorpus } from "../index.js";
 import { pipe, leaf, sigma, rho } from "../mneme.js";
+import { leafHintsOf, type LeafHints } from "../algebra/pushdown.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Stage } from "../algebra/expression.js";
 import type { Corpus } from "../algebra/types.js";
@@ -165,14 +166,27 @@ export interface RecallResult {
   coverage: CoverageReport;
 }
 
-/** σ filter stages for recall: subject eq + key family (keyIn) / single key eq.
- *  Mirrors the family-vs-single logic used by both recall() and explainRecall(). */
+export interface FilterPlan {
+  sigmas: Stage<Corpus, Corpus>[];
+  hints: LeafHints;
+}
+
+/** σ stages + leaf hints derived from ONE predicate list — the sealed pair (spec §4
+ *  amendment A1): a hint narrower than σ is unrepresentable by construction, since both
+ *  are folds over the same `preds` array. Mirrors the family-vs-single logic used by
+ *  both recall() and explainRecall(). */
+export function buildFilterPlan(args: RecallArgs, family?: string[]): FilterPlan {
+  const preds: Predicate[] = [];
+  if (args.subject) preds.push({ op: "subjectEq", value: args.subject });
+  if (family && family.length > 1) preds.push({ op: "keyIn", values: family });
+  else if (args.key) preds.push({ op: "keyEq", value: args.key });
+  return { sigmas: preds.map((p) => sigma(p)), hints: leafHintsOf(preds) };
+}
+
+/** @deprecated transitional delegate over buildFilterPlan — deleted once explain.ts
+ *  migrates to buildFilterPlan directly (task-explain-callsites). */
 export function buildFilterSigmas(args: RecallArgs, family?: string[]): Stage<Corpus, Corpus>[] {
-  const filters: Predicate[] = [];
-  if (args.subject) filters.push({ op: "subjectEq", value: args.subject });
-  if (family && family.length > 1) filters.push({ op: "keyIn", values: family });
-  else if (args.key) filters.push({ op: "keyEq", value: args.key });
-  return filters.map((p) => sigma(p));
+  return buildFilterPlan(args, family).sigmas;
 }
 
 /** The recall ranker: pure rho.by when recencyAlpha===1, else rho.blend (default alpha .5 / 90d). */
@@ -186,22 +200,18 @@ export function buildRecallRanker(args: RecallArgs, rankFn: string): Stage<Corpu
 }
 
 /** Warm embedding values for the σ-scoped claims (family-expanded), so hybrid scoring
- *  uses cosine not jaccard-fallback. No-op unless hybrid + adapter + cache present. */
+ *  uses cosine not jaccard-fallback. No-op unless hybrid + adapter + cache present.
+ *  Single read (amendment A9): a family expands to `keys: family` in ONE adapter plan
+ *  instead of one read per family member — the adapter's own key-set match replaces the
+ *  per-key loop + manual id-dedup (a family is a set; the adapter already dedupes rows). */
 export async function warmRecallValues(
   session: Session, args: RecallArgs, embeddings: EmbeddingState, family?: string[],
 ): Promise<void> {
   if (embeddings.rankFn === "jaccard" || !embeddings.adapter || !embeddings.cache) return;
-  const seenIds = new Set<string>();
-  const rawClaims: import("../core/claim.js").Claim[] = [];
-  if (family && family.length > 1) {
-    for (const k of family) {
-      for (const c of session.mneme.read(args.corpus, { corpusId: args.corpus, subject: args.subject, key: k })) {
-        if (!seenIds.has(c.id)) { seenIds.add(c.id); rawClaims.push(c); }
-      }
-    }
-  } else {
-    rawClaims.push(...session.mneme.read(args.corpus, { corpusId: args.corpus, subject: args.subject, key: args.key }));
-  }
+  const plan = family && family.length > 1
+    ? { corpusId: args.corpus, subject: args.subject, keys: family }
+    : { corpusId: args.corpus, subject: args.subject, key: args.key };
+  const rawClaims = session.mneme.read(args.corpus, plan);
   await warmValues(embeddings.adapter, embeddings.cache, rawClaims.map((c) => c.value), [args.about]);
 }
 
@@ -259,10 +269,12 @@ export async function recall(
   // jaccard-fallback (which would happen if they were not in the warm-up cache).
   await warmRecallValues(session, args, embeddings, family);
 
-  // ── σ filter stages ──────────────────────────────────────────────────────────
+  // ── σ filter stages + leaf hints (sealed pair, spec §4 A1) ───────────────────
   // Build filter predicates. When the key has a multi-key alias family, use keyIn
   // so all family members (canonical + variants) are included in a single pass.
-  const sigmas = buildFilterSigmas(args, family);
+  // hints are derived from the SAME preds as sigmas — a hint narrower than σ is
+  // unrepresentable by construction.
+  const { sigmas, hints } = buildFilterPlan(args, family);
 
   // Recency-aware ranking (on by default at alpha=0.5/90d). alpha=1 ⇒ pure rho.by,
   // byte-identical to prior behavior. `now` (asOf or Date.now) anchors both tauValid
@@ -283,7 +295,7 @@ export async function recall(
   const ranked = session.mneme.query<RankedCorpus>(
     args.corpus,
     pipe(
-      leaf(args.corpus),
+      leaf(args.corpus, hints),
       ...sigmas,
       ...canon,
       ranker,
@@ -308,7 +320,7 @@ export async function recall(
   try {
     const preContra = session.mneme.query<Corpus>(
       args.corpus,
-      pipe(leaf(args.corpus), ...sigmas, canon[0], canon[1]),
+      pipe(leaf(args.corpus, hints), ...sigmas, canon[0], canon[1]),
       { evaluationClock: now },
     );
     allWarnings.push(...cardinalitySafetyWarnings(preContra, keyCardinality, aliasMap));
