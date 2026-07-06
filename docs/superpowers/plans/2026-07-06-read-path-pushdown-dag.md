@@ -5,21 +5,21 @@ created: 2026-07-06
 
 ```mermaid
 flowchart TD
-    task-keys-sqlite["task-keys-sqlite: ExecutionPlan.keys + sqlite branch<br/>files: src/adapters/adapter-types.ts +2 more"]
-    task-keys-pg["task-keys-pg: postgres builder keys branch<br/>files: src/adapters/postgres/sql.ts +1 more"]
-    task-keys-conformance["task-keys-conformance: cross-backend keys coverage<br/>files: src/adapters/adapter-contract.ts +1 more"]
-    task-pushdown-module["task-pushdown-module: leafHintsOf fold module<br/>files: src/algebra/pushdown.ts +1 more"]
-    task-leaf-hints["task-leaf-hints: leaf hints parameter<br/>files: src/algebra/expression.ts +3 more"]
-    task-barrel-export["task-barrel-export: barrel export LeafHints<br/>files: src/index.ts +1 more"]
-    task-recall-callsites["task-recall-callsites: recall consumes leaf hints<br/>files: src/surface/recall.ts +2 more"]
-    task-explain-callsites["task-explain-callsites: explain consumes sealed filter plan<br/>files: src/surface/explain.ts +2 more"]
-    task-differential-property["task-differential-property: differential property test<br/>files: src/surface/pushdown.property.test.ts"]
-    task-integration-pin["task-integration-pin: MCP recall regression pin<br/>files: src/mcp/server.integration.test.ts"]
-    task-key-indexes["task-key-indexes: covering key indexes<br/>files: src/adapters/sqlite.ts +3 more"]
-    task-purity-pin["task-purity-pin: canon-stage purity pin<br/>files: src/retrieval/read-pipeline.test.ts"]
-    task-golden-pin["task-golden-pin: golden RecallResult pin<br/>files: src/surface/recall-golden.test.ts"]
-    task-from-corpus["task-from-corpus: fromCorpus stage<br/>files: src/algebra/expression.ts +1 more"]
-    task-shared-prefix["task-shared-prefix: recall shared-prefix materialization<br/>files: src/surface/recall.ts +1 more"]
+    task-keys-sqlite["task-keys-sqlite: ExecutionPlan.keys + sqlite branch<br/>files: src/adapters/adapter-types.ts +2 more"]:::done
+    task-keys-pg["task-keys-pg: postgres builder keys branch<br/>files: src/adapters/postgres/sql.ts +1 more"]:::done
+    task-keys-conformance["task-keys-conformance: cross-backend keys coverage<br/>files: src/adapters/adapter-contract.ts +1 more"]:::done
+    task-pushdown-module["task-pushdown-module: leafHintsOf fold module<br/>files: src/algebra/pushdown.ts +1 more"]:::done
+    task-leaf-hints["task-leaf-hints: leaf hints parameter<br/>files: src/algebra/expression.ts +3 more"]:::done
+    task-barrel-export["task-barrel-export: barrel export LeafHints<br/>files: src/index.ts +1 more"]:::done
+    task-recall-callsites["task-recall-callsites: recall consumes leaf hints<br/>files: src/surface/recall.ts +2 more"]:::done
+    task-explain-callsites["task-explain-callsites: explain consumes sealed filter plan<br/>files: src/surface/explain.ts +2 more"]:::done
+    task-differential-property["task-differential-property: differential property test<br/>files: src/surface/pushdown.property.test.ts"]:::done
+    task-integration-pin["task-integration-pin: MCP recall regression pin<br/>files: src/mcp/server.integration.test.ts"]:::done
+    task-key-indexes["task-key-indexes: covering key indexes<br/>files: src/adapters/sqlite.ts +3 more"]:::done
+    task-purity-pin["task-purity-pin: canon-stage purity pin<br/>files: src/retrieval/read-pipeline.test.ts"]:::done
+    task-golden-pin["task-golden-pin: golden RecallResult pin<br/>files: src/surface/recall-golden.test.ts"]:::done
+    task-from-corpus["task-from-corpus: fromCorpus stage<br/>files: src/algebra/expression.ts +1 more"]:::done
+    task-shared-prefix["task-shared-prefix: recall shared-prefix materialization<br/>files: src/surface/recall.ts +1 more"]:::done
 
     task-keys-sqlite --> task-keys-pg
     task-keys-sqlite --> task-keys-conformance
@@ -109,7 +109,7 @@ files:
   - src/adapters/adapter-types.ts
   - src/adapters/sqlite.ts
   - src/adapters/sqlite.test.ts
-status: pending
+status: done
 ```
 
 Add the `keys?: string[]` field to `ExecutionPlan` (spec §3.1) and compile it in sqlite's
@@ -183,7 +183,7 @@ depends_on: [task-keys-sqlite]
 files:
   - src/adapters/postgres/sql.ts
   - src/adapters/postgres/sql.test.ts
-status: pending
+status: done
 ```
 
 Mirror the sqlite `keys` branch in `buildQuery` — same position (after `key`, before
@@ -230,7 +230,7 @@ depends_on: [task-keys-sqlite, task-keys-pg]
 files:
   - src/adapters/adapter-contract.ts
   - src/adapters/postgres/parity.pg.test.ts
-status: pending
+status: done
 ```
 
 Extend the shared backend-agnostic adapter contract (invoked by `conformance.pg.test.ts`)
@@ -300,7 +300,7 @@ depends_on: [task-keys-sqlite]
 files:
   - src/algebra/pushdown.ts
   - src/algebra/pushdown.test.ts
-status: pending
+status: done
 ```
 
 New pure module (spec §3.3): `LeafHints` + `leafHintsOf`, the single derivation point from a
@@ -379,7 +379,7 @@ files:
   - src/algebra/expression.test.ts
   - src/algebra/async-expression.ts
   - src/algebra/async-expression.test.ts
-status: pending
+status: done
 ```
 
 `leaf(corpusId, hints?)` and `leafAsync(corpusId, hints?)` spread the optional `LeafHints`
@@ -437,7 +437,7 @@ depends_on: [task-pushdown-module]
 files:
   - src/index.ts
   - src/algebra/pushdown.test.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
@@ -463,7 +463,7 @@ files:
   - src/surface/recall.ts
   - src/surface/recall.test.ts
   - src/surface/test-support.ts
-status: pending
+status: done
 ```
 
 The sealed pair (spec §4, amendment A1): `buildFilterPlan(args, family)` derives σ stages AND
@@ -564,7 +564,7 @@ files:
   - src/surface/explain.ts
   - src/surface/explain.test.ts
   - src/surface/recall.ts
-status: pending
+status: done
 ```
 
 Migrate `explainRecall`'s five stage-re-derivation queries to `buildFilterPlan` + hinted
@@ -612,7 +612,7 @@ id: task-differential-property
 depends_on: [task-explain-callsites]
 files:
   - src/surface/pushdown.property.test.ts
-status: pending
+status: done
 ```
 
 The spec's safety net (§8.3, amendment A3): with a **pinned `asOf`**, recall/explain results
@@ -671,7 +671,7 @@ id: task-integration-pin
 depends_on: [task-recall-callsites]
 files:
   - src/mcp/server.integration.test.ts
-status: pending
+status: done
 ```
 
 One end-to-end pin through the MCP server (spec §8.4): a subject+key-scoped `recall` tool
@@ -726,7 +726,7 @@ files:
   - src/adapters/sqlite.test.ts
   - src/adapters/postgres/schema.ts
   - src/adapters/postgres/schema.pg.test.ts
-status: pending
+status: done
 ```
 
 Key-only pushed queries have no covering index (spec §7): add
@@ -788,7 +788,7 @@ id: task-purity-pin
 depends_on: []
 files:
   - src/retrieval/read-pipeline.test.ts
-status: pending
+status: done
 ```
 
 Regression pin for the audited purity facts Phase 2 relies on (spec §5, amendment A6): the
@@ -847,7 +847,7 @@ id: task-golden-pin
 depends_on: [task-recall-callsites]
 files:
   - src/surface/recall-golden.test.ts
-status: pending
+status: done
 ```
 
 Captures the full post-Phase-1 `RecallResult` — including the `warnings` array ORDER
@@ -911,7 +911,7 @@ depends_on: [task-leaf-hints]
 files:
   - src/algebra/expression.ts
   - src/algebra/expression.test.ts
-status: pending
+status: done
 ```
 
 `fromCorpus(c): Stage<void, Corpus>` — a physical seam that starts a pipeline from an
@@ -966,7 +966,7 @@ depends_on: [task-explain-callsites, task-from-corpus, task-golden-pin, task-pur
 files:
   - src/surface/recall.ts
   - src/surface/recall.test.ts
-status: pending
+status: done
 ```
 
 Phase 2 (spec §5): evaluate `leaf(hints) → σ → canon[0] → canon[1]` once; compute the
