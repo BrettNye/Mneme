@@ -3,12 +3,23 @@ import { openSession } from "./session.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { recall, buildFilterPlan } from "./recall.js";
+import {
+  recall,
+  buildFilterPlan,
+  loadAliasContext,
+  aliasContextFrom,
+  buildRecallRanker,
+  buildRecallRankerPure,
+  warmRecallValuesOver,
+} from "./recall.js";
 import { remember, listCorpora, ensureCorpus } from "./remember.js";
 import { freshSession, jaccardDeps, makeFakeHybridDeps, makeSpySession } from "./test-support.js";
 import { _resetEmbeddingsForTest } from "./embeddings.js";
 import { KEY_ALIAS_KEY } from "../retrieval/key-alias.js";
 import type { Session } from "./types.js";
+import { corpusOf } from "../algebra/types.js";
+import type { Corpus } from "../algebra/types.js";
+import type { EvalContext } from "../algebra/expression.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -713,5 +724,138 @@ describe("recall — leaf hint pushdown", () => {
     expect(warmupReadCalls.length).toBe(1);
     expect(warmupReadCalls[0].keys).toEqual(expect.arrayContaining(["editor", "preferred_editor"]));
     expect(warmupReadCalls[0].keys?.length).toBe(2);
+  });
+});
+
+// ── task-pure-helpers: zero-behavior-change extractions behind the read seam ──
+
+describe("aliasContextFrom — the pure post-read part of loadAliasContext", () => {
+  it("given the same already-read alias claims, matches loadAliasContext's result exactly", () => {
+    const s = freshSession();
+    const corpus = "alias-pure-basic";
+    remember(s, { subject: "user:brett", key: "preferred_editor", value: "emacs", corpus });
+    remember(s, { subject: "key:editor", key: "alias-of", value: "preferred_editor", corpus });
+    const now = Date.now();
+    const aliasClaims = s.mneme.read(corpus, { corpusId: corpus, key: KEY_ALIAS_KEY });
+
+    const pure = aliasContextFrom(aliasClaims, now, undefined);
+    const wrapped = loadAliasContext(s, corpus, now, undefined);
+
+    expect(pure).toEqual(wrapped);
+    expect(pure.aliasMap).toEqual({ editor: "preferred_editor" });
+    expect(pure.warnings).toEqual([]);
+    s.close();
+  });
+
+  it("emits the same variant-cardinality warning as loadAliasContext when a variant carries a cardinality override", () => {
+    const s = freshSession();
+    const corpus = "alias-pure-cardinality";
+    remember(s, { subject: "user:brett", key: "editor", value: "vim", corpus });
+    remember(s, { subject: "user:brett", key: "preferred_editor", value: "emacs", corpus });
+    remember(s, { subject: "key:editor", key: "alias-of", value: "preferred_editor", corpus });
+    const now = Date.now();
+    const keyCardinality = { editor: "multi" as const };
+    const aliasClaims = s.mneme.read(corpus, { corpusId: corpus, key: KEY_ALIAS_KEY });
+
+    const pure = aliasContextFrom(aliasClaims, now, keyCardinality);
+    const wrapped = loadAliasContext(s, corpus, now, keyCardinality);
+
+    expect(pure).toEqual(wrapped);
+    expect(pure.warnings.some((w) => /cardinality|variant/.test(w))).toBe(true);
+    s.close();
+  });
+
+  it("loadAliasContext still degrades gracefully on a read failure (aliasContextFrom is never reached)", () => {
+    const s = freshSession();
+    const corpus = "alias-pure-fail";
+    const readSpy = vi.spyOn(s.mneme, "read").mockImplementation(() => {
+      throw new Error("simulated failure");
+    });
+    const result = loadAliasContext(s, corpus, Date.now(), undefined);
+    readSpy.mockRestore();
+    expect(result.aliasMap).toEqual({});
+    expect(result.warnings.some((w) => /alias load failed — proceeding without alias expansion:/.test(w))).toBe(true);
+    s.close();
+  });
+});
+
+describe("buildFilterPlan — sigmas are pure stages (task-pure-helpers B4)", () => {
+  it("apply without a ctx argument, and filter identically to before", () => {
+    const s = freshSession();
+    const corpus = "filterplan-pure";
+    remember(s, { subject: "a", key: "k", value: "v1", corpus });
+    remember(s, { subject: "b", key: "k", value: "v2", corpus });
+    const mixed = s.mneme.read(corpus, { corpusId: corpus });
+
+    const { sigmas } = buildFilterPlan({ about: "q", corpus, subject: "a" });
+    const filtered = sigmas.reduce((acc, stage) => (stage as (c: Corpus) => Corpus)(acc), corpusOf(mixed));
+    expect(filtered.claims.every((cl) => cl.subject === "a")).toBe(true);
+    expect(filtered.claims.length).toBe(1);
+    s.close();
+  });
+});
+
+describe("buildRecallRankerPure — the ONE home for the alpha/half-life dials", () => {
+  it("recencyAlpha=1 reduces to pure similarity ranking, callable without ctx", () => {
+    const s = freshSession();
+    const corpus = "ranker-pure-alpha1";
+    remember(s, { subject: "x", key: "fact", value: "the quick brown fox", corpus });
+    remember(s, { subject: "x", key: "note", value: "totally unrelated", corpus });
+    const claims = s.mneme.read(corpus, { corpusId: corpus });
+
+    const ranker = buildRecallRankerPure(
+      { about: "the quick brown fox", corpus, recencyAlpha: 1 },
+      "jaccard",
+      Date.now(),
+    );
+    const ranked = ranker(corpusOf(claims));
+    expect(ranked.scored[0].claim.value).toBe("the quick brown fox");
+    s.close();
+  });
+
+  it("default (blended) ranking matches buildRecallRanker's Stage wrapper for the same `now`", () => {
+    const s = freshSession();
+    const corpus = "ranker-pure-blend";
+    remember(s, { subject: "x", key: "fact", value: "hello world", corpus });
+    remember(s, { subject: "x", key: "note", value: "unrelated noise", corpus });
+    const claims = s.mneme.read(corpus, { corpusId: corpus });
+    const now = Date.now();
+
+    const args = { about: "hello world", corpus };
+    const pure = buildRecallRankerPure(args, "jaccard", now)(corpusOf(claims));
+    const wrapped = buildRecallRanker(args, "jaccard")(
+      corpusOf(claims),
+      { evaluationClock: now } as unknown as EvalContext,
+    );
+    expect(pure).toEqual(wrapped);
+    s.close();
+  });
+});
+
+describe("warmRecallValuesOver — sync warmRecallValues delegates over the RecallSource seam", () => {
+  afterEach(() => {
+    _resetEmbeddingsForTest();
+  });
+
+  it("session.mneme satisfies RecallSource; delegation warms values identically", async () => {
+    const s = freshSession();
+    const corpus = "warm-over-hybrid";
+    remember(s, { subject: "s", key: "k", value: "some hybrid value", corpus });
+    const deps = await makeFakeHybridDeps();
+    const embedSpy = vi.spyOn(deps.embeddings.adapter!, "embed");
+
+    await warmRecallValuesOver(s.mneme, { about: "hybrid value", corpus }, deps.embeddings);
+
+    const embedded = embedSpy.mock.calls.flatMap((call) => call[0] as string[]);
+    expect(embedded).toContain("some hybrid value");
+    s.close();
+  });
+
+  it("jaccard rankFn is a no-op (no adapter/cache required)", async () => {
+    const s = freshSession();
+    await expect(
+      warmRecallValuesOver(s.mneme, { about: "x", corpus: "no-warm" }, { rankFn: "jaccard" }),
+    ).resolves.toBeUndefined();
+    s.close();
   });
 });

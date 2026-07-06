@@ -9,13 +9,18 @@
  * and reusable outside the MCP transport.
  */
 import type { Predicate, RankedCorpus } from "../index.js";
-import { pipe, leaf, sigma, rho } from "../mneme.js";
+import { pipe, leaf } from "../mneme.js";
+import { sigma as sigmaOp } from "../algebra/selection.js";
+import { rho as rhoOp } from "../algebra/similarity.js";
+import { rankBlend } from "../algebra/ranking.js";
 import { leafHintsOf, type LeafHints } from "../algebra/pushdown.js";
 import { kappa as kappaOp } from "../algebra/composition.js";
 import type { Stage } from "../algebra/expression.js";
 import { fromCorpus } from "../algebra/expression.js";
 import type { Corpus } from "../algebra/types.js";
 import type { Session, ReadDeps } from "./types.js";
+import type { Claim } from "../core/claim.js";
+import type { ExecutionPlan } from "../adapters/adapter-types.js";
 import { pointEstimate } from "../core/confidence.js";
 import { canonicalReadStages } from "../retrieval/read-pipeline.js";
 import { RULE } from "../distribution/rules.js";
@@ -48,6 +53,22 @@ export interface EmbeddingState {
 /** @deprecated prefer ReadDeps; retained as a byte-compatible alias. */
 export type RecallDeps = ReadDeps;
 
+/** The shape recall needs from a corpus def — structurally satisfied by CorpusDef. */
+export type CorpusDefLike = {
+  id: string;
+  schema?: { keyCardinality?: Record<string, "single" | "multi"> };
+};
+
+/**
+ * Minimal read seam recall needs. Satisfied structurally by BOTH the sync `Mneme`
+ * facade (via `session.mneme`) and a future async facade — `read` may return its
+ * rows synchronously or via a Promise; callers `await` it either way.
+ */
+export interface RecallSource {
+  listCorpora(filter?: (c: CorpusDefLike) => boolean): CorpusDefLike[];
+  read(corpusId: string, plan: ExecutionPlan): Claim[] | Promise<Claim[]>;
+}
+
 // ── Shared private helper: alias-load + variant-cardinality warnings ──────────
 
 export interface AliasLoadContext {
@@ -57,33 +78,16 @@ export interface AliasLoadContext {
 }
 
 /**
- * Loads alias claims from the corpus and builds the alias map + variant-cardinality warnings.
- * On failure: degrades gracefully — returns empty alias map with a warning.
- * Shared by both recall() and keyCensus() to avoid duplication.
+ * The pure post-read part of loadAliasContext (task-pure-helpers): builds the alias
+ * map + variant-cardinality warnings from already-fetched alias claims. No I/O — safe
+ * to call outside the read/try-catch boundary.
  */
-export function loadAliasContext(
-  session: Session,
-  corpus: string,
+export function aliasContextFrom(
+  aliasClaims: readonly Claim[],
   now: number,
   keyCardinality?: Record<string, "single" | "multi">,
 ): AliasLoadContext {
-  const warnings: string[] = [];
-  let aliasMap: KeyAliasMap = {};
-  let selfAliases: string[] = [];
-
-  try {
-    const aliasClaims = session.mneme.read(corpus, {
-      corpusId: corpus,
-      key: KEY_ALIAS_KEY,
-    });
-    const { map, selfAliases: sa, warnings: loaderWarnings } = aliasMapOf(aliasClaims, { evaluationInstant: now });
-    aliasMap = map;
-    selfAliases = sa;
-    warnings.push(...loaderWarnings);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    warnings.push(`alias load failed — proceeding without alias expansion: ${msg}`);
-  }
+  const { map: aliasMap, selfAliases, warnings } = aliasMapOf(aliasClaims, { evaluationInstant: now });
 
   // Variant-cardinality warnings
   if (keyCardinality) {
@@ -97,6 +101,33 @@ export function loadAliasContext(
   }
 
   return { aliasMap, selfAliases, warnings };
+}
+
+/**
+ * Loads alias claims from the corpus and builds the alias map + variant-cardinality warnings.
+ * On failure: degrades gracefully — returns empty alias map with a warning.
+ * Shared by both recall() and keyCensus() to avoid duplication.
+ */
+export function loadAliasContext(
+  session: Session,
+  corpus: string,
+  now: number,
+  keyCardinality?: Record<string, "single" | "multi">,
+): AliasLoadContext {
+  try {
+    const aliasClaims = session.mneme.read(corpus, {
+      corpusId: corpus,
+      key: KEY_ALIAS_KEY,
+    });
+    return aliasContextFrom(aliasClaims, now, keyCardinality);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      aliasMap: {},
+      selfAliases: [],
+      warnings: [`alias load failed — proceeding without alias expansion: ${msg}`],
+    };
+  }
 }
 
 /** Parse an asOf temporal scope (epoch ms number or ISO-8601 string) to epoch ms.
@@ -176,38 +207,70 @@ export interface FilterPlan {
  *  amendment A1): a hint narrower than σ is unrepresentable by construction, since both
  *  are folds over the same `preds` array. Mirrors the family-vs-single logic used by
  *  both recall() and explainRecall(). */
+/** σ stages + leaf hints derived from ONE predicate list — the sealed pair (spec §4
+ *  amendment A1): a hint narrower than σ is unrepresentable by construction, since both
+ *  are folds over the same `preds` array. Mirrors the family-vs-single logic used by
+ *  both recall() and explainRecall().
+ *
+ *  Sigmas are the PURE `sigmaOp(p)` stages (task-pure-helpers B4): value-predicate
+ *  routing (routeValuePredicates, from mneme.js's ctx-aware `sigma`) is a no-op for
+ *  subjectEq/keyEq/keyIn (they are never value predicates), so this is byte-safe —
+ *  and an arity-1 `(c: Corpus) => Corpus` stays assignable to `Stage<Corpus, Corpus>`. */
 export function buildFilterPlan(args: RecallArgs, family?: string[]): FilterPlan {
   const preds: Predicate[] = [];
   if (args.subject) preds.push({ op: "subjectEq", value: args.subject });
   if (family && family.length > 1) preds.push({ op: "keyIn", values: family });
   else if (args.key) preds.push({ op: "keyEq", value: args.key });
-  return { sigmas: preds.map((p) => sigma(p)), hints: leafHintsOf(preds) };
+  return { sigmas: preds.map((p) => sigmaOp(p)), hints: leafHintsOf(preds) };
 }
 
-/** The recall ranker: pure rho.by when recencyAlpha===1, else rho.blend (default alpha .5 / 90d). */
-export function buildRecallRanker(args: RecallArgs, rankFn: string): Stage<Corpus, RankedCorpus> {
+/** The ONE home for the alpha/half-life dials (task-pure-helpers B10): pure rho when
+ *  recencyAlpha===1, else rankBlend (default alpha .5 / 90d). Clock-free — `now` is a
+ *  parameter, not read from ctx. */
+export function buildRecallRankerPure(
+  args: RecallArgs,
+  rankFn: string,
+  now: number,
+): (c: Corpus) => RankedCorpus {
   return args.recencyAlpha === 1
-    ? rho.by(rankFn, args.about)
-    : rho.blend(rankFn, args.about, {
-        alpha: args.recencyAlpha ?? 0.5,
-        halfLifeDays: args.recencyHalfLifeDays ?? 90,
-      });
+    ? rhoOp(rankFn, args.about)
+    : rankBlend(
+        rankFn,
+        args.about,
+        { alpha: args.recencyAlpha ?? 0.5, halfLifeDays: args.recencyHalfLifeDays ?? 90 },
+        now,
+      );
+}
+
+/** Stage wrapper — a one-line ctx adapter over buildRecallRankerPure. explain.ts and
+ *  recall() keep consuming this unchanged. */
+export function buildRecallRanker(args: RecallArgs, rankFn: string): Stage<Corpus, RankedCorpus> {
+  return (c, ctx) => buildRecallRankerPure(args, rankFn, ctx.evaluationClock ?? Date.now())(c);
 }
 
 /** Warm embedding values for the σ-scoped claims (family-expanded), so hybrid scoring
  *  uses cosine not jaccard-fallback. No-op unless hybrid + adapter + cache present.
  *  Single read (amendment A9): a family expands to `keys: family` in ONE adapter plan
  *  instead of one read per family member — the adapter's own key-set match replaces the
- *  per-key loop + manual id-dedup (a family is a set; the adapter already dedupes rows). */
-export async function warmRecallValues(
-  session: Session, args: RecallArgs, embeddings: EmbeddingState, family?: string[],
+ *  per-key loop + manual id-dedup (a family is a set; the adapter already dedupes rows).
+ *  Takes any `RecallSource` (task-pure-helpers): `warmRecallValues` delegates with
+ *  `session.mneme`. */
+export async function warmRecallValuesOver(
+  source: RecallSource, args: RecallArgs, embeddings: EmbeddingState, family?: string[],
 ): Promise<void> {
   if (embeddings.rankFn === "jaccard" || !embeddings.adapter || !embeddings.cache) return;
   const plan = family && family.length > 1
     ? { corpusId: args.corpus, subject: args.subject, keys: family }
     : { corpusId: args.corpus, subject: args.subject, key: args.key };
-  const rawClaims = session.mneme.read(args.corpus, plan);
+  const rawClaims = await source.read(args.corpus, plan);
   await warmValues(embeddings.adapter, embeddings.cache, rawClaims.map((c) => c.value), [args.about]);
+}
+
+/** Sync wrapper — exact signature preserved; delegates with `session.mneme`. */
+export async function warmRecallValues(
+  session: Session, args: RecallArgs, embeddings: EmbeddingState, family?: string[],
+): Promise<void> {
+  return warmRecallValuesOver(session.mneme, args, embeddings, family);
 }
 
 export async function recall(
