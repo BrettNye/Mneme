@@ -245,6 +245,9 @@ import { rho as rhoOp } from "../algebra/similarity.js";
 import { rankBlend } from "../algebra/ranking.js";
 
 /** Minimal read seam recall needs. Satisfied structurally by BOTH Mneme and AsyncMneme. */
+/** The shape recall needs from a corpus def — structurally satisfied by CorpusDef. */
+export type CorpusDefLike = { id: string; schema?: { keyCardinality?: Record<string, "single" | "multi"> } };
+
 export interface RecallSource {
   listCorpora(filter?: (c: CorpusDefLike) => boolean): CorpusDefLike[];
   read(corpusId: string, plan: ExecutionPlan): Claim[] | Promise<Claim[]>;
@@ -360,8 +363,19 @@ it("recallAsync over an async source serves the same matches as sync recall", as
   `recall.test.ts` existing cases (incl. "exactly ONE non-alias adapter query"),
   `explain.test.ts`, full `src/surface` + `src/mcp` suites, `npm run typecheck` — all
   green with no test-body edits (B15 comment refresh excepted).
-- `recallAsync` exported; the in-file seam smoke passes (deep-equal vs sync).
-- Read order alias → warm → prefix asserted via `plansSeen` order (one new test).
+- `recallAsync` exported; the in-file seam smoke passes (deep-equal vs sync). Its JSDoc
+  carries BOTH caveats: the B8 in-memory-catalog note AND the B13 snapshot sentence
+  ("reads are not a transaction; snapshot consistency holds only within the single
+  prefix read").
+- Read order: under `jaccardDeps` the warm read is SKIPPED (`warmRecallValues`
+  early-returns) and the warm/prefix plans are byte-identical under hybrid deps — so
+  `plansSeen` alone cannot order them. Assert instead via a labeled seam spy (an inline
+  `RecallSource` wrapper over `session.mneme` that records call labels: alias read
+  (`plan.key === KEY_ALIAS_KEY`) strictly before the prefix read; the warm→prefix
+  relative order is pinned by code order and the shared-core structure, not by test.
+- `recallAsync` alias-load failure (seam `read` throwing for the alias plan) degrades
+  with the exact sync warning text (`alias load failed — proceeding without alias
+  expansion: ...`) — one smoke test.
 - The core never touches `mneme.query`/`leaf` (grep recall.ts: no `leaf(` import usage
   remains in the recall path; `fromCorpus` import dropped if unused).
 
@@ -401,7 +415,14 @@ export async function supersessionOutcomeAsync(
 ): Promise<SupersessionOutcome> {
   const now = Date.now();
   const keyCardinality = effectiveKeyCardinality(source, corpus, undefined);
-  // alias read + aliasContextFrom (same try-less shape as sync: loadAliasContext's core)
+  // Alias load DEGRADES like sync: loadAliasContext's read sits inside a try/catch that
+  // falls back to an empty aliasMap (recall.ts:74-86). A try-less read here would throw
+  // where sync yields a real outcome — a silent parity divergence.
+  let aliasMap: KeyAliasMap = {};
+  try {
+    const aliasClaims = await source.read(corpus, { corpusId: corpus, key: KEY_ALIAS_KEY });
+    aliasMap = aliasContextFrom(aliasClaims as Claim[], now, keyCardinality).aliasMap;
+  } catch { /* degrade exactly like sync loadAliasContext */ }
   const written = (await source.readByIds(corpus, [claimId as ClaimId]))[0];
   if (!written) return { action: "committed", deprecatedIds: [] };
   const group = await source.read(corpus, { corpusId: corpus, subject: written.subject, key: written.key });
@@ -432,7 +453,9 @@ it("async attribution equals sync attribution for the same store state", async (
   with zero behavioral edits.
 - `supersessionOutcomeAsync` equals sync attribution for: superseded (distinct
   validFroms), merged/duplicate, committed (no group), written-not-found (foreign id →
-  `{action: "committed", deprecatedIds: []}`).
+  `{action: "committed", deprecatedIds: []}`), AND alias-read failure (a `source.read`
+  that throws for the `KEY_ALIAS_KEY` plan → async outcome equals sync-with-empty-aliasMap,
+  not a throw).
 - The async twin locates the written claim via `readByIds`, not a full-corpus read
   (spy-asserted plan shapes).
 
@@ -468,15 +491,28 @@ export interface RememberAsyncOptions {
   writer?: string; profile?: string; workspace?: string; source?: Source;
 }
 
+/** The structural seam rememberAsync needs — AsyncMneme satisfies it. Includes readByIds
+ *  because the attribution step (supersessionOutcomeAsync) requires it. */
+export type AsyncRememberSource = RecallSource & {
+  createCorpus(def: CorpusDef): CorpusDef;
+  commit(corpusId: string, candidate: CandidateClaim,
+    opts: { writer: string; idempotencyKey?: string }): Promise<{ id: string; status: string }>;
+  readByIds(corpusId: string, ids: ClaimId[]): Promise<Claim[]> | Claim[];
+};
+
 export function ensureCorpusAsync(
   mneme: { createCorpus(def: CorpusDef): CorpusDef; listCorpora(filter?: (c: { id: string }) => boolean): { id: string }[] },
   corpusId: string, spec?: Omit<CorpusSpec, "id">,
 ): void {
   if (mneme.listCorpora().some((c) => c.id === corpusId)) return; // first-declaration-wins (B12)
+  // Strip explicit-undefined spec entries BEFORE spreading (same bug class as spec audit
+  // 2.5): `{ scopeFields: undefined }` would clobber the defaults with undefined.
+  const cleanSpec = Object.fromEntries(
+    Object.entries(spec ?? {}).filter(([, v]) => v !== undefined));
   mneme.createCorpus(corpusDefFromSpec({
     id: corpusId,
     scopeFields: { project: "string", person: "string", context: "string" },
-    ...spec,
+    ...cleanSpec,
   }));
 }
 
@@ -547,9 +583,15 @@ export function asyncifyAdapter(sync: StorageAdapter): AsyncStorageAdapter { /* 
 ```typescript
 // src/surface/async-ops.test.ts — one matrix arm (all arms pin asOf, B7)
 it("parity: subject+key scoped recall — sync sqlite vs async(asyncified sqlite)", async () => {
-  const { syncMneme, asyncMneme } = sameStorePair(); // one sqlite adapter, two facades, same corpus def via corpusDefFromSpec
-  seed(syncMneme);
-  const s = await recall(sessionOf(syncMneme), { ...ARGS, asOf: T0 }, jaccardDeps);
+  // sameStorePair: ONE sqlite adapter, two facades (createMneme + createMnemeAsync over
+  // asyncifyAdapter(same)). Each facade has its OWN in-memory Catalog — the corpus def
+  // (via corpusDefFromSpec) must be declared into BOTH, or recallAsync hits the
+  // unknown-corpus early return and every arm compares empty-vs-populated. Also add a
+  // small Session-over-supplied-adapter builder to test-support (mirror makeSpySession
+  // minus the spy) so the sync arm can run recall(session, ...) over the shared adapter.
+  const { syncSession, asyncMneme } = sameStorePair();
+  seed(syncSession);
+  const s = await recall(syncSession, { ...ARGS, asOf: T0 }, jaccardDeps);
   const a = await recallAsync(asyncMneme, { ...ARGS, asOf: T0 }, jaccardDeps);
   expect(a).toEqual(s); // matches incl ids, content, warnings + order, coverage, topScore, abstained, rankFn
 });
@@ -561,6 +603,8 @@ it("parity: subject+key scoped recall — sync sqlite vs async(asyncified sqlite
   alias-family / no-filter / unknown-corpus / `recencyAlpha: 1` / abstained
   (`abstainBelowTop` high) / existing-but-empty corpus / the golden three-warning fixture
   recipe (alias → coverage → cardinality warnings order asserted) — 10 arms (B14).
+- The unknown-corpus arm ALSO asserts the async catalog was not mutated
+  (`asyncMneme.listCorpora()` unchanged after the recall — read-only guarantee).
 - Remember parity: same write sequence into two stores (pinned pairwise-distinct
   validFroms, UUID stub reset to the same sequence per store — B3): equal status +
   supersession (action, deprecatedIds).
@@ -585,7 +629,12 @@ The linchpin gate (spec §5.4): sync `recall` (SQLite) vs `recallAsync`
 (`createMnemeAsync(createPostgresAdapter(...))` built per `parity.pg.test.ts`'s
 `dbPerTenantRouter` testcontainers pattern) — same seeded logical claims with FIXED ids
 (COLLATE-"C" pattern), same corpus defs via `corpusDefFromSpec`, deep-equal
-`RecallResult` across the same matrix. A recall that isn't parity-proven is not done.
+`RecallResult`. Ratified narrowing of §5.4's "same arg matrix": the pg suite carries the
+arms that exercise adapter-visible behavior (scoping/pushdown, alias family, no-filter
+full scan, the three-warning fixture); the post-read pure-knob arms (`recencyAlpha: 1`,
+abstained, empty-corpus, unknown-corpus) are adapter-invisible by construction — the
+shared `recallCore` applies them after the read — and stay fast-parity-only. A recall
+that isn't parity-proven is not done.
 
 ## Implementation
 
