@@ -274,6 +274,11 @@ it("fromCorpus works in an evaluateAsync pipeline", async () => {
   const adapter = { query: (p: unknown) => { queries.push(p); return Promise.resolve([]); } } as any;
   const ctx = { adapter, catalog } as AsyncEvalContext;
   const c = corpusOf([makeClaim("s", "v")]);
+  // Cast is safe here ONLY because fromCorpus and liftOp-wrapped ops ignore
+  // their `ctx` argument entirely — see fromCorpus's JSDoc "Async-pipeline
+  // note" in expression.ts. Never copy this cast to smuggle ctx-aware stages
+  // (leaf, gammaStage) into an async pipeline; they read ctx.adapter/
+  // ctx.catalog and require their dedicated *Async twins instead.
   const out = await evaluateAsync<any>(
     [fromCorpus(c), liftOp(sigma({ op: "subjectEq", value: "s" }))] as unknown as AsyncStage<any, any>[],
     ctx

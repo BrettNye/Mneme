@@ -48,6 +48,17 @@ export function leaf(corpusId: string, hints?: LeafHints): Stage<void, Corpus> {
  * I/O already done. No new algebra semantics, so it needs no AST node and
  * never appears in replay provenance. Returns the corpus by reference (no
  * copy); downstream stages already treat inputs as immutable.
+ *
+ * Async-pipeline note: fromCorpus's returned Stage<void, Corpus> ignores its
+ * `ctx` argument entirely, so it is safe to run inside an evaluateAsync
+ * pipeline via `as unknown as AsyncStage<any, any>` — see the cast in
+ * expression.test.ts's "fromCorpus works in an evaluateAsync pipeline" case.
+ * That cast is sound ONLY because both fromCorpus and liftOp-wrapped pure ops
+ * never read ctx.adapter/ctx.catalog, so the sync-vs-async EvalContext shape
+ * mismatch is nominal, not behavioral. This does NOT generalize: ctx-aware
+ * seams like leaf() and gammaStage() DO read ctx.adapter/ctx.catalog and must
+ * never be smuggled into an async pipeline via the same cast — use their
+ * dedicated *Async twins instead, or a context-generic signature.
  */
 export function fromCorpus(c: Corpus): Stage<void, Corpus> {
   return () => c;
