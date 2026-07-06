@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { recall } from "./recall.js";
 import { explainRecall } from "./explain.js";
 import { remember } from "./remember.js";
-import { freshSession, jaccardDeps } from "./test-support.js";
+import { freshSession, jaccardDeps, makeSpySession } from "./test-support.js";
+import { KEY_ALIAS_KEY } from "../retrieval/key-alias.js";
+import type { Session } from "./types.js";
 
 describe("explainRecall — consistency invariant", () => {
   it("served dispositions === recall().matches (same query, same deps)", async () => {
@@ -139,5 +141,39 @@ describe("explainRecall — dispositions", () => {
     const t = await explainRecall(s, { about: "x", corpus: "does-not-exist", limit: 5 }, jaccardDeps);
     expect(t.candidateCount).toBe(0);
     expect(t.claims).toEqual([]);
+  });
+});
+
+// ── Leaf-hint pushdown (task-explain-callsites) ───────────────────────────────
+
+describe("explainRecall — leaf hint pushdown", () => {
+  const CORPUS = "explain-hint-pushdown";
+
+  function seedClaims(
+    s: Session,
+    entries: { subject: string; key: string; value?: string }[],
+    corpus = CORPUS,
+  ): void {
+    for (const e of entries) {
+      remember(s, { subject: e.subject, key: e.key, value: e.value ?? `${e.subject}-${e.key}`, corpus });
+    }
+  }
+
+  it("all five explain queries carry the subject hint for a subject-scoped explain", async () => {
+    const { session, plansSeen } = makeSpySession();
+    seedClaims(session, [
+      { subject: "a", key: "k" },
+      { subject: "b", key: "k" },
+      { subject: "b", key: "x" },
+    ]);
+    const before = plansSeen.length;
+    await explainRecall(
+      session,
+      { about: "q", corpus: CORPUS, subject: "a", key: "k", limit: 5 },
+      jaccardDeps,
+    );
+    const pipelinePlans = plansSeen.slice(before).filter((p) => p.key !== KEY_ALIAS_KEY);
+    expect(pipelinePlans.length).toBeGreaterThanOrEqual(5);
+    expect(pipelinePlans.every((p) => p.subject === "a")).toBe(true);
   });
 });

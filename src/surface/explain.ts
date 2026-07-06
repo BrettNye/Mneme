@@ -11,7 +11,7 @@ import type { Session } from "./types.js";
 import {
   parseAsOf,
   loadAliasContext,
-  buildFilterSigmas,
+  buildFilterPlan,
   buildRecallRanker,
   warmRecallValues,
   MCP_EVIDENCE_POOLING_RULE,
@@ -93,7 +93,7 @@ export async function explainRecall(
       warnings.push(`warm-up failed — scores may differ from recall: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    const sigmas = buildFilterSigmas(args, family);
+    const { sigmas, hints } = buildFilterPlan(args, family);
     const canon = canonicalReadStages({
       evaluationInstant: now,
       keyCardinality,
@@ -104,11 +104,11 @@ export async function explainRecall(
     const clock = { evaluationClock: now };
 
     // Re-derive stage-by-stage (recall() untouched). canon = [τ_valid, ⊕_dedupe, ⊥/resolve, drop].
-    const afterSigma = session.mneme.query<AlgebraCorpus>(args.corpus, pipe(leaf(args.corpus), ...sigmas), clock);
-    const afterTau = session.mneme.query<AlgebraCorpus>(args.corpus, pipe(leaf(args.corpus), ...sigmas, canon[0]), clock);
-    const afterDedupe = session.mneme.query<AlgebraCorpus>(args.corpus, pipe(leaf(args.corpus), ...sigmas, canon[0], canon[1]), clock);
-    const afterDrop = session.mneme.query<AlgebraCorpus>(args.corpus, pipe(leaf(args.corpus), ...sigmas, canon[0], canon[1], canon[2], canon[3]), clock);
-    const ranked = session.mneme.query<RankedCorpus>(args.corpus, pipe(leaf(args.corpus), ...sigmas, ...canon, ranker), clock);
+    const afterSigma = session.mneme.query<AlgebraCorpus>(args.corpus, pipe(leaf(args.corpus, hints), ...sigmas), clock);
+    const afterTau = session.mneme.query<AlgebraCorpus>(args.corpus, pipe(leaf(args.corpus, hints), ...sigmas, canon[0]), clock);
+    const afterDedupe = session.mneme.query<AlgebraCorpus>(args.corpus, pipe(leaf(args.corpus, hints), ...sigmas, canon[0], canon[1]), clock);
+    const afterDrop = session.mneme.query<AlgebraCorpus>(args.corpus, pipe(leaf(args.corpus, hints), ...sigmas, canon[0], canon[1], canon[2], canon[3]), clock);
+    const ranked = session.mneme.query<RankedCorpus>(args.corpus, pipe(leaf(args.corpus, hints), ...sigmas, ...canon, ranker), clock);
 
     const idSet = (c: { claims: readonly Claim[] }) => new Set(c.claims.map((cl) => cl.id));
     const tauIds = idSet(afterTau);

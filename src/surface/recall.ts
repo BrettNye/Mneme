@@ -183,12 +183,6 @@ export function buildFilterPlan(args: RecallArgs, family?: string[]): FilterPlan
   return { sigmas: preds.map((p) => sigma(p)), hints: leafHintsOf(preds) };
 }
 
-/** @deprecated transitional delegate over buildFilterPlan — deleted once explain.ts
- *  migrates to buildFilterPlan directly (task-explain-callsites). */
-export function buildFilterSigmas(args: RecallArgs, family?: string[]): Stage<Corpus, Corpus>[] {
-  return buildFilterPlan(args, family).sigmas;
-}
-
 /** The recall ranker: pure rho.by when recencyAlpha===1, else rho.blend (default alpha .5 / 90d). */
 export function buildRecallRanker(args: RecallArgs, rankFn: string): Stage<Corpus, RankedCorpus> {
   return args.recencyAlpha === 1
