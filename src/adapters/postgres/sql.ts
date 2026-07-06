@@ -73,7 +73,18 @@ export function buildQuery(
   return { text, params };
 }
 
-/** Claim upsert: on primary-key conflict, overwrite the row (mirrors SQLite's INSERT OR REPLACE). */
+/**
+ * Claim upsert: on primary-key conflict, overwrite the row (mirrors SQLite's INSERT OR REPLACE).
+ *
+ * TENANT-ISOLATION INVARIANT: the claims PK is `id` alone (not tenant-composite
+ * like idempotency/audit_anchors), so claims-table row-level isolation relies on
+ * claim ids being GLOBALLY UNIQUE across tenants. This holds because ids are
+ * `crypto.randomUUID()` (see core/ids.ts) — two tenants cannot mint the same id,
+ * so the `ON CONFLICT (id)` path is unreachable across tenants and the
+ * `tenant_id = EXCLUDED.tenant_id` reassignment never crosses a tenant boundary.
+ * If the id scheme ever changes to content-addressing (non-globally-unique),
+ * the claims PK must become tenant-composite `(tenant_id, id)`.
+ */
 export function insertClaimSql(prefix: string): string {
   return `
     INSERT INTO ${prefix}claims (

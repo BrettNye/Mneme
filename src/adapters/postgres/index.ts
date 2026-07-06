@@ -264,7 +264,12 @@ export function createPostgresAdapter(opts: PostgresAdapterOptions): AsyncStorag
       // don't contend.
       // Compose tenant + corpus so per-(tenant,corpus) chains lock
       // independently. tenantId==="" keeps today's key = corpusId exactly.
-      const lockKey = tenantId ? `${tenantId}:${corpusId}` : corpusId;
+      // Length-prefix the tenant segment so distinct (tenant,corpus) pairs
+      // can't alias to the same string (e.g. ("a","b:c") vs ("a:b","c")). A
+      // shared lock would only OVER-serialize (never mis-partition, since the
+      // head-read filters corpus_id and tenant_id independently), but a
+      // collision-free key avoids even that spurious contention.
+      const lockKey = tenantId ? `${tenantId.length}:${tenantId}:${corpusId}` : corpusId;
       await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
       const r = await txClient.run(c, fn);
       await c.query("COMMIT");
