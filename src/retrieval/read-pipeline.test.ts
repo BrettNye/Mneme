@@ -14,6 +14,8 @@ import { resolveDeprecateOlder, CONTRADICTION_FLAG_KEY } from "../algebra/resolu
 import { rho as rhoOp } from "../algebra/similarity.js";
 import { KEY_ALIAS_KEY, KEY_SUBJECT_PREFIX, isKeyAliasShaped } from "./key-alias.js";
 import type { EvalContext } from "../algebra/expression.js";
+import { cardinalitySafetyWarnings } from "../surface/cardinality.js";
+import type { Claim } from "../core/claim.js";
 
 // ── Time constants ────────────────────────────────────────────────────────────
 
@@ -494,5 +496,62 @@ describe("stage equivalence: composed vs hand-rolled", () => {
     // Values should also match
     const toValues = (r: RankedCorpus) => r.scored.map((s) => s.claim.value);
     expect(toValues(composedResult)).toEqual(toValues(handRolledResult));
+  });
+});
+
+// ── Purity pin: canonicalReadStages + cardinalitySafetyWarnings never mutate ──
+
+/** ≥2 same-(subject,key) claims with distinct valid.from so ⊥/resolveDeprecateOlder
+ *  actually deprecates the older one during the pipeline run. */
+function contradictingFixture(): Claim[] {
+  return [
+    mk("purity-phone-old", "me", "phone", "Galaxy", T10),
+    mk("purity-phone-new", "me", "phone", "Pixel", T20),
+  ];
+}
+
+/** Single-cardinality (subject, key) group holding ≥2 distinct values — triggers a
+ *  cardinalityCollisions cluster (and thus a cardinalitySafetyWarnings warning). */
+function collidingSingleCardinalityFixture(): Claim[] {
+  return [
+    mk("purity-card-a", "proj", "status", "a", T10),
+    mk("purity-card-b", "proj", "status", "b", T20),
+  ];
+}
+
+/** Deep-freezes every claim (plus its confidence/valid/tags) in addition to the
+ *  corpus array that corpusOf already freezes — corpusOf alone leaves claim
+ *  objects (and their nested fields) mutable, and stage outputs share claim
+ *  references with their inputs. */
+const deepFreezeClaims = (claims: Claim[]): Corpus =>
+  corpusOf(
+    claims.map(
+      (c) =>
+        Object.freeze({
+          ...c,
+          confidence: Object.freeze({ ...c.confidence }),
+          valid: Object.freeze({ ...c.valid }),
+          tags: Object.freeze([...c.tags]),
+        }) as unknown as Claim,
+    ),
+  );
+
+describe("purity pin: canonicalReadStages and cardinalitySafetyWarnings never mutate", () => {
+  it("canonical stages never mutate a frozen input corpus (strict-mode throw = mutation)", () => {
+    const frozen = deepFreezeClaims(contradictingFixture());
+
+    expect(() =>
+      applyStages(canonicalReadStages({ evaluationInstant: T30 }), frozen),
+    ).not.toThrow();
+
+    expect(frozen.claims.map((cl) => cl.status)).toEqual(
+      contradictingFixture().map((cl) => cl.status),
+    );
+  });
+
+  it("cardinalitySafetyWarnings is read-only over a frozen corpus", () => {
+    const frozen = deepFreezeClaims(collidingSingleCardinalityFixture());
+
+    expect(() => cardinalitySafetyWarnings(frozen, { status: "single" }, {})).not.toThrow();
   });
 });
