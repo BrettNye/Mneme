@@ -118,6 +118,37 @@ it("leafAsync passes corpusId to adapter.query", async () => {
   expect(plans[0]).toMatchObject({ corpusId: "test:corpus" });
 });
 
+it("leafAsync passes hints into the adapter plan; no-hints call passes corpusId only", async () => {
+  const plans: any[] = [];
+  const ctx: AsyncEvalContext = {
+    adapter: {
+      query: async (plan: any) => {
+        plans.push(plan);
+        return [];
+      },
+    } as any,
+    catalog: { getCorpus: () => ({}) } as any,
+  };
+  await evaluateAsync([leafAsync("c", { subject: "s", keys: ["k1", "k2"] })], ctx);
+  await evaluateAsync([leafAsync("c")], ctx);
+  expect(plans[0]).toEqual({ corpusId: "c", subject: "s", keys: ["k1", "k2"] });
+  expect(plans[1]).toEqual({ corpusId: "c" });
+});
+
+it("leafAsync throws when catalog.getCorpus throws (unknown corpus), even with hints supplied", async () => {
+  const ctx: AsyncEvalContext = {
+    adapter: { query: async () => [] } as any,
+    catalog: {
+      getCorpus: () => {
+        throw new Error('unknown corpus "bad:id"');
+      },
+    } as any,
+  };
+  await expect(
+    evaluateAsync([leafAsync("bad:id", { subject: "s" })], ctx)
+  ).rejects.toThrow("unknown corpus");
+});
+
 // ---------- gammaAsync ----------
 
 it("gammaAsync awaits ctx.adapter.getClaim for provenance lookup", async () => {

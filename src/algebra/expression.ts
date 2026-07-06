@@ -5,6 +5,7 @@ import type { Catalog } from "../catalog/catalog.js";
 import { gamma } from "./provenance-traversal.js";
 import type { Instant } from "../core/time.js";
 import type { QueryWarning } from "./value-routing.js";
+import type { LeafHints } from "./pushdown.js";
 
 export interface EvalContext {
   adapter: StorageAdapter;
@@ -28,13 +29,16 @@ export interface EvalContext {
 export type Stage<I, O> = (input: I, ctx: EvalContext) => O;
 
 /**
- * leaf(corpusId): validates corpus existence in the catalog, then loads claims
- * from the adapter. Ignores its input (leaf stage starts a pipeline).
+ * leaf(corpusId, hints?): validates corpus existence in the catalog, then loads
+ * claims from the adapter. Ignores its input (leaf stage starts a pipeline).
+ * Optional LeafHints (subject/key/keys) are spread into the adapter plan as-is;
+ * leaf performs no interpretation of the hints (see pushdown.ts for the fold
+ * that produces them).
  */
-export function leaf(corpusId: string): Stage<void, Corpus> {
+export function leaf(corpusId: string, hints?: LeafHints): Stage<void, Corpus> {
   return (_input, ctx) => {
     ctx.catalog.getCorpus(corpusId); // throws for unknown corpus
-    return corpusOf(ctx.adapter.query({ corpusId }));
+    return corpusOf(ctx.adapter.query({ corpusId, ...hints }));
   };
 }
 

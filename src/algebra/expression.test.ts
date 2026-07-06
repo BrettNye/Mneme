@@ -86,6 +86,30 @@ it("leaf passes corpusId to adapter.query", () => {
   expect(plans[0]).toMatchObject({ corpusId: "test:corpus" });
 });
 
+it("leaf passes hints into the adapter plan; no-hints call passes corpusId only", () => {
+  const plans: any[] = [];
+  const ctx = {
+    adapter: { query: (plan: any) => { plans.push(plan); return []; } } as any,
+    catalog: { getCorpus: () => ({}) } as any,
+  };
+  evaluate([leaf("c", { subject: "s", keys: ["k1", "k2"] })], ctx);
+  evaluate([leaf("c")], ctx);
+  expect(plans[0]).toEqual({ corpusId: "c", subject: "s", keys: ["k1", "k2"] });
+  expect(plans[1]).toEqual({ corpusId: "c" });
+});
+
+it("leaf throws when catalog.getCorpus throws (unknown corpus), even with hints supplied", () => {
+  const ctx = {
+    adapter: { query: () => [] } as any,
+    catalog: {
+      getCorpus: () => {
+        throw new Error('unknown corpus "bad:id"');
+      },
+    } as any,
+  };
+  expect(() => evaluate([leaf("bad:id", { subject: "s" })], ctx)).toThrow("unknown corpus");
+});
+
 // ---------- pipe helper ----------
 
 it("pipe returns an ordered stage array", () => {
