@@ -83,4 +83,23 @@ describe("async surface barrel re-exports", () => {
       expect(typeof f).toBe("function");
     }
   });
+
+  it("re-exports the schema setup + async query builders (so the async surface is usable)", async () => {
+    const {
+      migrate, MIGRATIONS,
+      evaluateAsync, leafAsync, gammaAsync, overrideAsync, joinAsync,
+      asyncSigma, asyncTauNow, asyncTauKnown, asyncTauValid, asyncTauRecorded,
+      asyncDelta, asyncRho, asyncKappa,
+    } = await import("./index.js");
+    expect(typeof migrate).toBe("function");
+    expect(Array.isArray(MIGRATIONS)).toBe(true);
+    expect(MIGRATIONS.length).toBeGreaterThan(0);
+    for (const f of [evaluateAsync, leafAsync, gammaAsync, asyncSigma, asyncTauNow, asyncTauKnown, asyncTauValid, asyncTauRecorded]) {
+      expect(typeof f).toBe("function");
+    }
+    for (const o of [asyncDelta, asyncRho, asyncKappa, joinAsync]) {
+      expect(typeof o).toBe("object");
+    }
+    expect(typeof overrideAsync).toBe("function");
+  });
 });

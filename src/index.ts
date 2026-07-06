@@ -123,3 +123,13 @@ export { createPostgresAdapter } from "./adapters/postgres/index.js";
 export { rowLevelRouter, schemaPerTenantRouter, dbPerTenantRouter } from "./adapters/postgres/tenant-router.js";
 export type { TenantRouter, ResolvedConnection } from "./adapters/postgres/tenant-router.js";
 export type { AsyncStorageAdapter } from "./adapters/async-adapter.js";
+// Postgres schema setup (versioned DDL + advisory-locked idempotent migration runner).
+export { migrate, MIGRATIONS } from "./adapters/postgres/schema.js";
+export type { Migration } from "./adapters/postgres/schema.js";
+// Async query algebra — stage builders wrapping the pure operator cores (for AsyncMneme.query).
+export {
+  evaluateAsync, leafAsync, gammaAsync, overrideAsync, joinAsync,
+  asyncSigma, asyncTauNow, asyncTauKnown, asyncTauValid, asyncTauRecorded,
+  asyncDelta, asyncRho, asyncKappa,
+} from "./algebra/async-expression.js";
+export type { AsyncEvalContext, AsyncStage } from "./algebra/async-expression.js";
