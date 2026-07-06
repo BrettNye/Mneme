@@ -234,6 +234,9 @@ export function createSqliteAdapter(path = ":memory:"): StorageAdapter {
   // Without it the scoped query falls back to the corpus_id-only index and scans the whole (growing)
   // corpus per insert -> O(n^2) writes. This makes contradiction detection an O(log n) index seek.
   db.exec("CREATE INDEX IF NOT EXISTS idx_claims_corpus_identity ON claims(corpus_id, subject, key, scope_hash)");
+  // Covers key-only pushed-down queries (ExecutionPlan.key / .keys with no subject) — including
+  // the pushed-down warm-up/alias recall reads — as an index seek instead of a corpus_id scan.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_claims_corpus_key ON claims(corpus_id, key)");
 
   // Idempotent migration: add entry_hash / prev_hash to claim_events if not yet present
   const eventColumns = (db.pragma("table_info(claim_events)") as Array<{ name: string }>).map(

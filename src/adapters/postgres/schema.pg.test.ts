@@ -62,6 +62,25 @@ describe("postgres schema migrate", () => {
     }
   }, 120000);
 
+  it("creates idx_claims_tenant_corpus_key on (tenant_id, corpus_id, key)", async () => {
+    const container = await startPostgres();
+    const pool = new Pool({ connectionString: connectionUri(container) });
+    try {
+      const c = await pool.connect();
+      await migrate(c, "");
+      c.release();
+
+      const { rows } = await pool.query(
+        `SELECT indexdef FROM pg_indexes WHERE tablename = 'claims' AND indexname = 'idx_claims_tenant_corpus_key'`
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].indexdef).toMatch(/\(tenant_id, corpus_id, key\)/);
+    } finally {
+      await pool.end();
+      await container.stop();
+    }
+  }, 120000);
+
   it("applying twice yields exactly MIGRATIONS.length rows", async () => {
     const container = await startPostgres();
     const pool = new Pool({ connectionString: connectionUri(container) });

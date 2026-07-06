@@ -980,3 +980,22 @@ it("migration adds entry_hash/prev_hash columns and audit_anchors table to a pre
   adapter!.putAnchoredRoot!({ corpusId: "c1", epochId: "e1", root: "r1", signature: null, guarantee: "g", at: 1 });
   expect(adapter!.getAnchoredRoots!("c1")).toHaveLength(1);
 });
+
+// --- Key-only pushed-query covering index (task-key-indexes) ---
+
+it("creates idx_claims_corpus_key idempotently, covering key-only pushed queries", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mneme-idx-"));
+  const dbPath = join(dir, "s.db");
+
+  // First open: creates the schema + index.
+  createSqliteAdapter(dbPath).close!();
+  // Second open on the same file must not throw (idempotent CREATE INDEX IF NOT EXISTS).
+  expect(() => createSqliteAdapter(dbPath).close!()).not.toThrow();
+
+  const raw = new Database(dbPath, { readonly: true });
+  const names = (raw.pragma("index_list(claims)") as Array<{ name: string }>).map(
+    (r) => r.name
+  );
+  raw.close();
+  expect(names).toContain("idx_claims_corpus_key");
+});
