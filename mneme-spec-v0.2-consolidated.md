@@ -1912,7 +1912,7 @@ The query algebra (§4) is **backend-agnostic** because I/O is confined to a sma
 
 - **Schema-per-tenant** — schema-qualified identifiers built from a validated allow-list (never `SET search_path` on a pooled connection, whose session state can leak across tenants).
 - **Database-per-tenant** — a per-tenant connection pool.
-- **Row-level** — a forced `tenant_id` predicate injected into every query (requires a `tenant_id`-bearing schema; the base schema mirrors the single-tenant tables).
+- **Row-level** — a `tenant_id` column (in the base schema, `NOT NULL DEFAULT ''`) that the adapter stamps on every write and filters on every read across all four tables; the per-corpus advisory lock composes tenant + corpus, so tenants may share a corpus namespace and still get separate, non-forking audit chains. Non-row-level providers leave `tenant_id = ''` and rely on routing.
 
 Corpus isolation and tenant isolation are independent, composable enforcement layers.
 
