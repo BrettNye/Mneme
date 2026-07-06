@@ -1,10 +1,10 @@
 import { createMneme, createSqliteAdapter } from "../index.js";
-import type { CorpusDef, CandidateClaim, Confidence, BatchResult } from "../index.js";
-import { scalarConfidence } from "../core/confidence.js";
+import type { CorpusDef, BatchResult } from "../index.js";
 import { validateKeyCardinality } from "../catalog/schema.js";
 import { parseDsl, normalizeDsl } from "./dsl.js";
 import { loadCorpora, saveCorpora, ensureDir } from "./corpus-store.js";
-import { SURFACE_DEFAULTS, defaultConfidence, DEFAULT_SCALAR_PSEUDOCOUNT, corpusDefFromSpec } from "./types.js";
+import { SURFACE_DEFAULTS, DEFAULT_SCALAR_PSEUDOCOUNT, corpusDefFromSpec } from "./types.js";
+import { buildCandidateClaim } from "./candidate.js";
 import type {
   Session,
   SessionOptions,
@@ -45,31 +45,14 @@ export function openSession(opts: SessionOptions = {}): Session {
   // Track schema version per corpus so write() can build "corpusId@version".
   const versionOf = new Map<string, string>(defs.map((d) => [d.id, d.schema.version]));
 
-  function toConfidence(c: WriteRecord["confidence"]): Confidence {
-    if (c == null) return defaultConfidence();
-    if (typeof c === "number") {
-      return scalarConfidence(c);
-    }
-    return c;
-  }
-
-  function buildCandidate(corpusId: string, rec: WriteRecord): CandidateClaim {
-    return {
-      profile: (opts.profile ?? SURFACE_DEFAULTS.profile) as never,
-      workspace: (opts.workspace ?? corpusId) as never,
-      subject: rec.subject as never,
-      key: rec.key as never,
-      scope: rec.scope ?? {},
-      value: rec.value,
-      confidence: toConfidence(rec.confidence),
-      valid: rec.valid ?? SURFACE_DEFAULTS.validInterval,
-      source: rec.source ?? opts.source ?? SURFACE_DEFAULTS.source,
-      provenance: {},
-      evidence: [],
-      tags: rec.tags ?? [],
-      schema: `${corpusId}@${versionOf.get(corpusId) ?? SURFACE_DEFAULTS.schemaVersion}`,
-      status: rec.status,
-    };
+  function buildCandidate(corpusId: string, rec: WriteRecord) {
+    return buildCandidateClaim(rec, {
+      corpusId,
+      schemaVersion: versionOf.get(corpusId) ?? SURFACE_DEFAULTS.schemaVersion,
+      profile: opts.profile,
+      workspace: opts.workspace,
+      source: opts.source,
+    });
   }
 
   const session: Session = {

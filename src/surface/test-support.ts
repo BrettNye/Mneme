@@ -28,11 +28,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openSession } from "./session.js";
 import { createMneme, createSqliteAdapter } from "../index.js";
-import type { CorpusDef, CandidateClaim, Confidence } from "../index.js";
-import { scalarConfidence } from "../core/confidence.js";
+import type { CorpusDef } from "../index.js";
 import { validateKeyCardinality } from "../catalog/schema.js";
 import { parseDsl, normalizeDsl } from "./dsl.js";
-import { SURFACE_DEFAULTS, defaultConfidence, DEFAULT_SCALAR_PSEUDOCOUNT } from "./types.js";
+import { SURFACE_DEFAULTS, DEFAULT_SCALAR_PSEUDOCOUNT } from "./types.js";
+import { buildCandidateClaim } from "./candidate.js";
 import type {
   Session,
   WriteRecord,
@@ -141,29 +141,12 @@ export function makeSpySession(opts?: {
 
   const versionOf = new Map<string, string>();
 
-  function toConfidence(c: WriteRecord["confidence"]): Confidence {
-    if (c == null) return defaultConfidence();
-    if (typeof c === "number") return scalarConfidence(c);
-    return c;
-  }
-
-  function buildCandidate(corpusId: string, rec: WriteRecord): CandidateClaim {
-    return {
-      profile: "test" as never,
-      workspace: corpusId as never,
-      subject: rec.subject as never,
-      key: rec.key as never,
-      scope: rec.scope ?? {},
-      value: rec.value,
-      confidence: toConfidence(rec.confidence),
-      valid: rec.valid ?? SURFACE_DEFAULTS.validInterval,
-      source: rec.source ?? SURFACE_DEFAULTS.source,
-      provenance: {},
-      evidence: [],
-      tags: rec.tags ?? [],
-      schema: `${corpusId}@${versionOf.get(corpusId) ?? SURFACE_DEFAULTS.schemaVersion}`,
-      status: rec.status,
-    };
+  function buildCandidate(corpusId: string, rec: WriteRecord) {
+    return buildCandidateClaim(rec, {
+      corpusId,
+      schemaVersion: versionOf.get(corpusId) ?? SURFACE_DEFAULTS.schemaVersion,
+      profile: "test",
+    });
   }
 
   const session: Session = {
