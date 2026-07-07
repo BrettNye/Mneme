@@ -13,6 +13,8 @@ import type { Session } from "./types.js";
 import type { ExecutionPlan } from "../adapters/adapter-types.js";
 import type { ClaimId } from "../core/ids.js";
 import type { Claim, CandidateClaim, CorpusDef } from "../index.js";
+import { scopeHash } from "../core/scope.js";
+import { scalarConfidence } from "../core/confidence.js";
 
 // ── Existing behaviour (minimal churn) ────────────────────────────────────────
 
@@ -156,6 +158,38 @@ function asyncMnemeOver(s: Session): AsyncRememberSource {
   };
 }
 
+/** A COMPLETE, valid single-claim Claim fixture — every field groupDispositions/tauValid/
+ *  dedupeGroups/pairsOf actually reads (valid interval covering "now", a real Confidence,
+ *  status/tags/scope/scopeHash all present) so that attribution genuinely runs to a verdict
+ *  instead of throwing. As the sole member of its (subject,key) group it attributes to
+ *  "committed" (no other claim to supersede/merge/dedupe against) — see the B6 gate test below. */
+function fullClaim(id: string): Claim {
+  const scope = {};
+  return {
+    id: id as ClaimId,
+    profile: "test",
+    workspace: "c",
+    corpusId: "c",
+    subject: "p",
+    key: "k",
+    scope,
+    scopeHash: scopeHash(scope),
+    value: "v",
+    valueHash: "stub-value-hash",
+    confidence: scalarConfidence(1),
+    valid: { from: Date.now() - 1000, to: Infinity },
+    recorded: Date.now(),
+    recordedSeq: 0,
+    status: "validated",
+    source: "manual",
+    provenance: {},
+    evidence: [],
+    audience: {},
+    tags: [],
+    schema: "c@1",
+  } as unknown as Claim;
+}
+
 /** UUID stub helper (recall-golden.test.ts pattern): sequential deterministic ids, reset the
  *  counter before each store's writes (B3) so parity comparisons don't diverge on id text. */
 function stubRandomUuid(): { seq: number; restore: () => void } {
@@ -228,20 +262,17 @@ describe("rememberAsync", () => {
   it("duplicates get supersession: undefined (B6 gate asserted)", async () => {
     // A fake source that reports a "duplicate" write outcome directly — exercises the B6
     // gate (attribution only fires for status==="committed") without depending on the
-    // idempotencyKey machinery that produces "duplicate" in the real store. readByIds
-    // returns a real, attributable claim (not a throw) — if the B6 gate did NOT skip
-    // attribution for a non-committed status, supersession would come back DEFINED
-    // ("committed", since the group has only this one claim), not undefined; a throw
-    // here would let the best-effort try/catch mask a missing gate, which this must not.
+    // idempotencyKey machinery that produces "duplicate" in the real store. `claim` is a
+    // COMPLETE, valid Claim (fullClaim — real valid/confidence/status/scopeHash, not a
+    // partial stub), and read/readByIds return it for real, so groupDispositions/tauValid
+    // genuinely run to a verdict instead of throwing: with the B6 gate in place, attribution
+    // is never attempted (readByIdsCalled stays false, supersession stays undefined). If the
+    // B6 gate regressed (attribution ran unconditionally), this fixture would make
+    // supersessionOutcomeAsync actually COMPUTE a defined outcome ("committed" — the group has
+    // only this one claim, nothing to supersede/merge) instead of throwing into the best-effort
+    // catch, so both assertions below are load-bearing against a regressed gate.
     let readByIdsCalled = false;
-    const claim = {
-      id: "dup-id",
-      subject: "p",
-      key: "k",
-      value: "v",
-      scopeHash: "",
-      valueHash: "",
-    } as unknown as Claim;
+    const claim = fullClaim("dup-id");
     const fakeSource: AsyncRememberSource = {
       listCorpora: () => [{ id: "c" }],
       read: async () => [claim],

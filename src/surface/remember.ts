@@ -122,9 +122,17 @@ export function ensureCorpusAsync(
 }
 
 export interface RememberAsyncOptions {
+  /** Attributed to the committed claim's provenance. Defaults to `SURFACE_DEFAULTS.writer`. */
   writer?: string;
+  /** Confidence-pseudocount / defaults profile the candidate claim is built under. Defaults to
+   *  `SURFACE_DEFAULTS.profile` (via `buildCandidateClaim`'s own `ctx.profile ?? SURFACE_DEFAULTS.profile`). */
   profile?: string;
+  /** Workspace the claim is recorded under. Defaults to the corpus id itself (`buildCandidateClaim`'s
+   *  own `ctx.workspace ?? ctx.corpusId`) — pass explicitly to place claims from several corpora
+   *  into one shared workspace. */
   workspace?: string;
+  /** Provenance/trust-tier source tag (e.g. "manual", "llm"). Defaults to
+   *  `SURFACE_DEFAULTS.source` ("manual") via `buildCandidateClaim`'s `rec.source ?? ctx.source ?? SURFACE_DEFAULTS.source`. */
   source?: Source;
 }
 
