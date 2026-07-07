@@ -106,6 +106,50 @@ Tenant isolation composes *around* the existing per-corpus isolation — neither
 
 With `rowLevelRouter`, tenants may **share a corpus namespace** — the adapter stamps and filters a `tenant_id` on every write/read across all four tables (claims, events, idempotency, anchors), and the per-corpus advisory lock composes tenant + corpus, so two tenants using the same corpus name get separate, non-forking audit chains. Concurrency is safe across tenants: same-(tenant,corpus) writers serialize (the chain can't fork); different corpora or tenants never contend.
 
+## Surface ops
+
+High-level recall/remember operations are available on the async surface, mirroring the sync `Session` API. The async surface has **no persistent corpus registry** (catalog is in-memory per process) — consumers must re-declare corpora at boot via `ensureCorpusAsync`.
+
+```ts
+import { 
+  createMnemeAsync, 
+  createPostgresAdapter, 
+  dbPerTenantRouter,
+  ensureCorpusAsync,
+  rememberAsync,
+  recallAsync,
+} from "mneme";
+
+const adapter = createPostgresAdapter({
+  router: dbPerTenantRouter(() => pool),
+  tenantId: "default",
+});
+
+const mneme = createMnemeAsync({ adapter, availableTiers: [{ kind: "core" }] });
+
+// Declare corpus at boot (re-declaration is safe; first-declaration-wins if exists).
+ensureCorpusAsync(mneme, "work");
+
+// Write with belief-change attribution (async).
+const committed = await rememberAsync(mneme, {
+  subject: "task:implement-feature",
+  key: "status",
+  value: "in-progress",
+  corpus: "work",
+  confidence: 0.9,
+});
+
+// Read with alias expansion, ranking, and coverage warnings (async).
+const result = await recallAsync(mneme, {
+  about: "current task status",
+  corpus: "work",
+  subject: "task:implement-feature",
+  limit: 3,
+}, { embeddings: { rankFn: "jaccard" } });
+```
+
+**Note:** If a corpus is populated in Postgres but never declared in the current process via `ensureCorpusAsync`, `recallAsync` returns an empty result (not an error) — the corpus is unknown to the in-memory catalog. Re-declare at boot before any recall queries.
+
 ## Known limitations
 
 - **`replay` and `derive` are not on the async surface yet.** The sync `Mneme` exposes `replay`/`derive`; `AsyncMneme` omits them in this version (they read the adapter in loops and re-execute the algebra — an async refactor deferred to a follow-on). Use the sync surface if you need replay/derive.

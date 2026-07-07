@@ -205,11 +205,12 @@ describe("pushdown — hydration smoke", () => {
     const before = rowsHydrated(match);
     await recall(session, { about: "q", corpus: CORPUS, subject: "s0", key: "k0", asOf: T0 }, jaccardDeps);
     const after = rowsHydrated(match);
-    // recall() issues exactly TWO hint-carrying storage reads for a scoped query: the main
-    // ranked pipeline AND the lightweight pre-contradiction cardinality-safety check (recall.ts
-    // "One extra lightweight query over the pre-⊥ ... corpus" — both share the SAME sealed
-    // hints, so both hydrate only the 5 matching rows). Bound at 2x the matching-row count —
-    // was ~100 (2 x 50, full-corpus scan) before hint pushdown.
+    // task-recall-core: recall() now issues ONE hint-carrying shared-prefix storage read
+    // (`corpusOf(await source.read(...))` — no more separate `mneme.query` pipeline
+    // evaluations); the cardinality-safety check and the ranked result both derive from
+    // that SAME read in-memory, no further adapter I/O. Bound at 2x the matching-row
+    // count is generous headroom over the single-read reality — was ~100 (2 x 50,
+    // full-corpus scan) before hint pushdown.
     expect(after - before).toBeLessThanOrEqual(10);
   });
 });

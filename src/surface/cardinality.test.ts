@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { freshSession } from "./test-support.js";
-import { resolveKeyCardinality, cardinalitySafetyWarnings, cardinalityCollisions, formatCardinalityCollision } from "./cardinality.js";
+import {
+  resolveKeyCardinality,
+  effectiveKeyCardinality,
+  cardinalitySafetyWarnings,
+  cardinalityCollisions,
+  formatCardinalityCollision,
+} from "./cardinality.js";
 
 describe("cardinality", () => {
   it("resolveKeyCardinality: corpus declaration wins over deps map", () => {
@@ -59,6 +65,31 @@ describe("cardinality", () => {
     expect(warnings[0]).toBe(
       `single-cardinality (subject:proj, key:status) holds 2 distinct values` +
       ` — recall serves only the latest; declare keyCardinality:"multi" if they should coexist.`,
+    );
+    s.close();
+  });
+});
+
+describe("effectiveKeyCardinality — pure extraction over the RecallSource seam (task-pure-helpers)", () => {
+  it("resolveKeyCardinality(session, ...) delegates to effectiveKeyCardinality(session.mneme, ...)", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c", keyCardinality: { status: "single", tags: "multi" } });
+    const override = { tags: "single" as const, other: "multi" as const };
+    expect(effectiveKeyCardinality(s.mneme, "c", override)).toEqual(
+      resolveKeyCardinality(s, "c", override),
+    );
+    expect(effectiveKeyCardinality(s.mneme, "c", override)).toEqual({
+      tags: "multi", other: "multi", status: "single",
+    });
+    s.close();
+  });
+
+  it("undeclared corpus + empty override → undefined, matching resolveKeyCardinality", () => {
+    const s = freshSession();
+    s.createCorpus({ id: "c" });
+    expect(effectiveKeyCardinality(s.mneme, "c", undefined)).toBeUndefined();
+    expect(effectiveKeyCardinality(s.mneme, "c", undefined)).toEqual(
+      resolveKeyCardinality(s, "c", undefined),
     );
     s.close();
   });

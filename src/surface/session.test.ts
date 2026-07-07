@@ -80,6 +80,15 @@ describe("openSession", () => {
     expect(claim!.schema).toBe("c4@2");
   });
 
+  it("B1: session.createCorpus retains versionOf tracking after delegating to corpusDefFromSpec", () => {
+    const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
+    const s = openSession({ dbPath: db });
+    s.createCorpus({ id: "c", schemaVersion: "7", subjects: [] });
+    const out = s.write("c", { subject: "x", key: "y", value: "v" });
+    const claim = s.inspect("c", out.id);
+    expect(claim!.schema).toBe("c@7");
+  });
+
   it("writeMany returns ImportStats with accurate counts", () => {
     const db = join(mkdtempSync(join(tmpdir(), "mneme-")), "t.db");
     const s = openSession({ dbPath: db });

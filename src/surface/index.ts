@@ -5,7 +5,7 @@ export type { RowMapper } from "./import.js";
 export { formatQueryResult, formatClaim } from "./format.js";
 export { pipe, leaf, sigma, rho, kappa } from "../index.js";
 export { pointEstimate } from "../core/confidence.js";
-export { DEFAULT_SCALAR_PSEUDOCOUNT } from "./types.js";
+export { DEFAULT_SCALAR_PSEUDOCOUNT, corpusDefFromSpec } from "./types.js";
 export type {
   Session,
   SessionOptions,
@@ -15,17 +15,17 @@ export type {
   CorpusSpec,
   QueryResult,
 } from "./types.js";
-export { recall, parseAsOf } from "./recall.js";
+export { recall, parseAsOf, recallAsync } from "./recall.js";
 export type {
-  EmbeddingState, RecallDeps, RecallArgs, RecallMatch, RecallResult,
+  EmbeddingState, RecallDeps, RecallArgs, RecallMatch, RecallResult, RecallSource,
 } from "./recall.js";
 export { keyCensus, subjectCensus } from "./census.js";
 export type { CensusArgs, CensusResult, SubjectCensusResult } from "./census.js";
 export { reconcile } from "./reconcile.js";
 export type { ReconcileArgs, ReconcileResult, ReconcileMatch, EntitySuggestion, ReconcileDisposition } from "./reconcile.js";
 export type { ReadDeps } from "./types.js";
-export { remember, ensureCorpus, listCorpora } from "./remember.js";
-export type { RememberArgs, RememberResult, ListResult } from "./remember.js";
+export { remember, ensureCorpus, listCorpora, rememberAsync, ensureCorpusAsync } from "./remember.js";
+export type { RememberArgs, RememberResult, ListResult, RememberAsyncOptions } from "./remember.js";
 export { explainRecall } from "./explain.js";
 export type { RecallTrace, ClaimDisposition, DispositionReason } from "./explain.js";
 export { ingest } from "./ingest.js";

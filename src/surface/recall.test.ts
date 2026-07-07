@@ -3,12 +3,25 @@ import { openSession } from "./session.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { recall, buildFilterPlan } from "./recall.js";
+import {
+  recall,
+  recallAsync,
+  buildFilterPlan,
+  loadAliasContext,
+  aliasContextFrom,
+  buildRecallRanker,
+  buildRecallRankerPure,
+  warmRecallValuesOver,
+  type RecallSource,
+} from "./recall.js";
 import { remember, listCorpora, ensureCorpus } from "./remember.js";
 import { freshSession, jaccardDeps, makeFakeHybridDeps, makeSpySession } from "./test-support.js";
 import { _resetEmbeddingsForTest } from "./embeddings.js";
 import { KEY_ALIAS_KEY } from "../retrieval/key-alias.js";
 import type { Session } from "./types.js";
+import { corpusOf } from "../algebra/types.js";
+import type { Corpus } from "../algebra/types.js";
+import type { EvalContext } from "../algebra/expression.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -167,14 +180,14 @@ describe("recall — topScore / abstained / rankFn fields", () => {
     expect(r.rankFn).toBe("jaccard");
   });
 
-  it("exactly TWO mneme.query calls per recall (main ranked query + lightweight cardinality-safety query)", async () => {
+  it("recallCore never calls mneme.query (task-recall-core: replaced by ONE hinted read + pure stages)", async () => {
     const s = freshSession();
     const corpus = "onequery-corpus";
     remember(s, { subject: "s", key: "k", value: "test value", corpus });
 
     const querySpy = vi.spyOn(s.mneme, "query");
     await recall(s, { about: "test", corpus }, jaccardDeps);
-    expect(querySpy).toHaveBeenCalledTimes(2);
+    expect(querySpy).toHaveBeenCalledTimes(0);
   });
 });
 
@@ -415,12 +428,18 @@ describe("recall — alias-aware key matching", () => {
 
     // 2. Warm-up collapses to ONE read carrying `keys: family` (amendment A9) —
     //    not one read per family member. Alias reads use key === "alias-of"; exclude those.
+    //    task-recall-core: the shared-prefix read ALSO goes over the `source.read` seam
+    //    now (was a separate mneme.query/adapter path), carrying the SAME `keys: family`
+    //    hint — so TWO reads are expected here (warm-up + shared prefix), both correctly
+    //    family-scoped.
     const warmupReadOpts = readSpy.mock.calls
       .map(([, opts]) => opts as { key?: string; keys?: string[]; corpusId: string })
       .filter((opts) => opts.key !== "alias-of");
-    expect(warmupReadOpts.length).toBe(1);
-    expect(warmupReadOpts[0].keys).toEqual(expect.arrayContaining(["editor", "preferred_editor"]));
-    expect(warmupReadOpts[0].keys?.length).toBe(2);
+    expect(warmupReadOpts.length).toBe(2);
+    for (const opts of warmupReadOpts) {
+      expect(opts.keys).toEqual(expect.arrayContaining(["editor", "preferred_editor"]));
+      expect(opts.keys?.length).toBe(2);
+    }
   });
 });
 
@@ -685,7 +704,7 @@ describe("recall — leaf hint pushdown", () => {
     expect(recallPlans).toHaveLength(1);
   });
 
-  it("warmRecallValues issues exactly ONE read for an N-key family, carrying keys: family", async () => {
+  it("warmRecallValues + the shared-prefix read both carry keys: family (task-recall-core: prefix now shares the read seam)", async () => {
     const { session } = makeSpySession();
     const corpus = "warm-family-hint";
     remember(session, {
@@ -707,11 +726,217 @@ describe("recall — leaf hint pushdown", () => {
       // is captured before scoring regardless.
     }
 
+    // task-recall-core: the shared-prefix read now also goes over `source.read` (mneme.read),
+    // carrying the SAME `keys: family` hint as the warm-up read — TWO calls, both family-scoped.
     const warmupReadCalls = readSpy.mock.calls
       .map(([, opts]) => opts as { key?: string; keys?: string[] })
       .filter((opts) => opts.key !== KEY_ALIAS_KEY);
-    expect(warmupReadCalls.length).toBe(1);
-    expect(warmupReadCalls[0].keys).toEqual(expect.arrayContaining(["editor", "preferred_editor"]));
-    expect(warmupReadCalls[0].keys?.length).toBe(2);
+    expect(warmupReadCalls.length).toBe(2);
+    for (const opts of warmupReadCalls) {
+      expect(opts.keys).toEqual(expect.arrayContaining(["editor", "preferred_editor"]));
+      expect(opts.keys?.length).toBe(2);
+    }
+  });
+});
+
+// ── task-pure-helpers: zero-behavior-change extractions behind the read seam ──
+
+describe("aliasContextFrom — the pure post-read part of loadAliasContext", () => {
+  it("given the same already-read alias claims, matches loadAliasContext's result exactly", () => {
+    const s = freshSession();
+    const corpus = "alias-pure-basic";
+    remember(s, { subject: "user:brett", key: "preferred_editor", value: "emacs", corpus });
+    remember(s, { subject: "key:editor", key: "alias-of", value: "preferred_editor", corpus });
+    const now = Date.now();
+    const aliasClaims = s.mneme.read(corpus, { corpusId: corpus, key: KEY_ALIAS_KEY });
+
+    const pure = aliasContextFrom(aliasClaims, now, undefined);
+    const wrapped = loadAliasContext(s, corpus, now, undefined);
+
+    expect(pure).toEqual(wrapped);
+    expect(pure.aliasMap).toEqual({ editor: "preferred_editor" });
+    expect(pure.warnings).toEqual([]);
+    s.close();
+  });
+
+  it("emits the same variant-cardinality warning as loadAliasContext when a variant carries a cardinality override", () => {
+    const s = freshSession();
+    const corpus = "alias-pure-cardinality";
+    remember(s, { subject: "user:brett", key: "editor", value: "vim", corpus });
+    remember(s, { subject: "user:brett", key: "preferred_editor", value: "emacs", corpus });
+    remember(s, { subject: "key:editor", key: "alias-of", value: "preferred_editor", corpus });
+    const now = Date.now();
+    const keyCardinality = { editor: "multi" as const };
+    const aliasClaims = s.mneme.read(corpus, { corpusId: corpus, key: KEY_ALIAS_KEY });
+
+    const pure = aliasContextFrom(aliasClaims, now, keyCardinality);
+    const wrapped = loadAliasContext(s, corpus, now, keyCardinality);
+
+    expect(pure).toEqual(wrapped);
+    expect(pure.warnings.some((w) => /cardinality|variant/.test(w))).toBe(true);
+    s.close();
+  });
+
+  it("loadAliasContext still degrades gracefully on a read failure (aliasContextFrom is never reached)", () => {
+    const s = freshSession();
+    const corpus = "alias-pure-fail";
+    const readSpy = vi.spyOn(s.mneme, "read").mockImplementation(() => {
+      throw new Error("simulated failure");
+    });
+    const result = loadAliasContext(s, corpus, Date.now(), undefined);
+    readSpy.mockRestore();
+    expect(result.aliasMap).toEqual({});
+    expect(result.warnings.some((w) => /alias load failed — proceeding without alias expansion:/.test(w))).toBe(true);
+    s.close();
+  });
+});
+
+describe("buildFilterPlan — sigmas are pure stages (task-pure-helpers B4)", () => {
+  it("apply without a ctx argument, and filter identically to before", () => {
+    const s = freshSession();
+    const corpus = "filterplan-pure";
+    remember(s, { subject: "a", key: "k", value: "v1", corpus });
+    remember(s, { subject: "b", key: "k", value: "v2", corpus });
+    const mixed = s.mneme.read(corpus, { corpusId: corpus });
+
+    const { sigmas } = buildFilterPlan({ about: "q", corpus, subject: "a" });
+    const filtered = sigmas.reduce((acc, stage) => (stage as (c: Corpus) => Corpus)(acc), corpusOf(mixed));
+    expect(filtered.claims.every((cl) => cl.subject === "a")).toBe(true);
+    expect(filtered.claims.length).toBe(1);
+    s.close();
+  });
+});
+
+describe("buildRecallRankerPure — the ONE home for the alpha/half-life dials", () => {
+  it("recencyAlpha=1 reduces to pure similarity ranking, callable without ctx", () => {
+    const s = freshSession();
+    const corpus = "ranker-pure-alpha1";
+    remember(s, { subject: "x", key: "fact", value: "the quick brown fox", corpus });
+    remember(s, { subject: "x", key: "note", value: "totally unrelated", corpus });
+    const claims = s.mneme.read(corpus, { corpusId: corpus });
+
+    const ranker = buildRecallRankerPure(
+      { about: "the quick brown fox", corpus, recencyAlpha: 1 },
+      "jaccard",
+      Date.now(),
+    );
+    const ranked = ranker(corpusOf(claims));
+    expect(ranked.scored[0].claim.value).toBe("the quick brown fox");
+    s.close();
+  });
+
+  it("default (blended) ranking matches buildRecallRanker's Stage wrapper for the same `now`", () => {
+    const s = freshSession();
+    const corpus = "ranker-pure-blend";
+    remember(s, { subject: "x", key: "fact", value: "hello world", corpus });
+    remember(s, { subject: "x", key: "note", value: "unrelated noise", corpus });
+    const claims = s.mneme.read(corpus, { corpusId: corpus });
+    const now = Date.now();
+
+    const args = { about: "hello world", corpus };
+    const pure = buildRecallRankerPure(args, "jaccard", now)(corpusOf(claims));
+    const wrapped = buildRecallRanker(args, "jaccard")(
+      corpusOf(claims),
+      { evaluationClock: now } as unknown as EvalContext,
+    );
+    expect(pure).toEqual(wrapped);
+    s.close();
+  });
+});
+
+describe("warmRecallValuesOver — sync warmRecallValues delegates over the RecallSource seam", () => {
+  afterEach(() => {
+    _resetEmbeddingsForTest();
+  });
+
+  it("session.mneme satisfies RecallSource; delegation warms values identically", async () => {
+    const s = freshSession();
+    const corpus = "warm-over-hybrid";
+    remember(s, { subject: "s", key: "k", value: "some hybrid value", corpus });
+    const deps = await makeFakeHybridDeps();
+    const embedSpy = vi.spyOn(deps.embeddings.adapter!, "embed");
+
+    await warmRecallValuesOver(s.mneme, { about: "hybrid value", corpus }, deps.embeddings);
+
+    const embedded = embedSpy.mock.calls.flatMap((call) => call[0] as string[]);
+    expect(embedded).toContain("some hybrid value");
+    s.close();
+  });
+
+  it("jaccard rankFn is a no-op (no adapter/cache required)", async () => {
+    const s = freshSession();
+    await expect(
+      warmRecallValuesOver(s.mneme, { about: "x", corpus: "no-warm" }, { rankFn: "jaccard" }),
+    ).resolves.toBeUndefined();
+    s.close();
+  });
+});
+
+// ── recallAsync — the async twin over the RecallSource seam (task-recall-core) ──
+
+describe("recallAsync — the async twin over the RecallSource seam", () => {
+  it("recallAsync over an async source serves the same matches as sync recall", async () => {
+    const { session } = makeSpySession();
+    const corpus = "async-seam-parity";
+    remember(session, { subject: "project:mneme", key: "fact", value: "Mneme dogfoods via MCP", corpus });
+    remember(session, { subject: "project:mneme", key: "note", value: "unrelated weather chatter", corpus });
+    // Pin asOf so both calls anchor the recency term at the SAME instant — recall's
+    // default `now` is `Date.now()`, which would otherwise drift by a few ms between
+    // the sync and async calls and produce a spuriously non-identical recency-blended score.
+    const args = { about: "Mneme dogfoods via MCP", corpus, limit: 5, asOf: Date.now() };
+
+    const sync = await recall(session, args, jaccardDeps);
+    const asyncSource: RecallSource = {
+      listCorpora: (f) => session.mneme.listCorpora(f),
+      read: async (c, p) => session.mneme.read(c, p),
+    };
+    const viaSeam = await recallAsync(asyncSource, args, jaccardDeps);
+    expect(viaSeam).toEqual(sync);
+  });
+
+  it("read order: alias read strictly precedes the prefix read (jaccardDeps skips warm-up)", async () => {
+    const s = freshSession();
+    const corpus = "async-read-order";
+    remember(s, { subject: "x", key: "fact", value: "some value about recall order", corpus });
+
+    const labels: string[] = [];
+    const labeledSource: RecallSource = {
+      listCorpora: (f) => s.mneme.listCorpora(f),
+      read: (cid, plan) => {
+        labels.push((plan as { key?: string }).key === KEY_ALIAS_KEY ? "alias" : "other");
+        return s.mneme.read(cid, plan);
+      },
+    };
+
+    await recallAsync(labeledSource, { about: "recall order", corpus }, jaccardDeps);
+
+    // jaccardDeps: warm-up early-returns (no read), so exactly TWO reads occur —
+    // the alias read strictly before the (shared-prefix) non-alias read.
+    expect(labels).toEqual(["alias", "other"]);
+  });
+
+  it("recallAsync alias-load failure degrades with the exact sync warning text", async () => {
+    const s = freshSession();
+    const corpus = "async-alias-fail";
+    remember(s, { subject: "user:brett", key: "editor", value: "vim", corpus });
+
+    const failingSource: RecallSource = {
+      listCorpora: (f) => s.mneme.listCorpora(f),
+      read: async (cid, plan) => {
+        if ((plan as { key?: string }).key === KEY_ALIAS_KEY) {
+          throw new Error("simulated async alias read failure");
+        }
+        return s.mneme.read(cid, plan);
+      },
+    };
+
+    const r = await recallAsync(failingSource, { about: "editor", key: "editor", corpus }, jaccardDeps);
+    expect(r.abstained).toBe(false);
+    expect(r.warnings).toBeDefined();
+    expect(
+      r.warnings!.some(
+        (w) => w === "alias load failed — proceeding without alias expansion: simulated async alias read failure",
+      ),
+    ).toBe(true);
   });
 });

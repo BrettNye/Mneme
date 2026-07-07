@@ -2,16 +2,25 @@ import type { Session } from "./types.js";
 import type { Corpus } from "../algebra/types.js";
 import type { KeyAliasMap } from "../retrieval/key-alias.js";
 import { clustersOf } from "../algebra/contradiction.js";
+import type { RecallSource } from "./recall.js";
 
-/** Effective per-key cardinality: the corpus's stored schema.keyCardinality merged OVER the
- *  deps/global map (per-key, corpus declaration wins). undefined when the merged map is empty. */
+/** Effective per-key cardinality: the source's stored schema.keyCardinality merged OVER the
+ *  deps/global map (per-key, corpus declaration wins). undefined when the merged map is empty.
+ *  Pure over the `RecallSource` read seam (task-pure-helpers); `resolveKeyCardinality` delegates
+ *  with `session.mneme`. */
+export function effectiveKeyCardinality(
+  source: RecallSource, corpus: string, override?: Record<string, "single" | "multi">,
+): Record<string, "single" | "multi"> | undefined {
+  const def = source.listCorpora((c) => c.id === corpus)[0];
+  const merged = { ...(override ?? {}), ...(def?.schema?.keyCardinality ?? {}) };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/** Sync wrapper — exact signature preserved; delegates with `session.mneme`. */
 export function resolveKeyCardinality(
   session: Session, corpus: string, depsCardinality?: Record<string, "single" | "multi">,
 ): Record<string, "single" | "multi"> | undefined {
-  const def = session.mneme.listCorpora((c) => c.id === corpus)[0] as
-    | { schema?: { keyCardinality?: Record<string, "single" | "multi"> } } | undefined;
-  const merged = { ...(depsCardinality ?? {}), ...(def?.schema?.keyCardinality ?? {}) };
-  return Object.keys(merged).length > 0 ? merged : undefined;
+  return effectiveKeyCardinality(session.mneme, corpus, depsCardinality);
 }
 
 export interface CardinalityCollision {
