@@ -5,16 +5,16 @@ created: 2026-07-06
 
 ```mermaid
 flowchart TD
-    task-corpus-def["task-corpus-def: corpusDefFromSpec extraction<br/>files: src/surface/types.ts +3 more"]
-    task-candidate["task-candidate: buildCandidateClaim extraction<br/>files: src/surface/candidate.ts +4 more"]
-    task-pure-helpers["task-pure-helpers: seam-pure recall helpers<br/>files: src/surface/recall.ts +3 more"]
-    task-recall-core["task-recall-core: recallCore + recallAsync<br/>files: src/surface/recall.ts +2 more"]
-    task-attribution["task-attribution: attributeSupersession + async twin<br/>files: src/surface/belief-change.ts +1 more"]
-    task-remember-async["task-remember-async: rememberAsync + ensureCorpusAsync<br/>files: src/surface/remember.ts +1 more"]
-    task-fast-parity["task-fast-parity: asyncify + fast parity suite<br/>files: src/surface/async-ops.test.ts +1 more"]
-    task-pg-parity["task-pg-parity: postgres parity suite<br/>files: src/surface/async-ops.pg.test.ts"]
-    task-exports["task-exports: barrel exports<br/>files: src/index.ts +1 more"]
-    task-docs["task-docs: roadmap + guide updates<br/>files: ROADMAP.md +2 more"]
+    task-corpus-def["task-corpus-def: corpusDefFromSpec extraction<br/>files: src/surface/types.ts +3 more"]:::done
+    task-candidate["task-candidate: buildCandidateClaim extraction<br/>files: src/surface/candidate.ts +4 more"]:::done
+    task-pure-helpers["task-pure-helpers: seam-pure recall helpers<br/>files: src/surface/recall.ts +3 more"]:::done
+    task-recall-core["task-recall-core: recallCore + recallAsync<br/>files: src/surface/recall.ts +2 more"]:::done
+    task-attribution["task-attribution: attributeSupersession + async twin<br/>files: src/surface/belief-change.ts +1 more"]:::done
+    task-remember-async["task-remember-async: rememberAsync + ensureCorpusAsync<br/>files: src/surface/remember.ts +1 more"]:::done
+    task-fast-parity["task-fast-parity: asyncify + fast parity suite<br/>files: src/surface/async-ops.test.ts +1 more"]:::done
+    task-pg-parity["task-pg-parity: postgres parity suite<br/>files: src/surface/async-ops.pg.test.ts"]:::done
+    task-exports["task-exports: barrel exports<br/>files: src/index.ts +1 more"]:::done
+    task-docs["task-docs: roadmap + guide updates<br/>files: ROADMAP.md +2 more"]:::done
 
     task-corpus-def --> task-candidate
     task-pure-helpers --> task-recall-core
@@ -74,7 +74,7 @@ files:
   - src/surface/types.test.ts
   - src/surface/session.ts
   - src/surface/session.test.ts
-status: pending
+status: done
 ```
 
 Extract the CorpusSpec→CorpusDef expansion from `session.createCorpus`
@@ -141,7 +141,7 @@ files:
   - src/surface/session.ts
   - src/surface/session.test.ts
   - src/surface/test-support.ts
-status: pending
+status: done
 ```
 
 Extract `session.ts`'s `buildCandidate` closure (`session.ts:56-73`) into pure
@@ -220,7 +220,7 @@ files:
   - src/surface/recall.test.ts
   - src/surface/cardinality.ts
   - src/surface/cardinality.test.ts
-status: pending
+status: done
 ```
 
 Zero-behavior-change extractions behind the read seam (spec §2), sync signatures
@@ -301,7 +301,7 @@ files:
   - src/surface/recall.ts
   - src/surface/recall.test.ts
   - src/surface/pushdown.property.test.ts
-status: pending
+status: done
 ```
 
 The centerpiece (spec §2): move recall's orchestration into `recallCore(source, args,
@@ -389,7 +389,7 @@ depends_on: [task-pure-helpers]
 files:
   - src/surface/belief-change.ts
   - src/surface/belief-change.test.ts
-status: pending
+status: done
 ```
 
 Extract the pure attribution block of `supersessionOutcome` (`belief-change.ts:108-134`)
@@ -469,7 +469,7 @@ depends_on: [task-candidate, task-attribution]
 files:
   - src/surface/remember.ts
   - src/surface/remember.test.ts
-status: pending
+status: done
 ```
 
 `ensureCorpusAsync(mneme, corpusId, spec?)` — sync-returning, first-declaration-wins
@@ -558,7 +558,7 @@ depends_on: [task-recall-core, task-remember-async]
 files:
   - src/surface/async-ops.test.ts
   - src/surface/test-support.ts
-status: pending
+status: done
 ```
 
 The no-Docker parity harness (spec §5.2/§5.3). `asyncifyAdapter(sync: StorageAdapter):
@@ -622,7 +622,7 @@ id: task-pg-parity
 depends_on: [task-fast-parity]
 files:
   - src/surface/async-ops.pg.test.ts
-status: pending
+status: done
 ```
 
 The linchpin gate (spec §5.4): sync `recall` (SQLite) vs `recallAsync`
@@ -676,7 +676,7 @@ depends_on: [task-recall-core, task-remember-async]
 files:
   - src/index.ts
   - src/surface/index.ts
-status: pending
+status: done
 is_wiring_task: true
 ```
 
@@ -706,7 +706,7 @@ files:
   - ROADMAP.md
   - docs/postgres-async-adapter.md
   - docs/superpowers/specs/2026-07-05-postgres-async-adapter-design.md
-status: pending
+status: done
 is_wiring_task: true
 model_hint: cheap
 review_mode: merged
