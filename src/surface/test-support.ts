@@ -47,6 +47,7 @@ import type { Claim } from "../core/claim.js";
 import type { RecallDeps } from "./recall.js";
 import { initEmbeddings } from "./embeddings.js";
 import type { EmbeddingAdapter } from "../algebra/embedding.js";
+import type { AsyncStorageAdapter } from "../adapters/async-adapter.js";
 
 export function freshSession(): Session {
   const db = join(mkdtempSync(join(tmpdir(), "mneme-mcp-")), "store.db");
@@ -127,16 +128,14 @@ function spyWrap(
 }
 
 /**
- * Session over `createMneme({ adapter: spyWrap(createSqliteAdapter(":memory:")),
- * availableTiers })`. `opts.transformPlan` rewrites each plan BEFORE execution — pass
- * `(p) => ({ corpusId: p.corpusId })` to strip hints (the differential's hints-off arm).
+ * Session over a caller-supplied `StorageAdapter` (task-fast-parity): mirrors
+ * `makeSpySession`'s inner session-building logic exactly, minus the spy —
+ * `createMneme({ adapter, availableTiers: [{ kind: "core" }] })` plus the same
+ * createCorpus/write/writeMany/q/inspect/replay glue. Lets a caller run the sync
+ * `recall`/`remember` surface directly over an adapter it built itself (e.g. the
+ * SAME sqlite adapter also wrapped by `asyncifyAdapter` for a parity comparison).
  */
-export function makeSpySession(opts?: {
-  transformPlan?: (p: ExecutionPlan) => ExecutionPlan;
-}): SpySession {
-  const state: SpyState = { plansSeen: [], rowCounts: [] };
-  const base = createSqliteAdapter(":memory:");
-  const adapter = spyWrap(base, state, opts?.transformPlan);
+export function sessionOverAdapter(adapter: StorageAdapter): Session {
   const mneme = createMneme({ adapter, availableTiers: [{ kind: "core" }] });
 
   const versionOf = new Map<string, string>();
@@ -254,9 +253,25 @@ export function makeSpySession(opts?: {
     },
 
     close(): void {
-      base.close?.();
+      adapter.close?.();
     },
   };
+
+  return session;
+}
+
+/**
+ * Session over `createMneme({ adapter: spyWrap(createSqliteAdapter(":memory:")),
+ * availableTiers })`. `opts.transformPlan` rewrites each plan BEFORE execution — pass
+ * `(p) => ({ corpusId: p.corpusId })` to strip hints (the differential's hints-off arm).
+ */
+export function makeSpySession(opts?: {
+  transformPlan?: (p: ExecutionPlan) => ExecutionPlan;
+}): SpySession {
+  const state: SpyState = { plansSeen: [], rowCounts: [] };
+  const base = createSqliteAdapter(":memory:");
+  const adapter = spyWrap(base, state, opts?.transformPlan);
+  const session = sessionOverAdapter(adapter);
 
   return {
     session,
@@ -269,4 +284,89 @@ export function makeSpySession(opts?: {
       return total;
     },
   };
+}
+
+// ── asyncifyAdapter — StorageAdapter -> AsyncStorageAdapter (task-fast-parity) ──
+//
+// Test-only wrapper for the no-Docker parity harness (spec §5.2/§5.3): lets a sync
+// `StorageAdapter` (e.g. sqlite) be driven through the async surface
+// (`createMnemeAsync`) so sync and async behavior can be compared side by side without
+// standing up a real async backend (Postgres).
+//
+// `transaction()` is a NO-OP passthrough (`async (_corpusId, fn) => fn()`) — it does
+// NOT wrap `sync.transaction`. This is intentionally NON-atomic: better-sqlite3 (and
+// sync adapters generally) implement `transaction(fn)` as a SYNCHRONOUS
+// `db.transaction(fn)` call. Handing it an `async` body would return (and COMMIT) at
+// the body's first `await`, before any of the async continuation's writes have run —
+// silently committing an EMPTY transaction around real work. There is no seam to make
+// a synchronous db.transaction await an async callback correctly, so the honest
+// (documented) choice is to skip transactional wrapping entirely: single-threaded
+// test/dev harness only, no isolation guarantee, no atomicity across the awaited body.
+export function asyncifyAdapter(sync: StorageAdapter): AsyncStorageAdapter {
+  const wrapper: AsyncStorageAdapter = {
+    async insertClaim(claim: Claim): Promise<void> {
+      sync.insertClaim(claim);
+    },
+    async getClaim(id) {
+      return sync.getClaim(id);
+    },
+    async deleteClaim(id) {
+      sync.deleteClaim(id);
+    },
+    async insertBatch(claims: Claim[]): Promise<void> {
+      sync.insertBatch(claims);
+    },
+    async query(plan) {
+      return sync.query(plan);
+    },
+    async getIdempotencyRecord(scope, key) {
+      return sync.getIdempotencyRecord(scope, key);
+    },
+    async putIdempotencyRecord(scope, key, rec) {
+      sync.putIdempotencyRecord(scope, key, rec);
+    },
+    // SYNC passthrough — capabilities() is static metadata, not I/O (B2 rule).
+    capabilities: () => sync.capabilities(),
+    // NO-OP passthrough — see the doc comment above. Executes (and awaits) the async
+    // fn directly; sync.transaction is never invoked.
+    async transaction<T>(_corpusId: string, fn: () => Promise<T>): Promise<T> {
+      return fn();
+    },
+    async maxRecordedSeq(_corpusId: string) {
+      return sync.maxRecordedSeq();
+    },
+    async appendEvent(e) {
+      sync.appendEvent(e);
+    },
+    async readEvents(filter) {
+      return sync.readEvents(filter);
+    },
+  };
+
+  // Optional members: defined on the wrapper ONLY when present on the wrapped sync
+  // adapter — mirrors the sync StorageAdapter's own optionality byte-for-byte.
+  if (sync.putAnchoredRoot) {
+    const putAnchoredRoot = sync.putAnchoredRoot.bind(sync);
+    wrapper.putAnchoredRoot = async (row) => {
+      putAnchoredRoot(row);
+    };
+  }
+  if (sync.getAnchoredRoots) {
+    const getAnchoredRoots = sync.getAnchoredRoots.bind(sync);
+    wrapper.getAnchoredRoots = async (corpusId, range) => getAnchoredRoots(corpusId, range);
+  }
+  if (sync.scoped) {
+    const scoped = sync.scoped.bind(sync);
+    // Recurse: a scoped sync adapter is itself asyncified, so the returned
+    // AsyncStorageAdapter's own `scoped` stays consistent all the way down.
+    wrapper.scoped = (scope: AdapterScope) => asyncifyAdapter(scoped(scope));
+  }
+  if (sync.close) {
+    const close = sync.close.bind(sync);
+    wrapper.close = async () => {
+      close();
+    };
+  }
+
+  return wrapper;
 }
